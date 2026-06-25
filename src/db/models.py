@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -42,9 +43,10 @@ class Document(Base):
     )  # pending → processing → indexed / failed
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        default=_utcnow, server_default=text("now()"), nullable=False
+        DateTime(timezone=True), default=_utcnow, server_default=text("now()"), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         default=_utcnow,
         server_default=text("now()"),
         onupdate=_utcnow,
@@ -80,7 +82,7 @@ class Chunk(Base):
     doc_uri: Mapped[str] = mapped_column(Text, nullable=False)  # doc_id:标题
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        default=_utcnow, server_default=text("now()"), nullable=False
+        DateTime(timezone=True), default=_utcnow, server_default=text("now()"), nullable=False
     )
 
     # relationships
