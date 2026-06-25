@@ -1,0 +1,35 @@
+entity_types:
+  core:
+    - Person
+    - Company
+    - Building
+    - Facility
+    - Space
+    - WorkOrder
+    - Complaint
+    - Issue
+    - Contract
+    - Regulation
+    - Event
+  open: true  # 允许 LLM 补充自定义类型
+
+relation_types:
+  core:
+    - WORKS_AT
+    - MANAGES
+    - LOCATED_IN
+    - PARKING_AT
+    - BELONGS_TO
+    - RESPONSIBLE_FOR
+    - REPORTED
+    - FILED_BY
+    - ASSIGNED_TO
+    - RESOLVES
+    - COMPLAINS_ABOUT
+    - PROVIDES_SERVICE
+    - GOVERNS
+    - RELATED_EVENT
+    - REFERENCES
+    - SAME_TOPIC
+    - ANALYZES
+  open: true

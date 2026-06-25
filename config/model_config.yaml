@@ -1,0 +1,17 @@
+embedding:
+  provider: ollama           # ollama | openai | custom
+  model: nomic-embed-text    # 当前模型
+  dimensions: 768
+  base_url: http://localhost:11434
+
+gatekeeper:
+  provider: ollama           # ollama | openai | custom
+  model: todo                # 待确认开源小模型
+  dimensions: 768            # 与 embedding 同维度（复用 embed 函数）
+  threshold: 0.7             # overview 守门阈值
+
+llm:
+  provider: todo             # ollama | openai | custom
+  model: todo                # 待配置
+  base_url: todo
+  api_key: todo              # 如需要
