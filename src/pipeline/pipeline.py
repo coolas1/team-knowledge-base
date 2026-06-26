@@ -210,7 +210,8 @@ class Pipeline:
                 )
                 await session.commit()
 
-                # 更新 Neo4j
+                # 更新 Neo4j（先清理旧图谱数据，防止过时实体残留）
+                await self._neo4j.delete_document_graph(str(doc_id))
                 await self._neo4j.upsert_document_node(
                     doc_id=str(doc_id),
                     title=title,
@@ -232,6 +233,12 @@ class Pipeline:
                             relation=RelationData(from_name=relation.from_name, to_name=relation.to_name, relation_type=relation.type, description=relation.description),
                             source=source,
                         )
+
+                # L3: file_relations → Document↔Document 边
+                if doc_analysis.file_relations:
+                    await self._write_file_relations(
+                        str(doc_id), doc_analysis.file_relations, session
+                    )
 
                 logger.info(f"文档 {doc_id} re-index 完成 ✓")
 
