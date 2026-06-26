@@ -57,6 +57,7 @@ async def search(query: str) -> dict[str, Any]:
                 for c in result.chunks
             ],
             "related_entities": result.related_entities,
+            "related_docs": result.related_docs,
         }
 
 
