@@ -172,7 +172,8 @@ class Analyzer:
         """通过 OpenAI 兼容 API 调用。"""
         base_url = self._config.get("base_url", "https://api.openai.com/v1").rstrip("/")
         model = self._config.get("model", "gpt-4o-mini")
-        api_key = self._config.get("api_key", "")
+        # 优先从 model_config.yaml 读取，为空则 fallback 到 .env 的 LLM_API_KEY
+        api_key = self._config.get("api_key", "") or settings.llm_api_key
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(

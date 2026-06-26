@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
+
+# 优先使用本地缓存，避免每次加载都尝试联网检查
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from sentence_transformers import CrossEncoder
 

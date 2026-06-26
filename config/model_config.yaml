@@ -11,7 +11,7 @@ gatekeeper:
   top_n: 10                  # reranker 后保留 Top-N
 
 llm:
-  provider: todo             # ollama | openai | custom
-  model: todo                # 待配置
-  base_url: todo
-  api_key: todo              # 如需要
+  provider: openai             # 使用 OpenAI 兼容接口
+  model: qwen-turbo            # DashScope Qwen-Turbo
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key: ""                  # 从 .env 的 LLM_API_KEY 读取

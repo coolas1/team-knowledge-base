@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Ollama
     ollama_base_url: str = "http://localhost:11434"
 
+    # LLM (DashScope)
+    llm_api_key: str = ""
+
     # App
     app_host: str = "0.0.0.0"
     app_port: int = 8000
