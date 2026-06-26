@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 from neo4j import AsyncGraphDatabase
@@ -12,6 +13,14 @@ class EntityData:
     name: str
     entity_type: str
     description: str = ""
+
+
+@dataclass
+class EntitySource:
+    """实体溯源信息。"""
+    doc_id: str
+    chunk_index: int
+    doc_title: str
 
 
 @dataclass
@@ -67,9 +76,41 @@ class Neo4jClient:
             )
 
     async def delete_document_graph(self, doc_id: str) -> None:
-        """删除 Document 节点及其所有关联的实体和关系。"""
+        """删除文档的图谱数据：清理实体 sources + 删 Document 节点。"""
         async with self._driver.session() as session:
-            # 先删除 Document 节点及其直接关系
+            # 1. 从所有实体的 sources 中移除该 doc_id 的条目
+            result = await session.run(
+                """
+                MATCH (e)
+                WHERE e.sources IS NOT NULL
+                  AND e.sources CONTAINS $doc_id
+                RETURN e.name AS name, e.sources AS sources
+                """,
+                doc_id=doc_id,
+            )
+            records = await result.data()
+            for record in records:
+                sources: list[dict] = json.loads(record["sources"])
+                new_sources = [s for s in sources if s["doc_id"] != doc_id]
+                await session.run(
+                    """
+                    MATCH (e {name: $name})
+                    SET e.sources = $sources
+                    """,
+                    name=record["name"],
+                    sources=json.dumps(new_sources, ensure_ascii=False) if new_sources else "[]",
+                )
+
+            # 2. 删除 sources 为空的孤立实体
+            await session.run(
+                """
+                MATCH (e)
+                WHERE e.sources = '[]' OR e.sources = ''
+                DETACH DELETE e
+                """
+            )
+
+            # 3. 删除 Document 节点及其 doc 级关系
             await session.run(
                 """
                 MATCH (d:Document {doc_id: $doc_id})
@@ -81,37 +122,146 @@ class Neo4jClient:
 
     # ── 实体 ────────────────────────────────────────────────────
 
-    async def upsert_entity(self, doc_id: str, entity: EntityData) -> None:
-        """创建/更新实体节点，并关联到 Document。"""
+    async def upsert_entity(
+        self, entity: EntityData, source: EntitySource
+    ) -> None:
+        """创建/更新实体节点，追加溯源来源。
+
+        MERGE by name → 同名实体全局唯一。
+        sources 存储为 JSON 字符串列表（Neo4j 不支持 list<map>）。
+        去重逻辑在 Python 层处理。
+        """
+        new_source = {
+            "doc_id": source.doc_id,
+            "chunk_index": source.chunk_index,
+            "doc_title": source.doc_title,
+        }
+
         async with self._driver.session() as session:
+            # 1. MERGE 实体节点，保留较长的 description
             await session.run(
                 f"""
                 MERGE (e:{entity.entity_type} {{name: $name}})
-                SET e.description = $description
-                WITH e
-                MATCH (d:Document {{doc_id: $doc_id}})
-                MERGE (d)-[:REFERENCES]->(e)
+                SET e.entity_type = $entity_type,
+                    e.description = CASE
+                        WHEN size($desc) > size(coalesce(e.description, ''))
+                        THEN $desc
+                        ELSE e.description
+                    END
                 """,
                 name=entity.name,
-                description=entity.description,
-                doc_id=doc_id,
+                entity_type=entity.entity_type,
+                desc=entity.description,
             )
+
+            # 2. 读取现有 sources，追加去重
+            result = await session.run(
+                """
+                MATCH (e {name: $name})
+                RETURN e.sources AS sources
+                """,
+                name=entity.name,
+            )
+            record = await result.single()
+            sources_json = record["sources"] if record and record["sources"] else "[]"
+            sources: list[dict] = json.loads(sources_json)
+
+            # 去重检查
+            is_dup = any(
+                s["doc_id"] == new_source["doc_id"]
+                and s["chunk_index"] == new_source["chunk_index"]
+                for s in sources
+            )
+            if not is_dup:
+                sources.append(new_source)
+                await session.run(
+                    """
+                    MATCH (e {name: $name})
+                    SET e.sources = $sources
+                    """,
+                    name=entity.name,
+                    sources=json.dumps(sources, ensure_ascii=False),
+                )
 
     # ── 关系 ────────────────────────────────────────────────────
 
-    async def create_relation(self, relation: RelationData) -> None:
-        """在两个实体之间创建关系。"""
+    async def upsert_relation(
+        self, relation: RelationData, source: EntitySource
+    ) -> None:
+        """创建/更新实体间关系，带溯源。"""
+        new_source = {
+            "doc_id": source.doc_id,
+            "chunk_index": source.chunk_index,
+        }
+
         async with self._driver.session() as session:
+            # 1. MERGE 关系，保留较长的 description
             await session.run(
                 f"""
                 MATCH (a {{name: $from_name}})
                 MATCH (b {{name: $to_name}})
                 MERGE (a)-[r:{relation.relation_type}]->(b)
-                SET r.description = $description
+                SET r.description = CASE
+                        WHEN size($desc) > size(coalesce(r.description, ''))
+                        THEN $desc
+                        ELSE r.description
+                    END
                 """,
                 from_name=relation.from_name,
                 to_name=relation.to_name,
-                description=relation.description,
+                desc=relation.description,
+            )
+
+            # 2. 追加 sources 去重
+            result = await session.run(
+                f"""
+                MATCH (a {{name: $from_name}})-[r:{relation.relation_type}]->(b {{name: $to_name}})
+                RETURN r.sources AS sources
+                """,
+                from_name=relation.from_name,
+                to_name=relation.to_name,
+            )
+            record = await result.single()
+            if record:
+                sources_json = record["sources"] if record["sources"] else "[]"
+                sources: list[dict] = json.loads(sources_json)
+                is_dup = any(
+                    s["doc_id"] == new_source["doc_id"]
+                    and s["chunk_index"] == new_source["chunk_index"]
+                    for s in sources
+                )
+                if not is_dup:
+                    sources.append(new_source)
+                    await session.run(
+                        f"""
+                        MATCH (a {{name: $from_name}})-[r:{relation.relation_type}]->(b {{name: $to_name}})
+                        SET r.sources = $sources
+                        """,
+                        from_name=relation.from_name,
+                        to_name=relation.to_name,
+                        sources=json.dumps(sources, ensure_ascii=False),
+                    )
+
+    async def create_doc_relation(
+        self,
+        source_doc_id: str,
+        target_doc_id: str,
+        relation_type: str,
+        reason: str,
+    ) -> None:
+        """创建 Document↔Document 显式关联（file_relations）。"""
+        async with self._driver.session() as session:
+            await session.run(
+                """
+                MATCH (d1:Document {doc_id: $source_doc_id})
+                MATCH (d2:Document {doc_id: $target_doc_id})
+                MERGE (d1)-[r:RELATED_TO {relation_type: $relation_type}]->(d2)
+                SET r.reason = $reason
+                """,
+                source_doc_id=source_doc_id,
+                target_doc_id=target_doc_id,
+                relation_type=relation_type,
+                reason=reason,
             )
 
     # ── 查询 ────────────────────────────────────────────────────
@@ -183,11 +333,13 @@ class Neo4jClient:
             )
 
     async def get_document_entities(self, doc_id: str) -> list[GraphQueryResult]:
-        """获取 Document 关联的所有实体。"""
+        """获取某文档关联的所有实体（通过 sources 属性）。"""
         async with self._driver.session() as session:
             result = await session.run(
                 """
-                MATCH (d:Document {doc_id: $doc_id})-[:REFERENCES]->(e)
+                MATCH (e)
+                WHERE e.sources IS NOT NULL
+                  AND e.sources CONTAINS $doc_id
                 RETURN e, labels(e) AS labels
                 """,
                 doc_id=doc_id,
@@ -197,7 +349,9 @@ class Neo4jClient:
             for record in records:
                 node = record["e"]
                 labels = record["labels"]
-                entity_type = labels[0] if labels else "Unknown"
+                entity_type = next(
+                    (l for l in labels if l not in ("Document",)), "Entity"
+                )
                 results.append(
                     GraphQueryResult(
                         name=node.get("name", ""),
@@ -206,3 +360,69 @@ class Neo4jClient:
                     )
                 )
             return results
+
+    async def find_entities_by_source(
+        self, doc_id: str, chunk_index: int
+    ) -> list[GraphQueryResult]:
+        """查找 sources 包含指定 (doc_id, chunk_index) 的实体。"""
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (e)
+                WHERE e.sources IS NOT NULL
+                  AND e.sources CONTAINS $doc_id_fragment
+                RETURN e, labels(e) AS labels
+                """,
+                doc_id_fragment=doc_id,
+            )
+            records = await result.data()
+            results = []
+            for record in records:
+                node = record["e"]
+                labels = record["labels"]
+                sources: list[dict] = json.loads(node.get("sources", "[]"))
+                # 精确匹配 chunk_index
+                if any(
+                    s["doc_id"] == doc_id and s["chunk_index"] == chunk_index
+                    for s in sources
+                ):
+                    entity_type = next(
+                        (l for l in labels if l not in ("Document",)), "Entity"
+                    )
+                    results.append(
+                        GraphQueryResult(
+                            name=node.get("name", ""),
+                            entity_type=entity_type,
+                            properties=dict(node),
+                        )
+                    )
+            return results
+
+    async def get_related_docs(self, doc_ids: list[str]) -> list[dict]:
+        """从指定文档出发，通过 Document↔Document 边查找关联文档。"""
+        if not doc_ids:
+            return []
+
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (d1:Document)-[r:RELATED_TO]-(d2:Document)
+                WHERE d1.doc_id IN $doc_ids AND d2.doc_id NOT IN $doc_ids
+                RETURN DISTINCT d2.doc_id AS doc_id,
+                       d2.title AS title,
+                       type(r) AS rel_type,
+                       r.relation_type AS relation_type,
+                       r.reason AS reason
+                """,
+                doc_ids=doc_ids,
+            )
+            records = await result.data()
+            return [
+                {
+                    "doc_id": r["doc_id"],
+                    "title": r["title"],
+                    "relation_type": r.get("relation_type", ""),
+                    "reason": r.get("reason", ""),
+                }
+                for r in records
+            ]
