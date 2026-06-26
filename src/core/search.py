@@ -28,9 +28,18 @@ class SearchChunk:
 
 
 @dataclass
+class RelatedDoc:
+    doc_id: str
+    title: str
+    relation_type: str
+    reason: str
+
+
+@dataclass
 class SearchResult:
     chunks: list[SearchChunk] = field(default_factory=list)
     related_entities: list[dict] = field(default_factory=list)
+    related_docs: list[dict] = field(default_factory=list)
 
 
 async def vector_search(
@@ -50,6 +59,7 @@ async def vector_search(
     stmt = (
         select(
             Chunk.id.label("chunk_id"),
+            Chunk.chunk_index,
             Chunk.chunk_text,
             Chunk.overview,
             Chunk.doc_uri,
@@ -66,6 +76,7 @@ async def vector_search(
     return [
         {
             "chunk_id": str(row.chunk_id),
+            "chunk_index": row.chunk_index,
             "chunk_text": row.chunk_text,
             "score": float(row.score),
             "overview": row.overview,
@@ -123,16 +134,18 @@ async def graph_enrich(
     survivors: list[dict],
     hops: int = 2,
 ) -> list[GraphQueryResult]:
-    """第三层（图谱部分）：从存活 chunks 关联的文档中查询 Neo4j 实体。
+    """从存活 chunks 的 (doc_id, chunk_index) 查找关联实体。
 
-    Returns:
-        相关实体列表（去重）
+    通过 Entity.sources 属性反查哪些实体来自这些 chunk，
+    然后遍历实体关系。
     """
-    doc_ids = {c["doc_id"] for c in survivors}
     all_entities: dict[str, GraphQueryResult] = {}
 
-    for doc_id in doc_ids:
-        entities = await neo4j.get_document_entities(doc_id)
+    for c in survivors:
+        doc_id = c["doc_id"]
+        chunk_index = c.get("chunk_index", 0)
+
+        entities = await neo4j.find_entities_by_source(doc_id, chunk_index)
         for entity in entities:
             if entity.name not in all_entities:
                 details = await neo4j.get_entity_details(entity.name)
@@ -152,10 +165,10 @@ async def full_search(
     threshold: float = RERANKER_THRESHOLD,
     top_n: int = RERANKER_TOP_N,
 ) -> SearchResult:
-    """完整检索流程：向量粗筛 → Reranker 守门 → 图谱增强。
+    """完整检索流程：向量粗筛 → Reranker 守门 → 图谱增强 + 关联文档。
 
     Returns:
-        SearchResult(chunks, related_entities) — 无 answer，由 Agent 合成。
+        SearchResult(chunks, related_entities, related_docs) — 无 answer，由 Agent 合成。
     """
     # 第一层：向量粗筛
     candidates = await vector_search(session, query, top_k)
@@ -191,7 +204,12 @@ async def full_search(
         for e in related_entities
     ]
 
+    # 查询关联文档
+    doc_ids = list({c["doc_id"] for c in survivors})
+    related_docs = await neo4j.get_related_docs(doc_ids)
+
     return SearchResult(
         chunks=chunks,
         related_entities=entity_dicts,
+        related_docs=related_docs,
     )
