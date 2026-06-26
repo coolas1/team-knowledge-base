@@ -407,7 +407,7 @@ class Neo4jClient:
             result = await session.run(
                 """
                 MATCH (d1:Document)-[r:RELATED_TO]-(d2:Document)
-                WHERE d1.doc_id IN $doc_ids AND d2.doc_id NOT IN $doc_ids
+                WHERE d1.doc_id IN $doc_ids AND NOT d2.doc_id IN $doc_ids
                 RETURN DISTINCT d2.doc_id AS doc_id,
                        d2.title AS title,
                        type(r) AS rel_type,
