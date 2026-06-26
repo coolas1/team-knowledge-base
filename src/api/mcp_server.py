@@ -34,7 +34,10 @@ def _get_kb() -> KnowledgeBase:
 
 @mcp.tool()
 async def search(query: str) -> dict[str, Any]:
-    """语义检索知识库（三层漏斗：向量粗筛 → overview 守门 → 图谱增强）。
+    """语义检索知识库（向量粗筛 → Reranker 守门 → 图谱增强）。
+
+    返回 reranker 过滤后的 chunks 和相关实体，
+    由 Agent 整合 query 与知识生成回答。
 
     Args:
         query: 搜索查询文本
@@ -43,15 +46,15 @@ async def search(query: str) -> dict[str, Any]:
     async with async_session_factory() as session:
         result = await kb.search(session, query)
         return {
-            "answer": result.answer,
-            "sources": [
+            "chunks": [
                 {
-                    "doc_id": s.doc_id,
-                    "title": s.title,
-                    "chunk_text": s.chunk_text[:500],  # 截断避免过长
-                    "score": s.score,
+                    "doc_id": c.doc_id,
+                    "title": c.title,
+                    "chunk_text": c.chunk_text[:1000],
+                    "reranker_score": c.reranker_score,
+                    "vector_score": c.vector_score,
                 }
-                for s in result.sources
+                for c in result.chunks
             ],
             "related_entities": result.related_entities,
         }

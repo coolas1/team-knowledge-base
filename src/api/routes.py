@@ -120,18 +120,18 @@ async def search(
     session: AsyncSession = Depends(get_session),
     kb: KnowledgeBase = Depends(get_kb),
 ) -> dict[str, Any]:
-    """语义检索（三层漏斗）。"""
+    """语义检索（向量粗筛 → Reranker 守门 → 图谱增强）。"""
     result = await kb.search(session, body.query)
     return {
-        "answer": result.answer,
-        "sources": [
+        "chunks": [
             {
-                "doc_id": s.doc_id,
-                "title": s.title,
-                "chunk_text": s.chunk_text,
-                "score": s.score,
+                "doc_id": c.doc_id,
+                "title": c.title,
+                "chunk_text": c.chunk_text,
+                "reranker_score": c.reranker_score,
+                "vector_score": c.vector_score,
             }
-            for s in result.sources
+            for c in result.chunks
         ],
         "related_entities": result.related_entities,
     }

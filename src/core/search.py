@@ -1,34 +1,35 @@
-"""三层漏斗检索：向量粗筛 → Overview 守门 → 图谱增强。"""
+"""两层漏斗检索：向量粗筛 → Reranker 守门 + 图谱增强。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pgvector.sqlalchemy import Vector
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import Chunk, Document
+from src.core.reranker import get_reranker
+from src.db.models import Chunk
 from src.db.neo4j_client import Neo4jClient, GraphQueryResult
 from src.pipeline.embedder import embedder
 
 # 默认参数
 DEFAULT_TOP_K = 20
-GATEKEEPER_THRESHOLD = 0.7
+RERANKER_THRESHOLD = 0.01
+RERANKER_TOP_N = 10
 
 
 @dataclass
-class SearchSource:
+class SearchChunk:
     doc_id: str
     title: str
     chunk_text: str
-    score: float
+    reranker_score: float
+    vector_score: float
 
 
 @dataclass
 class SearchResult:
-    answer: str
-    sources: list[SearchSource] = field(default_factory=list)
+    chunks: list[SearchChunk] = field(default_factory=list)
     related_entities: list[dict] = field(default_factory=list)
 
 
@@ -46,8 +47,6 @@ async def vector_search(
     """
     query_embedding = await embedder.embed_text(query)
 
-    # pgvector cosine distance: 1 - cosine_similarity
-    # 所以 ORDER BY embedding <=> query_embedding 是从小到大（距离）
     stmt = (
         select(
             Chunk.id.label("chunk_id"),
@@ -55,7 +54,6 @@ async def vector_search(
             Chunk.overview,
             Chunk.doc_uri,
             Chunk.doc_id,
-            # cosine distance → similarity
             (1 - Chunk.embedding.cosine_distance(query_embedding)).label("score"),
         )
         .order_by(Chunk.embedding.cosine_distance(query_embedding))
@@ -78,57 +76,46 @@ async def vector_search(
     ]
 
 
-async def gatekeeper_filter(
+def reranker_filter(
     query: str,
     candidates: list[dict],
-    threshold: float = GATEKEEPER_THRESHOLD,
+    threshold: float = RERANKER_THRESHOLD,
+    top_n: int = RERANKER_TOP_N,
 ) -> list[dict]:
-    """第二层：Overview 守门（embedding cosine 过滤）。
+    """第二层：Reranker 守门。
 
-    对每个候选 chunk 的 overview 进行 embedding，
-    与 query embedding 做 cosine similarity，低于阈值则过滤。
+    使用 CrossEncoder 对 (query, overview) 对打分，
+    按分数排序 + 阈值过滤 + Top-N。
 
-    overview embedding 按文档缓存（同一文档的 overview 相同）。
+    overview 为空时 fallback 到 chunk_text。
     """
     if not candidates:
         return []
 
-    query_embedding = await embedder.embed_text(query)
-
-    # 缓存 overview embeddings（同文档 overview 相同）
-    overview_cache: dict[str, list[float]] = {}
-    survivors: list[dict] = []
-
+    # 准备打分文本：优先真实 overview，占位/空则 fallback 到 chunk_text
+    texts = []
     for c in candidates:
-        overview = c.get("overview", "")
-        if not overview:
-            # 无 overview 的直接通过
-            survivors.append(c)
-            continue
-
-        # 缓存命中
-        if overview in overview_cache:
-            ov_embedding = overview_cache[overview]
+        ov = c.get("overview", "")
+        if ov and not ov.startswith("[待 LLM"):
+            texts.append(ov)
         else:
-            ov_embedding = await embedder.embed_text(overview)
-            overview_cache[overview] = ov_embedding
+            texts.append(c.get("chunk_text", ""))
 
-        # cosine similarity
-        similarity = _cosine_similarity(query_embedding, ov_embedding)
-        if similarity >= threshold:
+    scores = get_reranker().rerank(query, texts)
+
+    # 按分数降序排序
+    scored = list(zip(candidates, scores))
+    scored.sort(key=lambda x: -x[1])
+
+    survivors: list[dict] = []
+    for c, s in scored:
+        if s >= threshold:
+            c["reranker_score"] = s
             survivors.append(c)
+        if len(survivors) >= top_n:
+            break
 
     return survivors
-
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """计算两个向量的余弦相似度。"""
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = sum(x * x for x in a) ** 0.5
-    norm_b = sum(x * x for x in b) ** 0.5
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
 
 
 async def graph_enrich(
@@ -148,7 +135,6 @@ async def graph_enrich(
         entities = await neo4j.get_document_entities(doc_id)
         for entity in entities:
             if entity.name not in all_entities:
-                # 查询实体的邻居关系
                 details = await neo4j.get_entity_details(entity.name)
                 if details:
                     all_entities[entity.name] = details
@@ -163,33 +149,35 @@ async def full_search(
     neo4j: Neo4jClient,
     query: str,
     top_k: int = DEFAULT_TOP_K,
-    threshold: float = GATEKEEPER_THRESHOLD,
+    threshold: float = RERANKER_THRESHOLD,
+    top_n: int = RERANKER_TOP_N,
 ) -> SearchResult:
-    """完整三层漏斗检索。
+    """完整检索流程：向量粗筛 → Reranker 守门 → 图谱增强。
 
-    1. 向量粗筛 → Top-K
-    2. Overview 守门 → 过滤
-    3. 图谱增强 → 相关实体
-
-    注意：第三层的 LLM 答案合成暂不实现（需 LLM 配置完成后接入），
-    当前返回 sources + related_entities。
+    Returns:
+        SearchResult(chunks, related_entities) — 无 answer，由 Agent 合成。
     """
-    # 第一层
+    # 第一层：向量粗筛
     candidates = await vector_search(session, query, top_k)
 
-    # 第二层
-    survivors = await gatekeeper_filter(query, candidates, threshold)
+    # 第二层：Reranker 守门
+    survivors = reranker_filter(query, candidates, threshold, top_n)
 
-    # 第三层（图谱）
+    # 第三层：图谱增强
     related_entities = await graph_enrich(neo4j, survivors)
 
     # 构造结果
-    sources = [
-        SearchSource(
+    chunks = [
+        SearchChunk(
             doc_id=c["doc_id"],
-            title=c.get("doc_uri", "").split(":", 1)[-1] if ":" in c.get("doc_uri", "") else "",
+            title=(
+                c.get("doc_uri", "").split(":", 1)[-1]
+                if ":" in c.get("doc_uri", "")
+                else ""
+            ),
             chunk_text=c["chunk_text"],
-            score=c["score"],
+            reranker_score=c["reranker_score"],
+            vector_score=c["score"],
         )
         for c in survivors
     ]
@@ -203,11 +191,7 @@ async def full_search(
         for e in related_entities
     ]
 
-    # 暂时不合成答案（需 LLM），直接返回来源
-    answer = f"找到 {len(sources)} 个相关内容片段，涉及 {len(entity_dicts)} 个实体。"
-
     return SearchResult(
-        answer=answer,
-        sources=sources,
+        chunks=chunks,
         related_entities=entity_dicts,
     )

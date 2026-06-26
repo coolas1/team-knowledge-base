@@ -5,10 +5,10 @@ embedding:
   base_url: http://localhost:11434
 
 gatekeeper:
-  provider: ollama           # ollama | openai | custom
-  model: todo                # 待确认开源小模型
-  dimensions: 768            # 与 embedding 同维度（复用 embed 函数）
-  threshold: 0.7             # overview 守门阈值
+  provider: sentence-transformers
+  model: BAAI/bge-reranker-v2-m3
+  threshold: 0.01            # reranker 分数阈值（raw logits）
+  top_n: 10                  # reranker 后保留 Top-N
 
 llm:
   provider: todo             # ollama | openai | custom

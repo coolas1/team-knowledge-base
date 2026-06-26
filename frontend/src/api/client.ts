@@ -22,19 +22,6 @@ export interface DocumentList {
   items: Document[]
 }
 
-export interface SearchSource {
-  doc_id: string
-  title: string
-  chunk_text: string
-  score: number
-}
-
-export interface SearchResult {
-  answer: string
-  sources: SearchSource[]
-  related_entities: { name: string; type: string; relations?: any[] }[]
-}
-
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, options)
   if (!res.ok) {
@@ -80,15 +67,6 @@ export const api = {
 
   deleteDocument(id: string) {
     return request<{ deleted: boolean }>(`/documents/${id}`, { method: 'DELETE' })
-  },
-
-  // 搜索
-  search(query: string) {
-    return request<SearchResult>('/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
-    })
   },
 
   // 图谱
