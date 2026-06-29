@@ -22,6 +22,25 @@ export interface DocumentList {
   items: Document[]
 }
 
+export interface GraphNode {
+  name: string
+  type: string
+  description: string
+  sources: Array<{ doc_id: string; doc_title: string; chunk_index: number }>
+}
+
+export interface GraphLink {
+  source: string
+  target: string
+  type: string
+  description: string
+}
+
+export interface GraphData {
+  nodes: GraphNode[]
+  links: GraphLink[]
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, options)
   if (!res.ok) {
@@ -76,5 +95,9 @@ export const api = {
 
   getNeighbors(name: string, hops = 2) {
     return request<any>(`/graph/neighbors/${encodeURIComponent(name)}?hops=${hops}`)
+  },
+
+  getFullGraph() {
+    return request<GraphData>('/graph/full')
   },
 }
