@@ -141,6 +141,14 @@ async def search(
 # ── 图谱端点 ────────────────────────────────────────────────────
 
 
+@router.get("/graph/full")
+async def get_full_graph(
+    kb: KnowledgeBase = Depends(get_kb),
+) -> dict[str, Any]:
+    """返回全图数据（所有实体 + 关系），供前端力导向图渲染。"""
+    return await kb.get_full_graph()
+
+
 @router.get("/graph/entity/{name}")
 async def get_entity(
     name: str,

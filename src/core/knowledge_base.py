@@ -250,3 +250,7 @@ class KnowledgeBase:
             }
             for r in results
         ]
+
+    async def get_full_graph(self) -> dict[str, Any]:
+        """返回全图数据（nodes + links）。"""
+        return await self._neo4j.get_full_graph()

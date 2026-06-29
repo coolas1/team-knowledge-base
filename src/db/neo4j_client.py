@@ -398,6 +398,56 @@ class Neo4jClient:
                     )
             return results
 
+    async def get_full_graph(self) -> dict:
+        """返回全图数据：所有实体节点 + 所有实体间关系。"""
+        async with self._driver.session() as session:
+            # 1. 查询所有实体节点（排除 Document）
+            node_result = await session.run(
+                """
+                MATCH (e)
+                WHERE NOT e:Document AND e.sources IS NOT NULL
+                RETURN e.name AS name, e.description AS description,
+                       e.sources AS sources, labels(e) AS labels
+                """
+            )
+            node_records = await node_result.data()
+            nodes = []
+            for r in node_records:
+                labels = r["labels"]
+                entity_type = next(
+                    (l for l in labels if l != "Document"), "Unknown"
+                )
+                sources_raw = r["sources"] or "[]"
+                nodes.append({
+                    "name": r["name"],
+                    "type": entity_type,
+                    "description": r["description"] or "",
+                    "sources": json.loads(sources_raw),
+                })
+
+            # 2. 查询所有实体间关系（排除 Document 节点和 RELATED_TO）
+            link_result = await session.run(
+                """
+                MATCH (a)-[r]->(b)
+                WHERE NOT a:Document AND NOT b:Document
+                  AND type(r) <> 'RELATED_TO'
+                RETURN a.name AS source, b.name AS target,
+                       type(r) AS type, r.description AS description
+                """
+            )
+            link_records = await link_result.data()
+            links = [
+                {
+                    "source": r["source"],
+                    "target": r["target"],
+                    "type": r["type"],
+                    "description": r["description"] or "",
+                }
+                for r in link_records
+            ]
+
+            return {"nodes": nodes, "links": links}
+
     async def get_related_docs(self, doc_ids: list[str]) -> list[dict]:
         """从指定文档出发，通过 Document↔Document 边查找关联文档。"""
         if not doc_ids:
