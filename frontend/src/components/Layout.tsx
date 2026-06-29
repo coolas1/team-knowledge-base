@@ -38,6 +38,12 @@ export function Layout() {
         <Link to="/" style={{ fontSize: 18, fontWeight: 700, textDecoration: 'none', color: '#333' }}>
           团队知识库
         </Link>
+        <Link
+          to="/graph"
+          style={{ fontSize: 14, textDecoration: 'none', color: '#666', padding: '4px 8px' }}
+        >
+          知识图谱
+        </Link>
         <div style={{ flex: 1 }} />
         <button
           onClick={() => fileRef.current?.click()}

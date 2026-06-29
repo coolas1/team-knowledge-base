@@ -173,7 +173,6 @@ export function KnowledgeGraph({
       nodeId="id"
       nodeColor={nodeColor}
       nodeCanvasObject={nodeCanvasObject}
-      nodePointerAreaPaint={nodeCanvasObject}
       linkColor={linkColor}
       linkLabel={linkLabel}
       linkDirectionalArrowLength={4}
