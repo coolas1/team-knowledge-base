@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 import uuid
 from pathlib import Path
@@ -21,6 +22,9 @@ from src.pipeline.extractors.registry import ExtractorRegistry
 from src.pipeline.pipeline import Pipeline
 
 UPLOAD_DIR = Path("uploads")
+
+# 保持后台任务引用，防止被 GC 回收
+_background_tasks: set[asyncio.Task] = set()
 
 
 class KnowledgeBase:
@@ -65,10 +69,11 @@ class KnowledgeBase:
         await session.refresh(doc)
 
         # 异步触发 Pipeline（不阻塞请求）
-        import asyncio
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._pipeline.process_file(doc_id, file_path, file_name, file_type)
         )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
         return {
             "id": str(doc.id),
@@ -103,10 +108,11 @@ class KnowledgeBase:
         await session.commit()
 
         # 异步 re-index
-        import asyncio
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._pipeline.reindex_document(doc_id, new_content)
         )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
         return {"id": str(doc.id), "title": doc.title, "status": "pending"}
 

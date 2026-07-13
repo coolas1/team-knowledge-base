@@ -16,5 +16,34 @@ services:
       timeout: 5s
       retries: 5
 
+  # Neo4j — 复用已有容器 WeKnora-neo4j (neo4j:2025.10.1)
+  # 凭据: neo4j / password，已在 .env 中配置
+  # 如需独立启动，取消下方注释并确保端口 7474/7687 未被占用
+  # neo4j:
+  #   image: neo4j:5.26
+  #   container_name: kb-neo4j
+  #   environment:
+  #     NEO4J_AUTH: neo4j/password
+  #     NEO4J_PLUGINS: '["apoc"]'
+  #   ports:
+  #     - "7474:7474"
+  #     - "7687:7687"
+  #   volumes:
+  #     - neo4jdata:/data
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: kb-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollamadata:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   pgdata:
+  ollamadata:

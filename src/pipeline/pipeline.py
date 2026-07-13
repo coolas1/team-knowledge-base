@@ -20,6 +20,19 @@ from src.pipeline.extractors.registry import registry
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_text(text: str) -> str:
+    """清理文本中的非法字符。
+
+    pypdf 等提取器可能产生以下问题字符：
+    - null 字节（\\x00）：PostgreSQL TEXT 列不允许
+    - 未配对的 Unicode 代理字符：UTF-8 编码时报 surrogates not allowed
+    """
+    # 移除 null 字节（PostgreSQL TEXT 列不允许）
+    text = text.replace("\x00", "")
+    # 移除未配对的 Unicode 代理字符
+    return text.encode("utf-8", errors="replace").decode("utf-8")
+
+
 class Pipeline:
     """文件入库 Pipeline 编排器。"""
 
@@ -57,8 +70,8 @@ class Pipeline:
             await session.commit()
 
             try:
-                # 3. 文本提取
-                raw_text = registry.extract(file_path)
+                # 3. 文本提取（清理非法 Unicode 字符）
+                raw_text = _sanitize_text(registry.extract(file_path))
                 logger.info(f"文档 {doc_id} 提取完成, {len(raw_text)} 字符")
 
                 # 4. 文本分块（先分块再分析）
@@ -137,10 +150,11 @@ class Pipeline:
 
             except Exception as e:
                 logger.error(f"文档 {doc_id} Pipeline 失败: {e}", exc_info=True)
+                await session.rollback()
                 await session.execute(
                     update(Document)
                     .where(Document.id == doc_id)
-                    .values(status="failed", error_msg=str(e))
+                    .values(status="failed", error_msg=str(e)[:500])
                 )
                 await session.commit()
 
@@ -154,6 +168,7 @@ class Pipeline:
                 raise ValueError(f"文档不存在: {doc_id}")
 
             title = doc.title
+            new_text = _sanitize_text(new_text)
             content_hash = hashlib.sha256(new_text.encode()).hexdigest()
 
             await session.execute(
@@ -244,10 +259,11 @@ class Pipeline:
 
             except Exception as e:
                 logger.error(f"文档 {doc_id} re-index 失败: {e}", exc_info=True)
+                await session.rollback()
                 await session.execute(
                     update(Document)
                     .where(Document.id == doc_id)
-                    .values(status="failed", error_msg=str(e))
+                    .values(status="failed", error_msg=str(e)[:500])
                 )
                 await session.commit()
 

@@ -25,3 +25,7 @@ frontend/dist/
 
 # OS
 .DS_Store
+
+# IDE / Tools
+.qoder/
+.mcp.json
