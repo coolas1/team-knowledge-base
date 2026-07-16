@@ -26,6 +26,9 @@ frontend/dist/
 # OS
 .DS_Store
 
+# Screenshots (debug artifacts)
+screenshot-*.png
+
 # IDE / Tools
 .qoder/
 .mcp.json

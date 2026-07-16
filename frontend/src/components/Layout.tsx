@@ -44,6 +44,12 @@ export function Layout() {
         >
           知识图谱
         </Link>
+        <Link
+          to="/logs"
+          style={{ fontSize: 14, textDecoration: 'none', color: '#666', padding: '4px 8px' }}
+        >
+          日志
+        </Link>
         <div style={{ flex: 1 }} />
         <button
           onClick={() => fileRef.current?.click()}

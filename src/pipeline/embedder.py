@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+import time
+
 import httpx
 
 from src.db.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class Embedder:
@@ -33,6 +38,7 @@ class Embedder:
         """
         if not texts:
             return []
+        t0 = time.monotonic()
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
                 f"{self._base_url}/api/embed",
@@ -40,9 +46,15 @@ class Embedder:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["embeddings"]
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(
+            f"Embedding 批量完成: {len(texts)} 条文本 | 耗时 {elapsed_ms:.0f}ms | "
+            f"model={self._model}"
+        )
+        return data["embeddings"]
 
     async def _embed(self, text: str) -> list[float]:
+        t0 = time.monotonic()
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{self._base_url}/api/embed",
@@ -50,7 +62,9 @@ class Embedder:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["embeddings"][0]
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(f"Embedding 单条完成: 耗时 {elapsed_ms:.0f}ms | model={self._model}")
+        return data["embeddings"][0]
 
 
 # 全局单例

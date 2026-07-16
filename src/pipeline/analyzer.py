@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -171,14 +172,23 @@ class Analyzer:
             return ChunkAnalysisResult(chunk_index=chunk_index)
 
         prompt = self._build_chunk_prompt(chunk_text, doc_title, self._schema)
+        logger.info(
+            f"LLM chunk[{chunk_index}] 调用开始: doc={doc_title}, prompt={len(prompt)}字符"
+        )
 
+        t0 = time.monotonic()
         if provider == "ollama":
             raw = await self._call_ollama(prompt)
         elif provider in ("openai", "custom"):
             raw = await self._call_openai_compatible(prompt)
         else:
             return ChunkAnalysisResult(chunk_index=chunk_index)
+        elapsed_ms = (time.monotonic() - t0) * 1000
 
+        logger.info(
+            f"LLM chunk[{chunk_index}] 调用完成: doc={doc_title} | 耗时 {elapsed_ms:.0f}ms | "
+            f"response={len(raw)}字符 | 摘要: {raw[:120]}"
+        )
         return self._parse_chunk_response(raw, chunk_index)
 
     # ── overview 级分析 ──────────────────────────────────────────
@@ -197,14 +207,21 @@ class Analyzer:
             )
 
         prompt = self._build_overview_prompt(title, text)
+        logger.info(f"LLM overview 调用开始: title={title}, prompt={len(prompt)}字符")
 
+        t0 = time.monotonic()
         if provider == "ollama":
             raw = await self._call_ollama(prompt)
         elif provider in ("openai", "custom"):
             raw = await self._call_openai_compatible(prompt)
         else:
             return AnalysisResult(overview=f"[未知 provider] {title}")
+        elapsed_ms = (time.monotonic() - t0) * 1000
 
+        logger.info(
+            f"LLM overview 调用完成: title={title} | 耗时 {elapsed_ms:.0f}ms | "
+            f"response={len(raw)}字符 | 摘要: {raw[:120]}"
+        )
         return self._parse_overview_response(raw)
 
     async def _call_ollama(self, prompt: str) -> str:

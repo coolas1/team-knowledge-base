@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.reranker import get_reranker
-from src.db.models import Chunk
+from src.db.models import Chunk, Document
 from src.db.neo4j_client import Neo4jClient, GraphQueryResult
 from src.pipeline.embedder import embedder
+
+logger = logging.getLogger(__name__)
 
 # 默认参数
 DEFAULT_TOP_K = 20
@@ -25,6 +29,7 @@ class SearchChunk:
     chunk_text: str
     reranker_score: float
     vector_score: float
+    index_status: str = "indexed"
 
 
 @dataclass
@@ -65,7 +70,9 @@ async def vector_search(
             Chunk.doc_uri,
             Chunk.doc_id,
             (1 - Chunk.embedding.cosine_distance(query_embedding)).label("score"),
+            Document.index_status,
         )
+        .join(Document, Chunk.doc_id == Document.id)
         .order_by(Chunk.embedding.cosine_distance(query_embedding))
         .limit(top_k)
     )
@@ -82,6 +89,7 @@ async def vector_search(
             "overview": row.overview,
             "doc_uri": row.doc_uri,
             "doc_id": str(row.doc_id),
+            "index_status": row.index_status or "indexed",
         }
         for row in rows
     ]
@@ -171,13 +179,31 @@ async def full_search(
         SearchResult(chunks, related_entities, related_docs) — 无 answer，由 Agent 合成。
     """
     # 第一层：向量粗筛
+    _t0 = time.monotonic()
     candidates = await vector_search(session, query, top_k)
+    vector_ms = (time.monotonic() - _t0) * 1000
+    logger.info(
+        f"搜索 L1 向量粗筛: query='{query[:60]}' | "
+        f"返回 {len(candidates)} 候选 | 耗时 {vector_ms:.0f}ms"
+    )
 
     # 第二层：Reranker 守门
+    _t1 = time.monotonic()
     survivors = reranker_filter(query, candidates, threshold, top_n)
+    reranker_ms = (time.monotonic() - _t1) * 1000
+    logger.info(
+        f"搜索 L2 Reranker: {len(candidates)}→{len(survivors)} 存活 | "
+        f"耗时 {reranker_ms:.0f}ms"
+    )
 
     # 第三层：图谱增强
+    _t2 = time.monotonic()
     related_entities = await graph_enrich(neo4j, survivors)
+    graph_ms = (time.monotonic() - _t2) * 1000
+    logger.info(
+        f"搜索 L3 图谱增强: {len(related_entities)} 关联实体 | "
+        f"耗时 {graph_ms:.0f}ms"
+    )
 
     # 构造结果
     chunks = [
@@ -191,6 +217,7 @@ async def full_search(
             chunk_text=c["chunk_text"],
             reranker_score=c["reranker_score"],
             vector_score=c["score"],
+            index_status=c.get("index_status", "indexed"),
         )
         for c in survivors
     ]
@@ -207,6 +234,15 @@ async def full_search(
     # 查询关联文档
     doc_ids = list({c["doc_id"] for c in survivors})
     related_docs = await neo4j.get_related_docs(doc_ids)
+
+    total_ms = (time.monotonic() - _t0) * 1000
+    logger.info(
+        f"搜索全链路: query='{query[:60]}' | "
+        f"向量 {vector_ms:.0f}ms({len(candidates)}候選) → "
+        f"Reranker {reranker_ms:.0f}ms({len(survivors)}存活) → "
+        f"图谱 {graph_ms:.0f}ms({len(related_entities)}实体) | "
+        f"总耗时 {total_ms:.0f}ms"
+    )
 
     return SearchResult(
         chunks=chunks,

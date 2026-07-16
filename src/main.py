@@ -1,27 +1,57 @@
 from contextlib import asynccontextmanager
 from contextlib import AsyncExitStack
+import logging
 
 from fastapi import FastAPI
 
 from src.api import mcp_server, routes
 from src.core.knowledge_base import KnowledgeBase
+from src.core.log_manager import setup_logging, shutdown_logging
+from src.core.version_manager import VersionManager
 from src.db.neo4j_client import Neo4jClient
-from src.db.postgres import init_db
+from src.db.postgres import init_db, migrate_legacy_documents
+from src.watcher.config import load_watch_config
+from src.watcher.watcher import FileWatcher
+from src.watcher.scheduler import PipelineScheduler
+
+logger = logging.getLogger(__name__)
 
 neo4j_client: Neo4jClient | None = None
 kb: KnowledgeBase | None = None
 _exit_stack: AsyncExitStack | None = None
+_file_watcher: FileWatcher | None = None
+_scheduler: PipelineScheduler | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global neo4j_client, kb, _exit_stack
+    global neo4j_client, kb, _exit_stack, _file_watcher, _scheduler
     # startup
+    setup_logging()
     await init_db()
+
+    # 存量数据迁移
+    await migrate_legacy_documents()
+
     neo4j_client = Neo4jClient()
     kb = KnowledgeBase(neo4j_client)
     routes.set_kb(kb)
     mcp_server.set_kb(kb)
+
+    # 版本管理器
+    version_manager = VersionManager(pipeline=kb._pipeline)
+    routes.set_version_manager(version_manager)
+
+    # 目录监控 + Pipeline 调度
+    watch_config = load_watch_config()
+    if watch_config.enabled:
+        _file_watcher = FileWatcher(watch_config)
+        await _file_watcher.start()
+        logger.info("目录监控已启动")
+
+    _scheduler = PipelineScheduler(kb, watch_config)
+    routes.set_scheduler(_scheduler)
+    await _scheduler.start()
 
     # 手动启动 MCP session manager 的 lifespan
     _exit_stack = AsyncExitStack()
@@ -29,6 +59,11 @@ async def lifespan(app: FastAPI):
 
     yield
     # shutdown
+    if _scheduler:
+        await _scheduler.stop()
+    if _file_watcher:
+        await _file_watcher.stop()
+    await shutdown_logging()
     await _exit_stack.aclose()
     await neo4j_client.close()
 

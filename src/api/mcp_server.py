@@ -45,19 +45,24 @@ async def search(query: str) -> dict[str, Any]:
     kb = _get_kb()
     async with async_session_factory() as session:
         result = await kb.search(session, query)
+        chunks = [
+            {
+                "doc_id": c.doc_id,
+                "title": c.title,
+                "chunk_text": c.chunk_text[:1000],
+                "reranker_score": c.reranker_score,
+                "vector_score": c.vector_score,
+                "index_status": c.index_status,
+            }
+            for c in result.chunks
+        ]
+        # 对 stale 文档发出警告标记
+        stale_docs = [c["doc_id"] for c in chunks if c["index_status"] == "stale"]
         return {
-            "chunks": [
-                {
-                    "doc_id": c.doc_id,
-                    "title": c.title,
-                    "chunk_text": c.chunk_text[:1000],
-                    "reranker_score": c.reranker_score,
-                    "vector_score": c.vector_score,
-                }
-                for c in result.chunks
-            ],
+            "chunks": chunks,
             "related_entities": result.related_entities,
             "related_docs": result.related_docs,
+            "stale_warning": stale_docs if stale_docs else None,
         }
 
 

@@ -15,3 +15,8 @@ llm:
   model: qwen-turbo            # DashScope Qwen-Turbo
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   api_key: ""                  # 从 .env 的 LLM_API_KEY 读取
+
+vlm:
+  model: qwen-vl-plus          # DashScope 视觉语言模型
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key: ""                  # 从 .env 的 LLM_API_KEY 读取
