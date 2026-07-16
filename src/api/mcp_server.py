@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -10,6 +11,8 @@ from mcp.server.fastmcp import FastMCP
 from src.core.knowledge_base import KnowledgeBase
 from src.db.neo4j_client import Neo4jClient
 from src.db.postgres import async_session_factory
+
+logger = logging.getLogger(__name__)
 
 # FastMCP 实例
 mcp = FastMCP("Team Knowledge Base")
@@ -43,27 +46,31 @@ async def search(query: str) -> dict[str, Any]:
         query: 搜索查询文本
     """
     kb = _get_kb()
-    async with async_session_factory() as session:
-        result = await kb.search(session, query)
-        chunks = [
-            {
-                "doc_id": c.doc_id,
-                "title": c.title,
-                "chunk_text": c.chunk_text[:1000],
-                "reranker_score": c.reranker_score,
-                "vector_score": c.vector_score,
-                "index_status": c.index_status,
+    try:
+        async with async_session_factory() as session:
+            result = await kb.search(session, query)
+            chunks = [
+                {
+                    "doc_id": c.doc_id,
+                    "title": c.title,
+                    "chunk_text": c.chunk_text[:1000],
+                    "reranker_score": c.reranker_score,
+                    "vector_score": c.vector_score,
+                    "index_status": c.index_status,
+                }
+                for c in result.chunks
+            ]
+            # 对 stale 文档发出警告标记
+            stale_docs = [c["doc_id"] for c in chunks if c["index_status"] == "stale"]
+            return {
+                "chunks": chunks,
+                "related_entities": result.related_entities,
+                "related_docs": result.related_docs,
+                "stale_warning": stale_docs if stale_docs else None,
             }
-            for c in result.chunks
-        ]
-        # 对 stale 文档发出警告标记
-        stale_docs = [c["doc_id"] for c in chunks if c["index_status"] == "stale"]
-        return {
-            "chunks": chunks,
-            "related_entities": result.related_entities,
-            "related_docs": result.related_docs,
-            "stale_warning": stale_docs if stale_docs else None,
-        }
+    except Exception as e:
+        logger.error(f"MCP search 工具异常: {type(e).__name__}: {e}", exc_info=True)
+        return {"error": f"搜索失败: {type(e).__name__}: {e}", "chunks": []}
 
 
 @mcp.tool()

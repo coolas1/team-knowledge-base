@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
 from contextlib import AsyncExitStack
 import logging
+import traceback
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from src.api import mcp_server, routes
 from src.core.knowledge_base import KnowledgeBase
@@ -82,6 +84,14 @@ _standalone_mcp_app = mcp_server.mcp.streamable_http_app()
 
 mcp_asgi = StreamableHTTPASGIApp(mcp_server.mcp.session_manager)
 app.routes.append(Mount("/mcp", app=mcp_asgi))
+
+
+@app.exception_handler(Exception)
+async def _debug_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    detail = "".join(tb)
+    logger.error(f"Unhandled exception: {detail}")
+    return JSONResponse(status_code=500, content={"detail": detail})
 
 
 @app.get("/health")

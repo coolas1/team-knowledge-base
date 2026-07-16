@@ -95,7 +95,7 @@ async def vector_search(
     ]
 
 
-def reranker_filter(
+async def reranker_filter(
     query: str,
     candidates: list[dict],
     threshold: float = RERANKER_THRESHOLD,
@@ -120,13 +120,27 @@ def reranker_filter(
         else:
             texts.append(c.get("chunk_text", ""))
 
-    scores = get_reranker().rerank(query, texts)
+    scores = await get_reranker().areank(query, texts)
+
+    # 如果 Reranker 被禁用（全零分），降级使用向量分数，跳过阈值过滤
+    from src.core.reranker import RERANKER_DISABLED
+    if RERANKER_DISABLED or all(s == 0.0 for s in scores):
+        logger.info("Reranker 已禁用或返回全零分，降级使用向量分数排序")
+        scored = [(c, c.get("score", 0.0)) for c in candidates]
+        scored.sort(key=lambda x: -x[1])
+        survivors: list[dict] = []
+        for c, s in scored:
+            c["reranker_score"] = s  # 用向量分数代替
+            survivors.append(c)
+            if len(survivors) >= top_n:
+                break
+        return survivors
 
     # 按分数降序排序
     scored = list(zip(candidates, scores))
     scored.sort(key=lambda x: -x[1])
 
-    survivors: list[dict] = []
+    survivors = []
     for c, s in scored:
         if s >= threshold:
             c["reranker_score"] = s
@@ -177,10 +191,15 @@ async def full_search(
 
     Returns:
         SearchResult(chunks, related_entities, related_docs) — 无 answer，由 Agent 合成。
+    每个步骤独立容错：某层失败时降级返回已有结果。
     """
     # 第一层：向量粗筛
     _t0 = time.monotonic()
-    candidates = await vector_search(session, query, top_k)
+    try:
+        candidates = await vector_search(session, query, top_k)
+    except Exception as e:
+        logger.error(f"搜索 L1 向量粗筛失败: {type(e).__name__}: {e}", exc_info=True)
+        return SearchResult()
     vector_ms = (time.monotonic() - _t0) * 1000
     logger.info(
         f"搜索 L1 向量粗筛: query='{query[:60]}' | "
@@ -189,7 +208,17 @@ async def full_search(
 
     # 第二层：Reranker 守门
     _t1 = time.monotonic()
-    survivors = reranker_filter(query, candidates, threshold, top_n)
+    survivors: list[dict] = []
+    try:
+        logger.info(f"搜索 L2 开始 Reranker 守门: {len(candidates)} 候选")
+        survivors = await reranker_filter(query, candidates, threshold, top_n)
+        logger.info(f"搜索 L2 Reranker 完成: {len(survivors)} 存活")
+    except BaseException as e:
+        logger.error(f"搜索 L2 Reranker 失败，降级使用向量结果: {type(e).__name__}: {e}", exc_info=True)
+        # 降级：直接使用向量粗筛结果（取 top_n）
+        survivors = candidates[:top_n]
+        for c in survivors:
+            c.setdefault("reranker_score", c.get("score", 0.0))
     reranker_ms = (time.monotonic() - _t1) * 1000
     logger.info(
         f"搜索 L2 Reranker: {len(candidates)}→{len(survivors)} 存活 | "
@@ -198,7 +227,11 @@ async def full_search(
 
     # 第三层：图谱增强
     _t2 = time.monotonic()
-    related_entities = await graph_enrich(neo4j, survivors)
+    related_entities: list[GraphQueryResult] = []
+    try:
+        related_entities = await graph_enrich(neo4j, survivors)
+    except Exception as e:
+        logger.warning(f"搜索 L3 图谱增强失败，降级跳过: {type(e).__name__}: {e}")
     graph_ms = (time.monotonic() - _t2) * 1000
     logger.info(
         f"搜索 L3 图谱增强: {len(related_entities)} 关联实体 | "
@@ -232,8 +265,12 @@ async def full_search(
     ]
 
     # 查询关联文档
-    doc_ids = list({c["doc_id"] for c in survivors})
-    related_docs = await neo4j.get_related_docs(doc_ids)
+    related_docs: list[dict] = []
+    try:
+        doc_ids = list({c["doc_id"] for c in survivors})
+        related_docs = await neo4j.get_related_docs(doc_ids)
+    except Exception as e:
+        logger.warning(f"搜索关联文档查询失败，降级跳过: {type(e).__name__}: {e}")
 
     total_ms = (time.monotonic() - _t0) * 1000
     logger.info(
