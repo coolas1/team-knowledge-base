@@ -1,8 +1,8 @@
-"""Reranker 服务：使用 bge-reranker-v2-m3 交叉编码器对 (query, text) 对打分。
+"""Reranker 服务：支持 DashScope API 和本地 sentence-transformers 双 provider。
 
-注意：CrossEncoder.predict() 在当前 Windows + PyTorch 环境下存在 C 扩展级崩溃，
-无法被 Python 异常处理捕获。因此默认禁用 predict 调用，降级返回向量分数。
-待环境修复后可将 RERANKER_DISABLED 改为 False 重新启用。
+通过 model_config.yaml 的 gatekeeper.provider 切换：
+- dashscope: 调用 DashScope gte-rerank API（无需本地 GPU）
+- local: 使用本地 sentence-transformers CrossEncoder（需要 PyTorch 环境）
 """
 
 from __future__ import annotations
@@ -10,87 +10,165 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
-# 优先使用本地缓存，避免每次加载都尝试联网检查
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+import httpx
+import yaml
+
+from src.db.config import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Reranker 全局开关 ─────────────────────────────────────────
-# True = 跳过 CrossEncoder predict，降级返回零分（避免 C 扩展崩溃）
-# False = 正常调用 CrossEncoder predict（需要 PyTorch 环境正常）
-RERANKER_DISABLED: bool = True
+_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "model_config.yaml"
 
-# 默认模型配置
-DEFAULT_MODEL = "BAAI/bge-reranker-v2-m3"
+# 不再使用硬编码禁用开关，改为 provider 配置驱动
+RERANKER_DISABLED: bool = False
+
+
+def _load_gatekeeper_config() -> dict:
+    """从 model_config.yaml 读取 gatekeeper 配置。"""
+    if _CONFIG_PATH.exists():
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+            return cfg.get("gatekeeper", {})
+    return {}
 
 
 class Reranker:
-    """基于 CrossEncoder 的重排序模型。
+    """Reranker 客户端，支持 dashscope API 和 local sentence-transformers。"""
 
-    对 (query, text) 文本对进行相关性打分，
-    用于检索守门层替换原有的 cosine similarity。
-    当 RERANKER_DISABLED=True 时跳过模型加载和 predict。
-    """
-
-    def __init__(self, model_name: str = DEFAULT_MODEL) -> None:
+    def __init__(self) -> None:
+        self._cfg = _load_gatekeeper_config()
+        self._provider = self._cfg.get("provider", "dashscope")
+        self._model = self._cfg.get("model", "gte-rerank")
+        self._threshold = self._cfg.get("threshold", 0.01)
+        self._top_n = self._cfg.get("top_n", 15)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
-        if RERANKER_DISABLED:
-            logger.warning("Reranker 已禁用（RERANKER_DISABLED=True），跳过模型加载")
-            self.model = None
-        else:
-            logger.info("加载 Reranker 模型: %s ...", model_name)
-            from sentence_transformers import CrossEncoder
-            self.model = CrossEncoder(model_name)
-            logger.info("Reranker 模型加载完成 ✓")
 
-    def rerank(self, query: str, texts: list[str]) -> list[float]:
-        """对 (query, text) 对打分（同步版本）。"""
-        if not texts:
-            return []
-        if RERANKER_DISABLED or self.model is None:
-            return [0.0] * len(texts)
-        pairs = [(query, text) for text in texts]
-        scores = self.model.predict(pairs)
-        return [float(s) for s in scores]
+        if self._provider == "dashscope":
+            # DashScope API 配置
+            self._base_url = self._cfg.get(
+                "base_url", "https://dashscope.aliyuncs.com/api/v1"
+            ).rstrip("/")
+            self._api_key = self._cfg.get("api_key", "") or settings.llm_api_key
+            logger.info(f"Reranker 初始化: provider=dashscope | model={self._model}")
+        elif self._provider == "local":
+            # 本地 sentence-transformers
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+            try:
+                from sentence_transformers import CrossEncoder
+                self._local_model = CrossEncoder(self._model)
+                logger.info(f"Reranker 初始化: provider=local | model={self._model} ✓")
+            except Exception as e:
+                logger.warning(f"Reranker 本地模型加载失败，降级为 noop: {e}")
+                self._provider = "noop"
+                self._local_model = None
+        else:
+            logger.warning(f"Reranker provider 未知: {self._provider}，降级为 noop")
+            self._provider = "noop"
 
     async def areank(self, query: str, texts: list[str]) -> list[float]:
         """对 (query, text) 对打分（异步版本）。
 
-        RERANKER_DISABLED 时直接返回零分，不调用 predict。
+        Returns:
+            与 texts 等长的分数列表，按原始顺序排列。
         """
         if not texts:
             return []
-        if RERANKER_DISABLED or self.model is None:
-            logger.debug("Reranker 已禁用，返回零分")
+
+        if self._provider == "dashscope":
+            return await self._rerank_dashscope(query, texts)
+        elif self._provider == "local":
+            return await self._rerank_local(query, texts)
+        else:
+            # noop: 返回零分
             return [0.0] * len(texts)
+
+    # ── DashScope Reranker API ───────────────────────────────────
+
+    async def _rerank_dashscope(self, query: str, texts: list[str]) -> list[float]:
+        """调用 DashScope gte-rerank API 打分。
+
+        API: POST {base_url}/services/rerank/text-rerank/text-rerank
+        """
+        t0 = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{self._base_url}/services/rerank/text-rerank/text-rerank",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self._model,
+                        "input": {
+                            "query": query,
+                            "documents": texts,
+                        },
+                        "parameters": {
+                            "return_documents": False,
+                            "top_n": len(texts),  # 返回所有分数，由上层过滤
+                        },
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.info(
+                f"Reranker dashscope 完成: {len(texts)} 文档 | 耗时 {elapsed_ms:.0f}ms"
+            )
+
+            # 解析响应：output.results = [{index, relevance_score}]
+            results = data.get("output", {}).get("results", [])
+            # 按 index 还原到原始顺序
+            scores = [0.0] * len(texts)
+            for r in results:
+                idx = r["index"]
+                if 0 <= idx < len(texts):
+                    scores[idx] = float(r["relevance_score"])
+
+            return scores
+
+        except Exception as e:
+            logger.warning(
+                f"Reranker dashscope 调用失败，降级返回零分: {type(e).__name__}: {e}"
+            )
+            return [0.0] * len(texts)
+
+    # ── Local sentence-transformers ────────────────────────────────
+
+    async def _rerank_local(self, query: str, texts: list[str]) -> list[float]:
+        """本地 CrossEncoder predict（在线程池中运行）。"""
+        t0 = time.monotonic()
         pairs = [(query, text) for text in texts]
         loop = asyncio.get_running_loop()
         try:
             scores = await loop.run_in_executor(
-                self._executor, self._predict_safe, pairs
+                self._executor, self._predict_local, pairs
+            )
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.info(
+                f"Reranker local 完成: {len(texts)} 文档 | 耗时 {elapsed_ms:.0f}ms"
             )
             return [float(s) for s in scores]
         except Exception as e:
-            logger.warning(f"Reranker predict 失败，降级返回零分: {type(e).__name__}: {e}")
+            logger.warning(
+                f"Reranker local predict 失败，降级返回零分: {type(e).__name__}: {e}"
+            )
             return [0.0] * len(texts)
 
-    @staticmethod
-    def _predict_safe(pairs: list[tuple[str, str]]) -> list[float]:
-        """安全包装 predict。"""
-        try:
-            from sentence_transformers import CrossEncoder
-            model = CrossEncoder(DEFAULT_MODEL)
-            scores = model.predict(pairs)
-            return [float(s) for s in scores]
-        except Exception as e:
-            logger.warning(f"Reranker _predict_safe 失败: {type(e).__name__}: {e}")
-            return [0.0] * len(pairs)
+    def _predict_local(self, pairs: list[tuple[str, str]]) -> list[float]:
+        """同步调用 CrossEncoder.predict。"""
+        scores = self._local_model.predict(pairs)
+        return [float(s) for s in scores]
 
 
-# 全局单例（懒加载，首次使用时初始化）
+# 全局单例（懒加载）
 _reranker_instance: Reranker | None = None
 
 

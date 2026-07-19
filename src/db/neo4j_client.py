@@ -1,11 +1,30 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from neo4j import AsyncGraphDatabase
 
 from src.db.config import settings
+
+
+def _sanitize_label(name: str) -> str:
+    """将实体/关系类型转为合法的 Neo4j 标签。
+
+    LLM 可能返回含空格/标点的类型（如 "Site Name"），直接拼入
+    Cypher 会导致语法错误。这里保留字母/数字/下划线/中文，
+    其余字符替换为下划线，并确保不以数字开头。
+    """
+    if not name:
+        return "Unknown"
+    s = re.sub(r"[^\w\u4e00-\u9fff]", "_", name, flags=re.UNICODE)
+    s = s.strip("_")
+    if not s:
+        return "Unknown"
+    if s[0].isdigit():
+        s = "T_" + s
+    return s
 
 
 @dataclass
@@ -136,12 +155,13 @@ class Neo4jClient:
             "chunk_index": source.chunk_index,
             "doc_title": source.doc_title,
         }
+        label = _sanitize_label(entity.entity_type)
 
         async with self._driver.session() as session:
             # 1. MERGE 实体节点，保留较长的 description
             await session.run(
                 f"""
-                MERGE (e:{entity.entity_type} {{name: $name}})
+                MERGE (e:{label} {{name: $name}})
                 SET e.entity_type = $entity_type,
                     e.description = CASE
                         WHEN size($desc) > size(coalesce(e.description, ''))
@@ -193,6 +213,7 @@ class Neo4jClient:
             "doc_id": source.doc_id,
             "chunk_index": source.chunk_index,
         }
+        rel_type = _sanitize_label(relation.relation_type)
 
         async with self._driver.session() as session:
             # 1. MERGE 关系，保留较长的 description
@@ -200,7 +221,7 @@ class Neo4jClient:
                 f"""
                 MATCH (a {{name: $from_name}})
                 MATCH (b {{name: $to_name}})
-                MERGE (a)-[r:{relation.relation_type}]->(b)
+                MERGE (a)-[r:{rel_type}]->(b)
                 SET r.description = CASE
                         WHEN size($desc) > size(coalesce(r.description, ''))
                         THEN $desc
@@ -215,7 +236,7 @@ class Neo4jClient:
             # 2. 追加 sources 去重
             result = await session.run(
                 f"""
-                MATCH (a {{name: $from_name}})-[r:{relation.relation_type}]->(b {{name: $to_name}})
+                MATCH (a {{name: $from_name}})-[r:{rel_type}]->(b {{name: $to_name}})
                 RETURN r.sources AS sources
                 """,
                 from_name=relation.from_name,
@@ -234,7 +255,7 @@ class Neo4jClient:
                     sources.append(new_source)
                     await session.run(
                         f"""
-                        MATCH (a {{name: $from_name}})-[r:{relation.relation_type}]->(b {{name: $to_name}})
+                        MATCH (a {{name: $from_name}})-[r:{rel_type}]->(b {{name: $to_name}})
                         SET r.sources = $sources
                         """,
                         from_name=relation.from_name,

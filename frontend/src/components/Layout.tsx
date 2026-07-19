@@ -39,6 +39,12 @@ export function Layout() {
           团队知识库
         </Link>
         <Link
+          to="/search"
+          style={{ fontSize: 14, textDecoration: 'none', color: '#666', padding: '4px 8px' }}
+        >
+          检索调试
+        </Link>
+        <Link
           to="/graph"
           style={{ fontSize: 14, textDecoration: 'none', color: '#666', padding: '4px 8px' }}
         >

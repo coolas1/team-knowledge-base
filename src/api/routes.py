@@ -201,6 +201,7 @@ async def search(
         ],
         "related_entities": result.related_entities,
         "related_docs": result.related_docs,
+        "debug": result.debug,
     }
 
 

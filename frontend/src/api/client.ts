@@ -63,6 +63,55 @@ export interface LogList {
   items: LogEntry[]
 }
 
+export interface SearchChunk {
+  doc_id: string
+  title: string
+  chunk_text: string
+  reranker_score: number
+  vector_score: number
+  index_status: string
+}
+
+export interface SearchDebug {
+  rewrite: {
+    original: string
+    rewritten: string
+    keywords: string[]
+    expanded_queries: string[]
+    elapsed_ms: number
+  }
+  recall: {
+    vector_main: number
+    vector_expanded: number
+    bm25: number
+    rrf_merged: number
+    elapsed_ms: number
+  }
+  iterative_expand: { added: number; elapsed_ms: number }
+  reranker: {
+    input: number
+    survivors: number
+    threshold: number
+    top_n: number
+    elapsed_ms: number
+  }
+  graph: {
+    entities: number
+    graph_chunks: number
+    related_doc_chunks: number
+    elapsed_ms: number
+  }
+  total_ms: number
+  final_chunks: number
+}
+
+export interface SearchResult {
+  chunks: SearchChunk[]
+  related_entities: Array<{ name: string; type: string; relations: any[] }>
+  related_docs: Array<{ doc_id: string; title: string; relation_type: string; reason: string }>
+  debug: SearchDebug
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, options)
   if (!res.ok) {
@@ -207,5 +256,14 @@ export const api = {
 
   getLogStreamUrl() {
     return `${BASE}/logs/stream`
+  },
+
+  // 检索（含全链路调试信息）
+  search(query: string) {
+    return request<SearchResult>('/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    })
   },
 }

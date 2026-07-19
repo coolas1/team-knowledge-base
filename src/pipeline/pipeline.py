@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy import select, update
 
+from src.core.bm25_index import bm25_index, BM25Entry
 from src.core.log_manager import pipeline_trace
 from src.db.models import Chunk, Document, DocumentVersion
 from src.db.neo4j_client import Neo4jClient, EntityData, EntitySource, RelationData
@@ -201,6 +202,9 @@ class Pipeline:
                         f"PG {pg_ms:.0f} + Neo4j {neo4j_ms:.0f}]"
                     )
 
+                    # 同步 BM25 索引
+                    self._sync_bm25_index(str(doc_id), chunks, doc_analysis.overview, doc_uri)
+
                 except Exception as e:
                     total_ms = (time.monotonic() - total_start) * 1000
                     logger.error(
@@ -319,6 +323,9 @@ class Pipeline:
                         f"[trace={trace_id}] 文档 {doc_id} re-index 完成 ✓ "
                         f"{len(chunks)} chunks, {len(chunk_analyses)} 分析 | 总耗时 {total_ms:.0f}ms"
                     )
+
+                    # 同步 BM25 索引
+                    self._sync_bm25_index(str(doc_id), chunks, doc_analysis.overview, doc_uri)
 
                 except Exception as e:
                     total_ms = (time.monotonic() - total_start) * 1000
@@ -502,3 +509,35 @@ class Pipeline:
                 f"[trace={trace_id}] 创建版本 v{new_version} 快照: "
                 f"{snapshot_path.name} | raw_text={len(raw_text)}字符 | 耗时 {snap_ms:.0f}ms"
             )
+
+    # ── BM25 索引同步 ─────────────────────────────────────────
+
+    @staticmethod
+    def _sync_bm25_index(
+        doc_id: str,
+        chunks: list,
+        overview: str,
+        doc_uri: str,
+    ) -> None:
+        """同步 BM25 索引：移除旧条目，添加新 chunks。"""
+        if not bm25_index.ready:
+            return
+        try:
+            # 移除该文档的旧 chunks
+            removed = bm25_index.remove_by_doc_id(doc_id)
+            # 添加新 chunks
+            for chunk in chunks:
+                bm25_index.add_entry(BM25Entry(
+                    chunk_id="",  # BM25 索引中不需要精确 chunk_id
+                    doc_id=doc_id,
+                    chunk_index=chunk.index,
+                    chunk_text=chunk.text,
+                    overview=overview,
+                    doc_uri=doc_uri,
+                ))
+            logger.info(
+                f"BM25 索引同步: doc={doc_id} | "
+                f"移除 {removed} + 添加 {len(chunks)} chunks"
+            )
+        except Exception as e:
+            logger.warning(f"BM25 索引同步失败: {type(e).__name__}: {e}")

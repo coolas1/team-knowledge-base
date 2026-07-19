@@ -7,11 +7,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from src.api import mcp_server, routes
+from src.core.bm25_index import bm25_index
 from src.core.knowledge_base import KnowledgeBase
 from src.core.log_manager import setup_logging, shutdown_logging
 from src.core.version_manager import VersionManager
 from src.db.neo4j_client import Neo4jClient
-from src.db.postgres import init_db, migrate_legacy_documents
+from src.db.postgres import init_db, migrate_legacy_documents, async_session_factory
 from src.watcher.config import load_watch_config
 from src.watcher.watcher import FileWatcher
 from src.watcher.scheduler import PipelineScheduler
@@ -58,6 +59,14 @@ async def lifespan(app: FastAPI):
     # 手动启动 MCP session manager 的 lifespan
     _exit_stack = AsyncExitStack()
     await _exit_stack.enter_async_context(mcp_server.mcp.session_manager.run())
+
+    # 构建 BM25 索引（从 PostgreSQL 加载所有 indexed chunks）
+    try:
+        async with async_session_factory() as bm25_session:
+            await bm25_index.build_from_db(bm25_session)
+        logger.info("BM25 索引构建完成")
+    except Exception as e:
+        logger.warning(f"BM25 索引构建失败，关键词检索不可用: {e}")
 
     yield
     # shutdown

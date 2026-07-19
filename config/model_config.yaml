@@ -1,14 +1,14 @@
 embedding:
-  provider: ollama           # ollama | openai | custom
-  model: nomic-embed-text    # 当前模型
-  dimensions: 768
-  base_url: http://localhost:11434
+  provider: dashscope          # dashscope | ollama
+  model: text-embedding-v3    # DashScope 中文优化 embedding
+  dimensions: 1024
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 
 gatekeeper:
-  provider: sentence-transformers
-  model: BAAI/bge-reranker-v2-m3
-  threshold: 0.01            # reranker 分数阈值（raw logits）
-  top_n: 10                  # reranker 后保留 Top-N
+  provider: dashscope          # dashscope | local
+  model: gte-rerank            # DashScope Reranker API
+  threshold: 0.01              # reranker 分数阈值
+  top_n: 15                    # reranker 后保留 Top-N
 
 llm:
   provider: openai             # 使用 OpenAI 兼容接口

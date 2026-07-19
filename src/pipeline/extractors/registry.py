@@ -6,6 +6,7 @@ from src.pipeline.extractors.image import ImageExtractor
 from src.pipeline.extractors.markdown import MarkdownExtractor
 from src.pipeline.extractors.pdf import PDFExtractor
 from src.pipeline.extractors.pptx import PPTXExtractor
+from src.pipeline.extractors.tabular import TabularExtractor
 
 
 class ExtractorRegistry:
@@ -18,6 +19,7 @@ class ExtractorRegistry:
             DocxExtractor(),
             PPTXExtractor(),
             ImageExtractor(),
+            TabularExtractor(),
         ]
         # 扩展名 → extractor 的映射缓存
         self._ext_map: dict[str, BaseExtractor] = {}
@@ -58,6 +60,9 @@ class ExtractorRegistry:
             ".tiff": "image",
             ".bmp": "image",
             ".webp": "image",
+            ".csv": "csv",
+            ".xlsx": "xlsx",
+            ".xls": "xlsx",
         }
         return type_map.get(ext, ext.lstrip("."))
 

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>team-knowledge-base · RAG 检索评测报告（优化对比版）</title>
+<style>
+  :root {
+    --bg: #0f1419; --card: #1a2129; --card2: #212a35;
+    --border: #2d3742; --text: #e6edf3; --muted: #8b98a5;
+    --accent: #4493f8; --green: #3fb950; --yellow: #d29922; --red: #f85149;
+    --purple: #a371f7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; line-height: 1.6; padding: 32px 16px; }
+  .container { max-width: 1080px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 36px; }
+  header h1 { font-size: 27px; font-weight: 700; margin-bottom: 8px; }
+  header .sub { color: var(--muted); font-size: 14px; }
+  .badge-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+  .tech-badge { background: var(--card2); border: 1px solid var(--border); padding: 4px 12px; border-radius: 20px; font-size: 12px; color: var(--muted); }
+  .tech-badge.new { border-color: var(--green); color: var(--green); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px; }
+  .card h2 { font-size: 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+  .card h2::before { content: ""; width: 4px; height: 18px; background: var(--accent); border-radius: 2px; }
+
+  .score-hero { display: flex; align-items: center; gap: 36px; flex-wrap: wrap; }
+  .gauge { position: relative; width: 180px; height: 180px; flex-shrink: 0; }
+  .gauge svg { transform: rotate(-90deg); }
+  .gauge .center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .gauge .num { font-size: 40px; font-weight: 800; color: var(--green); }
+  .gauge .lbl { font-size: 12px; color: var(--muted); }
+  .gauge .delta { font-size: 13px; color: var(--green); font-weight: 700; margin-top: 2px; }
+  .score-stats { flex: 1; min-width: 250px; }
+  .stat-line { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .stat-line:last-child { border: none; }
+  .stat-line .k { color: var(--muted); }
+  .stat-line .v { font-weight: 600; }
+  .pill { padding: 2px 10px; border-radius: 12px; font-size: 13px; font-weight: 600; }
+  .pill.g { background: rgba(63,185,80,.15); color: var(--green); }
+  .pill.y { background: rgba(210,153,34,.15); color: var(--yellow); }
+  .pill.r { background: rgba(248,81,73,.15); color: var(--red); }
+
+  .cmp-row { display: grid; grid-template-columns: 1fr 70px 70px; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .cmp-row .name { font-size: 14px; font-weight: 600; }
+  .cmp-row .name small { color: var(--muted); font-weight: 400; }
+  .cmp-cell { text-align: center; font-size: 13px; }
+  .cmp-cell .old { color: var(--muted); }
+  .cmp-cell .new { font-weight: 700; }
+  .cmp-head { display: grid; grid-template-columns: 1fr 70px 70px; gap: 10px; color: var(--muted); font-size: 12px; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .cmp-head span:nth-child(2), .cmp-head span:nth-child(3) { text-align: center; }
+  .bar-track { height: 8px; background: var(--card2); border-radius: 4px; overflow: hidden; margin-top: 5px; }
+  .bar-fill { height: 100%; border-radius: 4px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 10px 12px; color: var(--muted); font-weight: 600; border-bottom: 2px solid var(--border); position: sticky; top: 0; background: var(--card); }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: var(--card2); }
+  .score-cell { font-weight: 700; text-align: center; width: 50px; }
+  .delta-cell { text-align: center; width: 50px; font-size: 12px; font-weight: 600; }
+  .s1 { color: var(--green); } .s05 { color: var(--yellow); } .s0 { color: var(--red); }
+  .up { color: var(--green); } .down { color: var(--red); } .same { color: var(--muted); }
+  .cat-tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+  .t-detail { background: rgba(68,147,248,.15); color: var(--accent); }
+  .t-link-following { background: rgba(163,113,247,.15); color: var(--purple); }
+  .t-link { background: rgba(163,113,247,.25); color: var(--purple); }
+  .t-temporal { background: rgba(210,153,34,.15); color: var(--yellow); }
+  .t-multi-modal { background: rgba(248,81,73,.15); color: var(--red); }
+  .reason { color: var(--muted); font-size: 12px; }
+
+  .finding { padding: 14px 16px; border-radius: 8px; margin-bottom: 12px; border-left: 3px solid; }
+  .finding.good { background: rgba(63,185,80,.08); border-color: var(--green); }
+  .finding.warn { background: rgba(210,153,34,.08); border-color: var(--yellow); }
+  .finding.bad { background: rgba(248,81,73,.08); border-color: var(--red); }
+  .finding h3 { font-size: 15px; margin-bottom: 6px; }
+  .finding p { font-size: 13px; color: var(--muted); }
+  .finding ul { margin: 6px 0 0 18px; font-size: 13px; color: var(--muted); }
+  .finding li { margin-bottom: 3px; }
+  .finding code { background: var(--card2); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } .score-hero { gap: 20px; } }
+  footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 32px; }
+  .table-wrap { max-height: 620px; overflow-y: auto; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>team-knowledge-base · RAG 检索评测报告</h1>
+    <div class="sub">rag-agent-bench · Wren Adachi 多模态个人档案 · 40 题 QA 检索基准 · 优化对比版</div>
+    <div class="badge-row">
+      <span class="tech-badge">Embedding: text-embedding-v3</span>
+      <span class="tech-badge">BM25 + jieba</span>
+      <span class="tech-badge">RRF 融合</span>
+      <span class="tech-badge">DashScope Reranker</span>
+      <span class="tech-badge">Neo4j 图谱增强</span>
+      <span class="tech-badge">Query 改写</span>
+      <span class="tech-badge new">＋ csv/xlsx 提取器</span>
+      <span class="tech-badge new">＋ 2 轮迭代多跳</span>
+      <span class="tech-badge new">＋ 补充 chunks 重打分</span>
+    </div>
+  </header>
+
+  <div class="card">
+    <h2>总体得分（优化后）</h2>
+    <div class="score-hero">
+      <div class="gauge">
+        <svg width="180" height="180">
+          <circle cx="90" cy="90" r="78" fill="none" stroke="#212a35" stroke-width="14"/>
+          <circle cx="90" cy="90" r="78" fill="none" stroke="#3fb950" stroke-width="14"
+            stroke-linecap="round" stroke-dasharray="490" stroke-dashoffset="86"/>
+        </svg>
+        <div class="center">
+          <div class="num">0.825</div>
+          <div class="lbl">/ 1.000</div>
+          <div class="delta">▲ +0.087</div>
+        </div>
+      </div>
+      <div class="score-stats">
+        <div class="stat-line"><span class="k">优化前（baseline）</span><span class="v">0.738</span></div>
+        <div class="stat-line"><span class="k">优化后</span><span class="v"><span class="pill g">0.825</span></span></div>
+        <div class="stat-line"><span class="k">相对提升</span><span class="v"><span class="pill g">+11.8%</span></span></div>
+        <div class="stat-line"><span class="k">语料导入</span><span class="v">48 / 48 文件</span></div>
+        <div class="stat-line"><span class="k">索引 chunks</span><span class="v">210（+20 表格）</span></div>
+        <div class="stat-line"><span class="k">作答 / 评判模型</span><span class="v">qwen-plus</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>分类得分对比（优化前 → 优化后）</h2>
+    <div class="cmp-head"><span>类别</span><span>优化前</span><span>优化后</span></div>
+    <div class="cmp-row">
+      <div class="name">link · 跨语言链接 <small>n=3</small></div>
+      <div class="cmp-cell"><span class="old">1.000</span></div>
+      <div class="cmp-cell"><span class="new s1">1.000</span></div>
+    </div>
+    <div class="cmp-row">
+      <div class="name">temporal · 时序推理 <small>n=8</small></div>
+      <div class="cmp-cell"><span class="old">0.812</span></div>
+      <div class="cmp-cell"><span class="new s1">0.875 ▲</span></div>
+    </div>
+    <div class="cmp-row">
+      <div class="name">link-following · 多跳推理 <small>n=7</small></div>
+      <div class="cmp-cell"><span class="old">0.714</span></div>
+      <div class="cmp-cell"><span class="new s1">0.857 ▲</span></div>
+    </div>
+    <div class="cmp-row">
+      <div class="name">detail · 细节定位 <small>n=11</small></div>
+      <div class="cmp-cell"><span class="old">0.864</span></div>
+      <div class="cmp-cell"><span class="new s1">0.818 ▼</span></div>
+    </div>
+    <div class="cmp-row">
+      <div class="name">multi-modal · 多模态 <small>n=11</small></div>
+      <div class="cmp-cell"><span class="old">0.500</span></div>
+      <div class="cmp-cell"><span class="new s1">0.727 ▲▲</span></div>
+    </div>
+    <p style="color:var(--muted);font-size:12px;margin-top:8px">注：多模态提升最大（+0.227），主要来自 csv/xlsx 提取器。detail 微降含运行间抖动（见核心发现）。</p>
+  </div>
+
+  <div class="card">
+    <h2>核心发现</h2>
+    <div class="finding good">
+      <h3>✓ csv/xlsx 提取器是最大功臣，多模态 0.50 → 0.73</h3>
+      <p>新增结构化键值对表格提取器后，6 道原本 "NOT FOUND" 的表格题全部救回：</p>
+      <ul>
+        <li>Q14 月度储蓄为负 → <code>finance-2024.csv</code> ✓</li>
+        <li>Q15 RYK-03 季度白化最大 → <code>bleaching-survey-2024.xlsx</code> ✓</li>
+        <li>Q24 全站点最高 SST → <code>SST_2024_monthly</code> 表 ✓</li>
+        <li>Q27 最高平均评分发酵类型 → <code>batch-log.xlsx</code> ✓</li>
+        <li>Q28 批次 B-013 三方冲突 → <code>batch-log.xlsx</code> + <code>ph-readings.csv</code> ✓</li>
+        <li>Q02 最长曲目 → <code>tracklist.csv</code>（0.5→1.0）✓</li>
+      </ul>
+    </div>
+    <div class="finding good">
+      <h3>✓ 迭代多跳救回 Q04（多约束细节题）</h3>
+      <p>Q04「最深典型潜水点」需要在多个站点约束间交叉验证，2 轮实体锚点检索把它从 0.0 提到 1.0（正确识别 RYK-10 Kerama Outer）。</p>
+    </div>
+    <div class="finding good">
+      <h3>✓ 修复了一个既有 bug：Neo4j 标签未清洗</h3>
+      <p>LLM 抽出的实体类型含空格（如 "Site Name"）会导致 Cypher 语法错误，使整个文档索引失败。新增 <code>_sanitize_label</code> 后 bleaching-survey 等多 sheet 表格顺利入库。</p>
+    </div>
+    <div class="finding bad">
+      <h3>✗ Q07/Q22 回退：多模态 reranker 固有限制</h3>
+      <p>专辑封面 <code>album-cover.png</code> 的 VLM 描述文本被 reranker 打 0.000 分——模型本身不认为图片描述与「封面三行文字」查询相关，导致图片文档排到第 47 位，进不了 top-12。这是 reranker 模型对图片查询的判断，<b>检索架构无法修复</b>，需换更强的多模态 reranker 或 agentic 重检索。</p>
+    </div>
+    <div class="finding warn">
+      <h3>△ 仍存在运行间抖动（LLM 非确定性）</h3>
+      <p>Q05/Q06/Q20 在不同轮次间于 0.5↔1.0↔0.0 波动（作答与评判均为 qwen-plus，temperature 虽低仍有抖动）。这提示对关键题应多次采样取众数，或固定随机种子。</p>
+    </div>
+    <div class="finding warn">
+      <h3>△ 剩余硬骨头</h3>
+      <ul>
+        <li>Q13（三条件潜点）：多约束仍未串全，0.0</li>
+        <li>Q23（散点图 R²）：VLM 读图 0.47 vs 真值 0.66，0.0</li>
+        <li>Q29（expenses.csv 求和）：表格已入库但 LLM 未对 19 行求和，0.0</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>下一步建议</h2>
+    <div class="grid2">
+      <div class="finding good">
+        <h3>1. 多模态 reranker 升级</h3>
+        <p>Q07/Q22/Q23 的根因是 reranker 对图片/图表查询打分失真。换用多模态 reranker（如 qwen3-vl-rerank）或对图片 chunk 做查询感知的分数校准。</p>
+      </div>
+      <div class="finding good">
+        <h3>2. 表格聚合能力</h3>
+        <p>Q29 需要跨行求和。可在表格提取时预计算常用聚合（sum/max/mean）写入 chunk，或让作答 agent 调用代码工具处理表格。</p>
+      </div>
+      <div class="finding warn">
+        <h3>3. 稳定化</h3>
+        <p>对作答与评判固定随机种子 / 多次采样投票，消除 Q05/Q06/Q20 类抖动，让分数可复现。</p>
+      </div>
+      <div class="finding warn">
+        <h3>4. 深度多跳</h3>
+        <p>Q13 需 3 条件交集。可引入约束分解：把多约束查询拆成子查询分别检索再求交集。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>逐题明细（优化后 · 含与基线对比）</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>ID</th><th>类别</th><th style="text-align:center">得分</th><th style="text-align:center">vs基线</th><th>评判理由</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>01</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 Onset HOBO U22-001、8m、30 分钟</td></tr>
+          <tr><td>02</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s1">1.0</td><td class="delta-cell up">▲</td><td class="reason">tracklist.csv 入库后正确识别 Cladocopium 最长</td></tr>
+          <tr><td>03</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 Toop《Haunted Weather》</td></tr>
+          <tr><td>04</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s1">1.0</td><td class="delta-cell up">▲</td><td class="reason">迭代多跳救回，正确识别 RYK-10 Kerama Outer</td></tr>
+          <tr><td>05</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s05">0.5</td><td class="delta-cell down">▼</td><td class="reason">时间正确但日期细节有偏差（运行抖动）</td></tr>
+          <tr><td>06</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s05">0.5</td><td class="delta-cell down">▼</td><td class="reason">菌种正确但部分细节缺失（运行抖动）</td></tr>
+          <tr><td>07</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s0">0.0</td><td class="delta-cell down">▼</td><td class="reason">回退：album-cover.png 被 reranker 打 0 分，挤出 top-12</td></tr>
+          <tr><td>08</td><td><span class="cat-tag t-link-following">link-following</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 Track 4 Cladocopium + RYK-06</td></tr>
+          <tr><td>09</td><td><span class="cat-tag t-link-following">link-following</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 Polyp 并分析 BPM/调性变化</td></tr>
+          <tr><td>10</td><td><span class="cat-tag t-link-following">link-following</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 Boulotte et al. (2016) 引用链</td></tr>
+          <tr><td>11</td><td><span class="cat-tag t-link-following">link-following</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 idea 标题及三个来源</td></tr>
+          <tr><td>12</td><td><span class="cat-tag t-link-following">link-following</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 RYK-05 + Polyp</td></tr>
+          <tr><td>13</td><td><span class="cat-tag t-link-following">link-following</span></td><td class="score-cell s0">0.0</td><td class="delta-cell same">=</td><td class="reason">三条件交叉仍失败，误判 RYK-06</td></tr>
+          <tr><td>14</td><td><span class="cat-tag t-link-following">link-following</span></td><td class="score-cell s1">1.0</td><td class="delta-cell up">▲</td><td class="reason">finance-2024.csv 入库后正确识别 3/4 月</td></tr>
+          <tr><td>15</td><td><span class="cat-tag t-temporal">temporal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell up">▲</td><td class="reason">bleaching xlsx 入库后正确识别 2023Q3 / 92.4%</td></tr>
+          <tr><td>16</td><td><span class="cat-tag t-temporal">temporal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确计算 6 天间隔</td></tr>
+          <tr><td>17</td><td><span class="cat-tag t-temporal">temporal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 2023-08-14</td></tr>
+          <tr><td>18</td><td><span class="cat-tag t-temporal">temporal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确给出 2024-09-12</td></tr>
+          <tr><td>19</td><td><span class="cat-tag t-temporal">temporal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别起止日期</td></tr>
+          <tr><td>20</td><td><span class="cat-tag t-temporal">temporal</span></td><td class="score-cell s0">0.0</td><td class="delta-cell down">▼</td><td class="reason">回退：B-019 周二日期推算错误（运行抖动）</td></tr>
+          <tr><td>21</td><td><span class="cat-tag t-temporal">temporal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别日期 + 旧/新 R² 及原因</td></tr>
+          <tr><td>22</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s0">0.0</td><td class="delta-cell down">▼</td><td class="reason">回退：封面视觉细节，图片 reranker 0 分</td></tr>
+          <tr><td>23</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s0">0.0</td><td class="delta-cell same">=</td><td class="reason">R² 读图错误（0.47 vs 0.66）</td></tr>
+          <tr><td>24</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell up">▲</td><td class="reason">SST 表入库后正确识别 31.2°C @ RYK-11</td></tr>
+          <tr><td>25</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确给出断点 8.36 + 95% CI</td></tr>
+          <tr><td>26</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 RYK-01 + 录音</td></tr>
+          <tr><td>27</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell up">▲</td><td class="reason">batch-log 入库后正确识别 miso 最高评分</td></tr>
+          <tr><td>28</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell up">▲</td><td class="reason">表格入库后正确识别 B-013 三方冲突</td></tr>
+          <tr><td>29</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s0">0.0</td><td class="delta-cell same">=</td><td class="reason">expenses.csv 已入库但 LLM 未对 19 行求和</td></tr>
+          <tr><td>30</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别北部 refuge 聚类 + §3.3</td></tr>
+          <tr><td>31</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别稀有共生体 + Shannon H′（日语源）</td></tr>
+          <tr><td>32</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确给出 DHW=7.8 + 95% CI（中文源）</td></tr>
+          <tr><td>33</td><td><span class="cat-tag t-link">link</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别红曲/曲霉微生物 + 最适温度</td></tr>
+          <tr><td>34</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 A-003 + 比重/ABV/起始日期</td></tr>
+          <tr><td>35</td><td><span class="cat-tag t-temporal">temporal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确给出日期范围 + 白化趋势（中文）</td></tr>
+          <tr><td>36</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 coral bleaching 日/中译法</td></tr>
+          <tr><td>37</td><td><span class="cat-tag t-link">link</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别 Zoom H5 + Aquarian H2a（日→英）</td></tr>
+          <tr><td>38</td><td><span class="cat-tag t-detail">detail</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确给出最适 pH≈4.5 + 峰值第 12 天（中文）</td></tr>
+          <tr><td>39</td><td><span class="cat-tag t-link">link</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确并列 22.7°C/23.4°C 跨语言矛盾</td></tr>
+          <tr><td>40</td><td><span class="cat-tag t-multi-modal">multi-modal</span></td><td class="score-cell s1">1.0</td><td class="delta-cell same">=</td><td class="reason">正确识别汉字「潮」+ 读音 shio + 含义</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    优化内容：① csv/xlsx 结构化键值对提取器 ② 2 轮实体锚点迭代多跳检索 ③ 补充 chunks 过 reranker 重打分 ④ 修复 Neo4j 标签未清洗 bug<br>
+    评测方法：Qoder 充当预测 agent · /search 检索 · qwen-plus 基于检索内容作答 · qwen-plus 评判对照 golden answer（0 / 0.5 / 1）<br>
+    总分 0.738 → <b>0.825</b>（+11.8%）· 语料 rag-agent-bench raw/ 全 48 文件 · 210 chunks
+  </footer>
+
+</div>
+</body>
+</html>

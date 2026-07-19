@@ -16,7 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-EMBEDDING_DIM = 768  # nomic-embed-text, 可通过配置切换
+EMBEDDING_DIM = 1024  # text-embedding-v3 (DashScope), 可通过配置切换
 
 
 class Base(DeclarativeBase):
