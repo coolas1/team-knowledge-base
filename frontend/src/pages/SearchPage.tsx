@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, type SearchResult } from '../api/client'
+import { api, type SearchResult, type DiagnoseResult, type DiagnoseStage } from '../api/client'
 
 // 单个流程阶段的徽标
 function Stage({ label, detail, ms, accent }: { label: string; detail: string; ms?: number; accent?: string }) {
@@ -21,10 +21,143 @@ function scoreColor(score: number): string {
   return '#f85149'
 }
 
+// ── 诊断面板组件 ──────────────────────────────────────────────
+
+function DiagPanel({ diag }: { diag: DiagnoseResult }) {
+  const maxMs = Math.max(...diag.stages.map(s => s.elapsed_ms), 1)
+  const verdictColor = diag.verdict.includes('✓') ? '#3fb950'
+    : diag.verdict.includes('△') ? '#d29922' : '#f85149'
+
+  return (
+    <div style={{ background: '#fff', border: '2px solid #fa8c16', borderRadius: 12, padding: 20, marginBottom: 24 }}>
+      {/* 标题行 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <span style={{ fontSize: 16, fontWeight: 700 }}>🔬 检索诊断</span>
+        <span style={{
+          padding: '2px 12px', borderRadius: 12, fontSize: 13, fontWeight: 600,
+          background: verdictColor + '18', color: verdictColor,
+        }}>{diag.verdict} | rank={diag.final_rank}</span>
+        <span style={{ fontSize: 12, color: '#999' }}>总耗时 {diag.total_ms.toFixed(0)}ms</span>
+      </div>
+
+      {/* ① 漏斗追踪 */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#666', marginBottom: 8 }}>漏斗追踪</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {diag.stages.map((s, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              <span style={{
+                width: 20, height: 20, borderRadius: '50%', display: 'flex',
+                alignItems: 'center', justifyContent: 'center', fontSize: 11,
+                background: s.target_hit ? '#f6ffed' : '#fff2f0',
+                color: s.target_hit ? '#3fb950' : '#f85149',
+                border: `1px solid ${s.target_hit ? '#b7eb8f' : '#ffccc7'}`,
+              }}>{s.target_hit ? '✓' : '✗'}</span>
+              <span style={{ width: 100, color: '#666' }}>{s.name}</span>
+              <span style={{ color: s.target_hit ? '#333' : '#ccc' }}>
+                {s.target_hit ? `rank=${s.target_rank}` : 'MISS'}
+                {s.target_score > 0 && ` (${s.target_score.toFixed(3)})`}
+              </span>
+              {/* 路径级详情 */}
+              {Object.keys(s.path_hits).length > 0 && (
+                <span style={{ fontSize: 11, color: '#4493f8' }}>
+                  {Object.entries(s.path_hits).map(([k, v]) => `${k}@${v.rank}`).join(' ')}
+                </span>
+              )}
+              {/* 额外信息 */}
+              {s.extra && Object.keys(s.extra).length > 0 && (
+                <span style={{ fontSize: 11, color: '#999' }}>
+                  {s.extra.vote_count !== undefined && `votes=${s.extra.vote_count} `}
+                  {s.extra.mode && `mode=${s.extra.mode} `}
+                  {s.extra.target_source && `${s.extra.target_source} `}
+                  {s.extra.expand_added !== undefined && `+${s.extra.expand_added} `}
+                  {s.extra.graph_rescue !== undefined && `rescue=${s.extra.graph_rescue}`}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ② 耗时分布 */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#666', marginBottom: 8 }}>耗时分布</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {diag.stages.map((s, i) => {
+            const pct = diag.total_ms > 0 ? (s.elapsed_ms / diag.total_ms * 100) : 0
+            const barW = Math.max((s.elapsed_ms / maxMs) * 100, 2)
+            const isBottleneck = s.elapsed_ms === maxMs
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                <span style={{ width: 100, color: '#666', textAlign: 'right' }}>{s.name}</span>
+                <div style={{ flex: 1, height: 16, background: '#f5f5f5', borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{
+                    width: `${barW}%`, height: '100%', borderRadius: 4,
+                    background: isBottleneck ? '#fa8c16' : '#91caff',
+                  }} />
+                </div>
+                <span style={{ width: 80, color: isBottleneck ? '#fa8c16' : '#999', fontWeight: isBottleneck ? 600 : 400 }}>
+                  {s.elapsed_ms.toFixed(0)}ms ({pct.toFixed(0)}%)
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ③ 内容质量 */}
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#666', marginBottom: 8 }}>内容质量</div>
+        <ContentQuality cq={diag.content_quality} />
+      </div>
+    </div>
+  )
+}
+
+function ContentQuality({ cq }: { cq: Record<string, any> }) {
+  if (!cq || cq.error) {
+    return <div style={{ fontSize: 12, color: '#f85149' }}>⚠ {cq?.error || '无数据'}</div>
+  }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 12 }}>
+      <div style={{ padding: '6px 12px', background: '#f6f6f6', borderRadius: 6 }}>
+        目标 chunks: <b>{cq.target_chunk_count ?? '?'}</b>
+      </div>
+      {cq.chunk_token_sizes && (
+        <div style={{ padding: '6px 12px', background: '#f6f6f6', borderRadius: 6 }}>
+          词数: <b>{cq.chunk_token_sizes.join(', ')}</b>
+        </div>
+      )}
+      {cq.overview_languages && (
+        <div style={{
+          padding: '6px 12px', borderRadius: 6,
+          background: cq.overview_lang_mismatch ? '#fff2f0' : '#f6ffed',
+          color: cq.overview_lang_mismatch ? '#f85149' : '#3fb950',
+        }}>
+          overview语言: {cq.overview_languages.join(',')} {cq.overview_lang_mismatch ? '⚠不匹配' : '✓'}
+        </div>
+      )}
+      {cq.overview_faithfulness_issues?.length > 0 && (
+        <div style={{ padding: '6px 12px', background: '#fff7e6', borderRadius: 6, color: '#d48806' }}>
+          忠实度问题: {cq.overview_faithfulness_issues.length} 处
+        </div>
+      )}
+      {cq.cross_chunk_dependency && (
+        <div style={{ padding: '6px 12px', background: '#fff7e6', borderRadius: 6, color: '#d48806' }}>
+          跨chunk依赖: YES
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SearchPage() {
   const [query, setQuery] = useState('')
+  const [gold, setGold] = useState('')
   const [loading, setLoading] = useState(false)
+  const [diagLoading, setDiagLoading] = useState(false)
   const [result, setResult] = useState<SearchResult | null>(null)
+  const [diag, setDiag] = useState<DiagnoseResult | null>(null)
   const [error, setError] = useState('')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
 
@@ -43,6 +176,22 @@ export function SearchPage() {
     }
   }
 
+  const doDiagnose = async () => {
+    if (!query.trim() || !gold.trim()) return
+    setDiagLoading(true)
+    setError('')
+    setDiag(null)
+    try {
+      const goldFiles = gold.split(',').map(s => s.trim()).filter(Boolean)
+      const r = await api.diagnose(query.trim(), goldFiles)
+      setDiag(r)
+    } catch (e: any) {
+      setError(e.message || '诊断失败')
+    } finally {
+      setDiagLoading(false)
+    }
+  }
+
   const toggle = (i: number) => {
     setExpanded(prev => {
       const next = new Set(prev)
@@ -56,7 +205,7 @@ export function SearchPage() {
   return (
     <div style={{ flex: 1, overflow: 'auto', padding: 24, background: '#fafafa' }}>
       {/* 搜索框 */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
@@ -78,7 +227,34 @@ export function SearchPage() {
         >{loading ? '检索中…' : '搜索'}</button>
       </div>
 
+      {/* 诊断输入行 */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+        <input
+          value={gold}
+          onChange={e => setGold(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && doDiagnose()}
+          placeholder="目标文档文件名（逗号分隔，如 2023-11-15.md, coral-paper.md）"
+          style={{
+            flex: 1, padding: '8px 14px', fontSize: 13, borderRadius: 8,
+            border: '1px dashed #d9d9d9', outline: 'none', background: '#fffbe6',
+          }}
+        />
+        <button
+          onClick={doDiagnose}
+          disabled={diagLoading || !query.trim() || !gold.trim()}
+          style={{
+            padding: '8px 20px', borderRadius: 8, border: 'none',
+            background: '#fa8c16', color: '#fff', fontSize: 13,
+            cursor: diagLoading ? 'wait' : 'pointer',
+            opacity: (diagLoading || !query.trim() || !gold.trim()) ? 0.5 : 1,
+          }}
+        >{diagLoading ? '诊断中…' : '🔬 诊断'}</button>
+      </div>
+
       {error && <div style={{ color: '#f85149', marginBottom: 16 }}>错误：{error}</div>}
+
+      {/* ═══ 诊断结果面板 ═══ */}
+      {diag && <DiagPanel diag={diag} />}
 
       {d && (
         <>

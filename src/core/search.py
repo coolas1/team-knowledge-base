@@ -201,6 +201,69 @@ async def reranker_filter(
     return survivors
 
 
+async def _multi_query_rerank(
+    main_query: str,
+    sub_queries: list[str],
+    candidates: list[dict],
+    threshold: float = RERANKER_THRESHOLD,
+    top_n: int = RERANKER_TOP_N,
+) -> list[dict]:
+    """多约束查询 Rerank：对主查询 + 每个 sub_query 分别打分，取最高分。
+
+    解决单查询 rerank 时，只满足部分约束的文档被低分淘汰的问题。
+    """
+    if not candidates:
+        return []
+
+    # 准备打分文本：多约束 rerank 直接用 chunk_text（原始内容），
+    # 避免中文 overview 与英文 sub_query 的语言鸿沟导致低分。
+    texts = [c.get("chunk_text", "") for c in candidates]
+
+    reranker = get_reranker()
+
+    # 对主查询 + 每个 sub_query 分别打分
+    all_queries = [main_query] + sub_queries[:4]
+    # 每个 candidate 的最高分
+    max_scores = [0.0] * len(candidates)
+
+    for q in all_queries:
+        scores = await reranker.areank(q, texts)
+        for i, s in enumerate(scores):
+            if s > max_scores[i]:
+                max_scores[i] = s
+
+    # 全零分 → Reranker 降级
+    if all(s == 0.0 for s in max_scores):
+        logger.info("Multi-query Reranker 返回全零分，降级使用 RRF 分数排序")
+        scored = [(c, c.get("rrf_score", 0.0)) for c in candidates]
+        scored.sort(key=lambda x: -x[1])
+        survivors = []
+        for c, s in scored:
+            c["reranker_score"] = s
+            survivors.append(c)
+            if len(survivors) >= top_n:
+                break
+        return survivors
+
+    # 按最高分降序
+    scored = list(zip(candidates, max_scores))
+    scored.sort(key=lambda x: -x[1])
+
+    survivors = []
+    for c, s in scored:
+        if s >= threshold:
+            c["reranker_score"] = s
+            survivors.append(c)
+        if len(survivors) >= top_n:
+            break
+
+    logger.info(
+        f"Multi-query Rerank: {len(all_queries)} 个查询 × {len(candidates)} 候选 → "
+        f"{len(survivors)} 存活"
+    )
+    return survivors
+
+
 # ── 图谱增强 ──────────────────────────────────────────────────
 
 async def graph_enrich(
@@ -498,10 +561,12 @@ async def full_search(
     rewritten = rewrite_result.rewritten_query
     keywords = rewrite_result.keywords
     expanded = rewrite_result.expanded_queries
+    sub_queries = rewrite_result.sub_queries
 
     logger.info(
         f"搜索 Query 改写: '{query[:50]}' → '{rewritten[:50]}' | "
         f"keywords={keywords[:3]} | expanded={len(expanded)} | "
+        f"sub_queries={len(sub_queries)} | "
         f"耗时 {rewrite_ms:.0f}ms"
     )
 
@@ -511,6 +576,7 @@ async def full_search(
     # L1a: 主查询向量检索
     # L1b: 扩展查询向量检索
     # L1c: BM25 关键词检索
+    # L1d: 子问题分解检索（多约束查询时，每个 sub_query 独立检索）
     vector_main_task = vector_search(session, rewritten, VECTOR_TOP_K)
     bm25_results = bm25_index.search(" ".join(keywords) if keywords else query, BM25_TOP_K)
 
@@ -519,11 +585,21 @@ async def full_search(
     for eq in expanded[:2]:
         vector_tasks.append(vector_search(session, eq, EXPANDED_TOP_K))
 
+    # 子问题分解：每个 sub_query 独立检索，作为单独的 ranked list 参与 RRF
+    sub_query_tasks = []
+    for sq in sub_queries[:4]:
+        sub_query_tasks.append(vector_search(session, sq, EXPANDED_TOP_K))
+
     try:
         vector_results = await asyncio.gather(*vector_tasks, return_exceptions=True)
+        sub_results = (
+            await asyncio.gather(*sub_query_tasks, return_exceptions=True)
+            if sub_query_tasks else []
+        )
     except Exception as e:
         logger.error(f"多路向量检索失败: {e}", exc_info=True)
         vector_results = [[]]
+        sub_results = []
 
     # 处理结果
     main_candidates = vector_results[0] if not isinstance(vector_results[0], Exception) else []
@@ -532,10 +608,17 @@ async def full_search(
         if not isinstance(vr, Exception):
             expanded_candidates.extend(vr)
 
+    # 子问题检索结果（每个 sub_query 的结果作为独立 ranked list）
+    sub_candidates_lists: list[list[dict]] = []
+    for sr in sub_results:
+        if not isinstance(sr, Exception) and sr:
+            sub_candidates_lists.append(sr)
+
     recall_ms = (time.monotonic() - recall_t0) * 1000
     logger.info(
         f"搜索 L1 多路召回: 向量主={len(main_candidates)} | "
         f"向量扩展={len(expanded_candidates)} | BM25={len(bm25_results)} | "
+        f"子问题={len(sub_candidates_lists)}路 | "
         f"耗时 {recall_ms:.0f}ms"
     )
 
@@ -545,6 +628,9 @@ async def full_search(
         ranked_lists.append(expanded_candidates)
     if bm25_results:
         ranked_lists.append(bm25_results)
+    # 子问题检索结果：每个 sub_query 作为独立投票参与 RRF
+    for sub_list in sub_candidates_lists:
+        ranked_lists.append(sub_list)
 
     merged = rrf_fuse(ranked_lists)
     logger.info(f"搜索 RRF 融合: {len(merged)} 候选（去重后）")
@@ -571,7 +657,13 @@ async def full_search(
     reranker_t0 = time.monotonic()
     survivors: list[dict] = []
     try:
-        survivors = await reranker_filter(rewritten, merged, RERANKER_THRESHOLD, RERANKER_TOP_N)
+        if sub_queries:
+            # 多约束查询：对主查询 + 每个 sub_query 分别 rerank，取最高分
+            survivors = await _multi_query_rerank(
+                rewritten, sub_queries, merged, RERANKER_THRESHOLD, RERANKER_TOP_N
+            )
+        else:
+            survivors = await reranker_filter(rewritten, merged, RERANKER_THRESHOLD, RERANKER_TOP_N)
     except Exception as e:
         logger.error(f"搜索 L2 Reranker 失败: {type(e).__name__}: {e}", exc_info=True)
         # 降级：取 RRF 融合前 N 个

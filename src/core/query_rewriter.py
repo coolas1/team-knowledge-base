@@ -5,8 +5,9 @@
 - 指代消解（"那个7月份出问题的系统" → "Agent 系统 7月故障"）
 - 过度指定（query 条件过多导致无法匹配）
 - 词汇鸿沟（用户用词 ≠ 文档用词）
+- 多约束交集（“同时满足 A∩B∩C” → 拆分为独立子问题分别检索）
 
-输出：rewritten_query + keywords + expanded_queries
+输出：rewritten_query + keywords + expanded_queries + sub_queries
 """
 
 from __future__ import annotations
@@ -38,12 +39,15 @@ _REWRITE_PROMPT = """你是一个知识库检索助手。用户将向你提出�
 
 3. **expanded_queries**：生成 1-2 个相关但不同角度的查询，覆盖同一问题的不同表述方式。
 
+4. **sub_queries**：判断查询是否包含多个独立的约束条件或子问题（例如“同时满足 A、B、C”、“比较 X 和 Y”、“找到同时具有属性 P 和 Q 的实体”）。如果是，将其拆分为 2-4 个可独立检索的子查询，每个子查询对应一个约束/条件。如果查询是简单的单一问题，返回空数组 []。
+
 请严格返回 JSON 格式：
 ```json
 {{
   "rewritten_query": "规范化后的查询",
   "keywords": ["关键词1", "关键词2", "关键词3"],
-  "expanded_queries": ["扩展查询1"]
+  "expanded_queries": ["扩展查询1"],
+  "sub_queries": ["子查询1", "子查询2"]
 }}
 ```"""
 
@@ -54,6 +58,7 @@ class RewriteResult:
     rewritten_query: str
     keywords: list[str] = field(default_factory=list)
     expanded_queries: list[str] = field(default_factory=list)
+    sub_queries: list[str] = field(default_factory=list)  # 多约束分解子查询
 
 
 class QueryRewriter:
@@ -155,6 +160,7 @@ class QueryRewriter:
         rewritten = data.get("rewritten_query", original_query)
         keywords = data.get("keywords", [original_query])
         expanded = data.get("expanded_queries", [])
+        sub_queries = data.get("sub_queries", [])
 
         # 确保 rewritten 非空
         if not rewritten or not rewritten.strip():
@@ -164,6 +170,7 @@ class QueryRewriter:
             rewritten_query=rewritten.strip(),
             keywords=[k.strip() for k in keywords if k and k.strip()],
             expanded_queries=[e.strip() for e in expanded if e and e.strip()],
+            sub_queries=[s.strip() for s in sub_queries if s and s.strip()],
         )
 
 

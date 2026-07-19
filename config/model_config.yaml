@@ -6,7 +6,7 @@ embedding:
 
 gatekeeper:
   provider: dashscope          # dashscope | local
-  model: gte-rerank            # DashScope Reranker API
+  model: qwen3-rerank          # DashScope Reranker API（gte-rerank 已于 2026-05-30 下线）
   threshold: 0.01              # reranker 分数阈值
   top_n: 15                    # reranker 后保留 Top-N
 

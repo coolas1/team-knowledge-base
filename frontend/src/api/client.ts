@@ -112,6 +112,27 @@ export interface SearchResult {
   debug: SearchDebug
 }
 
+export interface DiagnoseStage {
+  name: string
+  elapsed_ms: number
+  target_hit: boolean
+  target_rank: number
+  target_score: number
+  total_candidates: number
+  path_hits: Record<string, { rank: number; score: number }>
+  extra: Record<string, any>
+}
+
+export interface DiagnoseResult {
+  query: string
+  gold_filenames: string[]
+  verdict: string
+  final_rank: number
+  total_ms: number
+  stages: DiagnoseStage[]
+  content_quality: Record<string, any>
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, options)
   if (!res.ok) {
@@ -264,6 +285,15 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query }),
+    })
+  },
+
+  // 检索诊断（逐段追踪 + 耗时 + 内容质量）
+  diagnose(query: string, goldFilenames: string[]) {
+    return request<DiagnoseResult>('/search/diagnose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, gold_filenames: goldFilenames }),
     })
   },
 }

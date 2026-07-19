@@ -73,6 +73,11 @@ class SearchRequest(BaseModel):
     query: str
 
 
+class DiagnoseRequest(BaseModel):
+    query: str
+    gold_filenames: list[str] = []
+
+
 # ── 文件端点 ────────────────────────────────────────────────────
 
 
@@ -202,6 +207,40 @@ async def search(
         "related_entities": result.related_entities,
         "related_docs": result.related_docs,
         "debug": result.debug,
+    }
+
+
+@router.post("/search/diagnose")
+async def search_diagnose(
+    body: DiagnoseRequest,
+) -> dict[str, Any]:
+    """检索诊断：逐段追踪目标文档 + 耗时分布 + 内容质量。"""
+    from diag_pipeline import run_diagnosis, DiagReport
+
+    report: DiagReport = await run_diagnosis(body.query, body.gold_filenames)
+
+    # 序列化为 JSON 友好的结构
+    stages = []
+    for s in report.stages:
+        stages.append({
+            "name": s.name,
+            "elapsed_ms": round(s.elapsed_ms, 1),
+            "target_hit": s.target_hit,
+            "target_rank": s.target_rank,
+            "target_score": round(s.target_score, 4),
+            "total_candidates": s.total_candidates,
+            "path_hits": {k: {"rank": v[0], "score": round(v[1], 4)} for k, v in s.path_hits.items()},
+            "extra": s.extra,
+        })
+
+    return {
+        "query": report.query,
+        "gold_filenames": report.gold_filenames,
+        "verdict": report.verdict,
+        "final_rank": report.final_rank,
+        "total_ms": round(report.total_ms, 1),
+        "stages": stages,
+        "content_quality": report.content_quality,
     }
 
 

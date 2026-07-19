@@ -48,9 +48,9 @@ class Reranker:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
 
         if self._provider == "dashscope":
-            # DashScope API 配置
+            # DashScope API 配置（qwen3-rerank 使用 compatible-api 端点）
             self._base_url = self._cfg.get(
-                "base_url", "https://dashscope.aliyuncs.com/api/v1"
+                "base_url", "https://dashscope.aliyuncs.com/compatible-api/v1"
             ).rstrip("/")
             self._api_key = self._cfg.get("api_key", "") or settings.llm_api_key
             logger.info(f"Reranker 初始化: provider=dashscope | model={self._model}")
@@ -90,29 +90,26 @@ class Reranker:
     # ── DashScope Reranker API ───────────────────────────────────
 
     async def _rerank_dashscope(self, query: str, texts: list[str]) -> list[float]:
-        """调用 DashScope gte-rerank API 打分。
+        """调用 DashScope qwen3-rerank API 打分。
 
-        API: POST {base_url}/services/rerank/text-rerank/text-rerank
+        API: POST {base_url}/reranks
+        请求格式（扁平）: {model, query, documents, top_n}
+        响应格式: {results: [{index, relevance_score}], ...}
         """
         t0 = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
-                    f"{self._base_url}/services/rerank/text-rerank/text-rerank",
+                    f"{self._base_url}/reranks",
                     headers={
                         "Authorization": f"Bearer {self._api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
                         "model": self._model,
-                        "input": {
-                            "query": query,
-                            "documents": texts,
-                        },
-                        "parameters": {
-                            "return_documents": False,
-                            "top_n": len(texts),  # 返回所有分数，由上层过滤
-                        },
+                        "query": query,
+                        "documents": texts,
+                        "top_n": len(texts),  # 返回所有分数，由上层过滤
                     },
                 )
                 resp.raise_for_status()
@@ -123,8 +120,8 @@ class Reranker:
                 f"Reranker dashscope 完成: {len(texts)} 文档 | 耗时 {elapsed_ms:.0f}ms"
             )
 
-            # 解析响应：output.results = [{index, relevance_score}]
-            results = data.get("output", {}).get("results", [])
+            # qwen3-rerank 响应: results 在顶层（无 output 包裹）
+            results = data.get("results", [])
             # 按 index 还原到原始顺序
             scores = [0.0] * len(texts)
             for r in results:
