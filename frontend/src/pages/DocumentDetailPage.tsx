@@ -12,6 +12,7 @@ export function DocumentDetailPage() {
   const [editContent, setEditContent] = useState('')
   const [saving, setSaving] = useState(false)
   const [polling, setPolling] = useState(false)
+  const [currentTeamId, setCurrentTeamId] = useState('')
 
   const loadDoc = async () => {
     if (!id) return
@@ -29,7 +30,10 @@ export function DocumentDetailPage() {
     }
   }
 
-  useEffect(() => { loadDoc() }, [id])
+  useEffect(() => {
+    loadDoc()
+    api.getCurrentIdentity().then((identity) => setCurrentTeamId(identity.team_id)).catch(() => {})
+  }, [id])
 
   // 轮询状态更新
   useEffect(() => {
@@ -65,6 +69,7 @@ export function DocumentDetailPage() {
   if (!doc) return <div style={{ padding: 24 }}>加载中...</div>
 
   const isMarkdown = doc.file_type === 'markdown'
+  const canManage = doc.team_id === currentTeamId
 
   return (
     <main style={{ flex: 1, overflow: 'auto', padding: 24 }}>
@@ -73,17 +78,18 @@ export function DocumentDetailPage() {
         <button onClick={() => navigate('/')} style={{ cursor: 'pointer', border: '1px solid #d9d9d9', borderRadius: 4, padding: '4px 12px', background: '#fff' }}>←</button>
         <h2 style={{ margin: 0, flex: 1 }}>{doc.title}</h2>
         <StatusBadge status={doc.status} />
+        {doc.scope === 'public' && <span style={{ fontSize: 12, color: '#1677ff' }}>公共文档 · 所属 {doc.team_id}{canManage ? '' : ' · 只读'}</span>}
         <span style={{ fontSize: 12, color: '#999' }}>{doc.file_type} · {doc.chunk_count} chunks</span>
-        {isMarkdown && !editing && (
+        {canManage && isMarkdown && !editing && (
           <button onClick={() => { setEditing(true); setEditContent(doc.raw_text || '') }}
             style={{ padding: '4px 12px', borderRadius: 4, border: '1px solid #1890ff', color: '#1890ff', background: '#fff', cursor: 'pointer' }}>
             编辑
           </button>
         )}
-        <button onClick={handleDelete}
+        {canManage && <button onClick={handleDelete}
           style={{ padding: '4px 12px', borderRadius: 4, border: '1px solid #ff4d4f', color: '#ff4d4f', background: '#fff', cursor: 'pointer' }}>
           删除
-        </button>
+        </button>}
       </div>
 
       {/* 错误信息 */}

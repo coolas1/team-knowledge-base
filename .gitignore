@@ -11,6 +11,7 @@ wheels/
 
 # Environment variables
 .env
+frontend/.env.local
 
 # Uploaded files
 uploads/
@@ -21,7 +22,11 @@ uploads/
 
 # Node
 node_modules/
+*.tsbuildinfo
 frontend/dist/
 
 # OS
 .DS_Store
+
+# Local backend launcher logs
+.server-*.log

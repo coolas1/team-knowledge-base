@@ -34,7 +34,7 @@ interface Props {
   links: GraphLink[]
   searchQuery: string
   onNodeClick: (node: GraphNode | null) => void
-  selectedNodeName: string | null
+  selectedNodeId: string | null
 }
 
 export function KnowledgeGraph({
@@ -42,7 +42,7 @@ export function KnowledgeGraph({
   links,
   searchQuery,
   onNodeClick,
-  selectedNodeName,
+  selectedNodeId,
 }: Props) {
   const graphRef = useRef<any>(null)
 
@@ -50,7 +50,7 @@ export function KnowledgeGraph({
   const fgNodes: FgNode[] = useMemo(
     () =>
       nodes.map((n) => ({
-        id: n.name,
+        id: n.id || n.name,
         name: n.name,
         type: n.type,
         description: n.description,
@@ -81,16 +81,16 @@ export function KnowledgeGraph({
 
   // 选中节点的邻居集合
   const neighborSet = useMemo(() => {
-    if (!selectedNodeName) return null
-    const set = new Set<string>([selectedNodeName])
+    if (!selectedNodeId) return null
+    const set = new Set<string>([selectedNodeId])
     for (const l of fgLinks) {
       const src = typeof l.source === 'string' ? l.source : (l.source as FgNode).id
       const tgt = typeof l.target === 'string' ? l.target : (l.target as FgNode).id
-      if (src === selectedNodeName) set.add(tgt)
-      if (tgt === selectedNodeName) set.add(src)
+      if (src === selectedNodeId) set.add(tgt)
+      if (tgt === selectedNodeId) set.add(src)
     }
     return set
-  }, [selectedNodeName, fgLinks])
+  }, [selectedNodeId, fgLinks])
 
   const nodeColor = useCallback(
     (node: any) => {
@@ -118,7 +118,7 @@ export function KnowledgeGraph({
       ctx.fill()
 
       // 选中节点的边框
-      if (n.id === selectedNodeName) {
+      if (n.id === selectedNodeId) {
         ctx.strokeStyle = '#333'
         ctx.lineWidth = 2 / globalScale
         ctx.stroke()
@@ -134,7 +134,7 @@ export function KnowledgeGraph({
           : '#333'
       ctx.fillText(label, node.x + r + 2 / globalScale, node.y - fontSize / 2)
     },
-    [nodeColor, selectedNodeName, matchSet]
+    [nodeColor, selectedNodeId, matchSet]
   )
 
   const linkColor = useCallback(
@@ -157,13 +157,15 @@ export function KnowledgeGraph({
       if (!node) return
       const n = node as FgNode
       onNodeClick({
+        id: n.id,
         name: n.name,
+        namespace: nodes.find((item) => item.id === n.id)?.namespace || '',
         type: n.type,
         description: n.description,
         sources: n.sources,
       })
     },
-    [onNodeClick]
+    [onNodeClick, nodes]
   )
 
   return (

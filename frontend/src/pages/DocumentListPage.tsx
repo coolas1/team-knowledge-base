@@ -12,14 +12,18 @@ export function DocumentListPage() {
   const [page, setPage] = useState(1)
   const [fileType, setFileType] = useState('')
   const [status, setStatus] = useState('')
+  const [error, setError] = useState('')
 
   const loadDocs = async () => {
     try {
+      setError('')
       const data = await api.listDocuments({ page, page_size: 20, file_type: fileType || undefined, status: status || undefined })
       setDocs(data.items)
       setTotal(data.total)
     } catch (err: any) {
-      console.error(err)
+      setDocs([])
+      setTotal(0)
+      setError(err.message || '加载文档失败')
     }
   }
 
@@ -52,6 +56,12 @@ export function DocumentListPage() {
           共 {total} 个文件
         </div>
 
+        {error && (
+          <div style={{ padding: 10, marginBottom: 10, borderRadius: 6, background: '#fff2f0', color: '#cf1322', fontSize: 12 }}>
+            {error}
+          </div>
+        )}
+
         {docs.map((doc) => (
           <Link
             key={doc.id}
@@ -71,7 +81,9 @@ export function DocumentListPage() {
               {doc.title}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 12, color: '#999' }}>{doc.file_type}</span>
+              <span style={{ fontSize: 12, color: doc.scope === 'public' ? '#1677ff' : '#999' }}>
+                {doc.file_type} · {doc.scope === 'public' ? `公共 · 所属 ${doc.team_id}` : '团队'}
+              </span>
               <StatusBadge status={doc.status} />
             </div>
           </Link>

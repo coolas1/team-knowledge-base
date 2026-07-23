@@ -11,7 +11,7 @@ gatekeeper:
   top_n: 10                  # reranker 后保留 Top-N
 
 llm:
-  provider: openai             # 使用 OpenAI 兼容接口
-  model: qwen-turbo            # DashScope Qwen-Turbo
-  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-  api_key: ""                  # 从 .env 的 LLM_API_KEY 读取
+  provider: ollama             # 完全本地运行，使用 GPU Ollama
+  model: qwen3:14b             # 适配本机 24GB 显存
+  base_url: http://localhost:11434
+  api_key: ""

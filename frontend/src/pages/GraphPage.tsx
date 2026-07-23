@@ -9,15 +9,17 @@ export function GraphPage() {
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     api
       .getFullGraph()
       .then((data) => {
+        setError('')
         setNodes(data.nodes)
         setLinks(data.links)
       })
-      .catch((err) => alert('加载图谱失败: ' + err.message))
+      .catch((err) => setError(err.message || '加载图谱失败'))
       .finally(() => setLoading(false))
   }, [])
 
@@ -67,13 +69,17 @@ export function GraphPage() {
           >
             加载图谱中...
           </div>
+        ) : error ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#cf1322' }}>
+            加载图谱失败：{error}
+          </div>
         ) : (
           <KnowledgeGraph
             nodes={nodes}
             links={links}
             searchQuery={searchQuery}
             onNodeClick={handleNodeClick}
-            selectedNodeName={selectedNode?.name ?? null}
+            selectedNodeId={selectedNode?.id ?? null}
           />
         )}
       </div>
@@ -82,6 +88,7 @@ export function GraphPage() {
       {selectedNode && (
         <EntityDetailPanel
           node={selectedNode}
+          nodes={nodes}
           links={links}
           onClose={() => setSelectedNode(null)}
         />

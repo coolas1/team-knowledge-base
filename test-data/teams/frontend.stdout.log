@@ -1,0 +1,33 @@
+
+  [32m[1mVITE[22m v6.4.3[39m  [2mready in [0m[1m177[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5173[22m/[39m
+[2m[32m  ➜[39m[22m[2m  press [22m[1mh + enter[22m[2m to show help[22m
+[2m15:55:31[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Layout.tsx, /src/pages/GraphPage.tsx, /src/pages/DocumentListPage.tsx, /src/pages/DocumentDetailPage.tsx[22m
+[2m15:55:32[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Layout.tsx[22m
+[2m15:55:32[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m15:55:33[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/pages/AdminPage.tsx[22m
+[2m16:00:38[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Layout.tsx[22m
+[2m16:06:21[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Layout.tsx, /src/pages/GraphPage.tsx, /src/pages/DocumentListPage.tsx, /src/pages/DocumentDetailPage.tsx, /src/pages/AdminPage.tsx[22m
+[2m16:06:22[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Layout.tsx, /src/pages/GraphPage.tsx, /src/pages/DocumentListPage.tsx, /src/pages/DocumentDetailPage.tsx, /src/pages/AdminPage.tsx[22m
+[2m16:06:22[22m [36m[1m[vite][22m[39m [32m.env.local changed, restarting server...[39m
+[2m16:06:22[22m [36m[1m[vite][22m[39m server restarted.
+[2m16:06:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Layout.tsx, /src/pages/GraphPage.tsx, /src/pages/DocumentListPage.tsx, /src/pages/AdminPage.tsx, /src/pages/DocumentDetailPage.tsx[22m
+[2m16:06:24[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Layout.tsx[22m
+[2m16:06:25[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Layout.tsx[22m
+[2m16:06:26[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m16:06:38[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m16:20:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/GraphPage.tsx, /src/pages/DocumentListPage.tsx, /src/pages/AdminPage.tsx, /src/pages/DocumentDetailPage.tsx, /src/components/Layout.tsx, /src/pages/LoginPage.tsx[22m
+[2m16:20:21[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Layout.tsx[22m
+[2m16:20:22[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/DocumentListPage.tsx[22m
+[2m16:20:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/KnowledgeGraph.tsx[22m
+[2m16:20:24[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/GraphPage.tsx[22m
+[2m16:20:25[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/EntityDetailPanel.tsx[22m
+[2m16:22:25[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/DocumentDetailPage.tsx[22m
+[2m16:37:54[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m16:38:38[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m17:07:08[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Layout.tsx[22m
+[2m17:17:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/GraphPage.tsx, /src/pages/DocumentListPage.tsx, /src/pages/AdminPage.tsx, /src/pages/DocumentDetailPage.tsx, /src/components/Layout.tsx, /src/pages/LoginPage.tsx[22m
+[2m17:17:11[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m17:22:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/GraphPage.tsx, /src/pages/DocumentListPage.tsx, /src/pages/AdminPage.tsx, /src/pages/DocumentDetailPage.tsx, /src/components/Layout.tsx, /src/pages/LoginPage.tsx[22m
+[2m17:22:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m

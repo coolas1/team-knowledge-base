@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "E:\agentmemory\team-knowledge-base\.venv\Scripts\uvicorn.exe\__main__.py", line 4, in <module>
+  File "E:\agentmemory\team-knowledge-base\.venv\Lib\site-packages\uvicorn\__init__.py", line 1, in <module>
+    from uvicorn.config import Config
+  File "E:\agentmemory\team-knowledge-base\.venv\Lib\site-packages\uvicorn\config.py", line 10, in <module>
+    import ssl
+  File "C:\Users\Administrator\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\ssl.py", line 100, in <module>
+    import _ssl             # if we can't import it, let the error propagate
+    ^^^^^^^^^^^
+ImportError: DLL load failed while importing _ssl: 应用程序控制策略已阻止此文件。

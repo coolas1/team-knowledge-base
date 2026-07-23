@@ -26,6 +26,26 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
 
+    # Tenant/auth compatibility. Production multi-team deployments should map
+    # trusted bearer tokens to teams via API_TOKENS_JSON and keep the untrusted
+    # header disabled.
+    default_team_id: str = "default"
+    allow_anonymous_default_team: bool = True
+    allow_untrusted_team_header: bool = False
+    api_tokens_json: str = "{}"
+    # A server-owned token selecting the trusted team identity for MCP calls.
+    # Agents cannot override its team_id through tool arguments.
+    mcp_api_token: str = ""
+    # Requests without a bearer token may identify an administrator-approved
+    # Ollama username only when their source IP belongs to one of these CIDRs.
+    trusted_ollama_networks: str = "127.0.0.1/32,::1/128"
+
+    # Durable workers
+    operation_poll_interval: float = 1.0
+    operation_lease_seconds: int = 300
+    projector_poll_interval: float = 1.0
+    worker_max_attempts: int = 3
+
     @property
     def postgres_dsn(self) -> str:
         return (

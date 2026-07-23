@@ -1,0 +1,5 @@
+INFO:     Started server process [6140]
+INFO:     Waiting for application startup.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+Loading weights:   0%|          | 0/393 [00:00<?, ?it/s]Loading weights:  95%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨„| 375/393 [00:00<00:00, 3717.95it/s]Loading weights: 100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 393/393 [00:00<00:00, 3466.14it/s]

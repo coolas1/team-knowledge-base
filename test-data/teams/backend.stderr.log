@@ -1,0 +1,72 @@
+INFO:     Started server process [35132]
+INFO:     Waiting for application startup.
+[07/21/26 17:43:13] INFO     Initializing PostgreSQL and migrations  main.py:25
+[07/21/26 17:43:34] INFO     Initializing Neo4j                      main.py:27
+[07/21/26 17:43:55] INFO     Received notification from DBMS      result.py:345
+                             server: <GqlStatusObject                          
+                             gql_status='00NA0',                               
+                             status_description="note: successful              
+                             completion - index or constraint                  
+                             already exists. The command 'CREATE               
+                             CONSTRAINT tkb_document_team_id IF                
+                             NOT EXISTS FOR (e:Document) REQUIRE               
+                             (e.team_id, e.doc_id) IS UNIQUE' has              
+                             no effect. The index or constraint                
+                             specified by 'CONSTRAINT                          
+                             tkb_document_team_id FOR                          
+                             (e:Document) REQUIRE (e.team_id,                  
+                             e.doc_id) IS UNIQUE' already                      
+                             exists.", position=None,                          
+                             raw_classification='SCHEMA',                      
+                             classification=<NotificationClassifi              
+                             cation.SCHEMA: 'SCHEMA'>,                         
+                             raw_severity='INFORMATION',                       
+                             severity=<NotificationSeverity.INFOR              
+                             MATION: 'INFORMATION'>,                           
+                             diagnostic_record={'_classification'              
+                             : 'SCHEMA', '_severity':                          
+                             'INFORMATION', 'OPERATION': '',                   
+                             'OPERATION_CODE': '0',                            
+                             'CURRENT_SCHEMA': '/'}> for query:                
+                             '\n                CREATE CONSTRAINT              
+                             tkb_document_team_id IF NOT EXISTS\n              
+                             FOR (d:Document) REQUIRE (d.team_id,              
+                             d.doc_id) IS UNIQUE\n                             
+                             '                                                 
+                    INFO     Received notification from DBMS      result.py:345
+                             server: <GqlStatusObject                          
+                             gql_status='00NA0',                               
+                             status_description="note: successful              
+                             completion - index or constraint                  
+                             already exists. The command 'CREATE               
+                             CONSTRAINT tkb_entity_team_name IF                
+                             NOT EXISTS FOR (e:Entity) REQUIRE                 
+                             (e.team_id, e.name) IS UNIQUE' has                
+                             no effect. The index or constraint                
+                             specified by 'CONSTRAINT                          
+                             tkb_entity_team_name FOR (e:Entity)               
+                             REQUIRE (e.team_id, e.name) IS                    
+                             UNIQUE' already exists.",                         
+                             position=None,                                    
+                             raw_classification='SCHEMA',                      
+                             classification=<NotificationClassifi              
+                             cation.SCHEMA: 'SCHEMA'>,                         
+                             raw_severity='INFORMATION',                       
+                             severity=<NotificationSeverity.INFOR              
+                             MATION: 'INFORMATION'>,                           
+                             diagnostic_record={'_classification'              
+                             : 'SCHEMA', '_severity':                          
+                             'INFORMATION', 'OPERATION': '',                   
+                             'OPERATION_CODE': '0',                            
+                             'CURRENT_SCHEMA': '/'}> for query:                
+                             '\n                CREATE CONSTRAINT              
+                             tkb_entity_team_name IF NOT EXISTS\n              
+                             FOR (e:Entity) REQUIRE (e.team_id,                
+                             e.name) IS UNIQUE\n                '              
+                    INFO     Starting knowledge-base workers         main.py:30
+                    INFO     StreamableHTTP      streamable_http_manager.py:131
+                             session manager                                   
+                             started                                           
+                    INFO     TKB startup complete                    main.py:40
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)

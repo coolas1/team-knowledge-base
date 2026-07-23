@@ -220,6 +220,9 @@ class Analyzer:
                     "prompt": prompt,
                     "stream": False,
                     "format": "json",
+                    # Qwen3 默认把推理过程放进独立 thinking 字段，
+                    # 关闭思考模式以确保结构化 JSON 返回在 response 中。
+                    "think": False,
                 },
             )
             resp.raise_for_status()

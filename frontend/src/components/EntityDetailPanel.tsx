@@ -3,16 +3,17 @@ import type { GraphNode, GraphLink } from '../api/client'
 
 interface Props {
   node: GraphNode
+  nodes: GraphNode[]
   links: GraphLink[]
   onClose: () => void
 }
 
-export function EntityDetailPanel({ node, links, onClose }: Props) {
+export function EntityDetailPanel({ node, nodes, links, onClose }: Props) {
   const navigate = useNavigate()
 
   // 找出与该节点相关的关系（作为 source 或 target）
   const relatedLinks = links.filter(
-    (l) => l.source === node.name || l.target === node.name
+    (l) => l.source === node.id || l.target === node.id
   )
 
   return (
@@ -39,7 +40,7 @@ export function EntityDetailPanel({ node, links, onClose }: Props) {
         <div>
           <div style={{ fontWeight: 700, fontSize: 16 }}>{node.name}</div>
           <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
-            {node.type}
+            {node.type} · {node.namespace === 'public' ? '公共知识' : '团队知识'}
           </div>
         </div>
         <button
@@ -99,8 +100,9 @@ export function EntityDetailPanel({ node, links, onClose }: Props) {
             关联关系
           </div>
           {relatedLinks.map((l, i) => {
-            const isSource = l.source === node.name
-            const otherName = isSource ? l.target : l.source
+            const isSource = l.source === node.id
+            const otherId = isSource ? l.target : l.source
+            const otherName = nodes.find((candidate) => candidate.id === otherId)?.name || otherId
             const arrow = isSource ? '→' : '←'
             return (
               <div

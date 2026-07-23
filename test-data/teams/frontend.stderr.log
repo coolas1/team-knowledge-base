@@ -1,0 +1,81 @@
+[2m15:55:32[22m [31m[1m[vite][22m[39m [31mInternal server error: Failed to resolve import "./pages/AdminPage" from "src/App.tsx". Does the file exist?[39m
+  Plugin: [35mvite:import-analysis[39m
+  File: [36mE:/agentmemory/team-knowledge-base/frontend/src/App.tsx[39m:6:26
+[33m  20 |  import { DocumentDetailPage } from "./pages/DocumentDetailPage";
+  21 |  import { GraphPage } from "./pages/GraphPage";
+  22 |  import { AdminPage } from "./pages/AdminPage";
+     |                             ^
+  23 |  export default function App() {
+  24 |    return /* @__PURE__ */ jsxDEV(Routes, { children: /* @__PURE__ */ jsxDEV(Route, { element: /* @__PURE__ */ jsxDEV(Layout, {}, void 0, false, {[39m
+      at TransformPluginContext._formatLog (file:///E:/agentmemory/team-knowledge-base/frontend/node_modules/vite/dist/node/chunks/dep-Dm0c1Wj2.js:42658:41)
+      at TransformPluginContext.error (file:///E:/agentmemory/team-knowledge-base/frontend/node_modules/vite/dist/node/chunks/dep-Dm0c1Wj2.js:42655:16)
+      at normalizeUrl (file:///E:/agentmemory/team-knowledge-base/frontend/node_modules/vite/dist/node/chunks/dep-Dm0c1Wj2.js:40634:23)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async file:///E:/agentmemory/team-knowledge-base/frontend/node_modules/vite/dist/node/chunks/dep-Dm0c1Wj2.js:40753:37
+      at async Promise.all (index 8)
+      at async TransformPluginContext.transform (file:///E:/agentmemory/team-knowledge-base/frontend/node_modules/vite/dist/node/chunks/dep-Dm0c1Wj2.js:40680:7)
+      at async EnvironmentPluginContainer.transform (file:///E:/agentmemory/team-knowledge-base/frontend/node_modules/vite/dist/node/chunks/dep-Dm0c1Wj2.js:42453:18)
+      at async loadAndTransform (file:///E:/agentmemory/team-knowledge-base/frontend/node_modules/vite/dist/node/chunks/dep-Dm0c1Wj2.js:35845:27)
+      at async viteTransformMiddleware (file:///E:/agentmemory/team-knowledge-base/frontend/node_modules/vite/dist/node/chunks/dep-Dm0c1Wj2.js:37369:24)
+[2m16:06:21[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to load url /src/auth/teamAuth.ts (resolved id: E:/agentmemory/team-knowledge-base/frontend/src/auth/teamAuth.ts) in E:/agentmemory/team-knowledge-base/frontend/src/components/Layout.tsx. Does the file exist?
+[2m16:06:22[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to load url /src/auth/teamAuth.ts (resolved id: E:/agentmemory/team-knowledge-base/frontend/src/auth/teamAuth.ts) in E:/agentmemory/team-knowledge-base/frontend/src/components/Layout.tsx. Does the file exist?
+[2m16:24:10[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /documents?page=1&page_size=20[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:24:10[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:24:10[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /documents?page=1&page_size=20[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:24:12[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:24:12[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:24:15[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:24:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:24:23[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:25:43[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:25:43[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:25:51[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:25:51[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:25:52[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:25:53[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:44:24[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:44:24[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:44:38[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:44:39[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:45:56[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[2m16:45:57[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /auth/me[39m
+Error: connect ECONNREFUSED 127.0.0.1:8001
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)

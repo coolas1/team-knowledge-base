@@ -1,34 +1,35 @@
+import asyncio
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.db.config import settings
-from src.db.models import Base
 
 engine = create_async_engine(settings.postgres_dsn, echo=False)
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 async def init_db() -> None:
-    """启动时调用：创建扩展 + 建表 + 创建特殊索引。"""
+    """启动时创建扩展并执行版本化 Alembic migrations。"""
     async with engine.begin() as conn:
-        # 1. 创建 pgvector + pg_trgm 扩展
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
 
-        # 2. 建表（幂等）
-        await conn.run_sync(Base.metadata.create_all)
-
-        # 3. 创建特殊索引（SQLAlchemy DDL 不支持这些 PostgreSQL 特有索引）
-        # title 模糊搜索索引
-        await conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS idx_documents_title_trgm "
-            "ON documents USING gin(title gin_trgm_ops)"
-        ))
-        # HNSW 向量索引
-        await conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS idx_chunks_embedding "
-            "ON chunks USING hnsw (embedding vector_cosine_ops)"
-        ))
+    root = Path(__file__).resolve().parents[2]
+    alembic_cfg = Config(str(root / "alembic.ini"))
+    expected_head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
+    async with engine.connect() as conn:
+        has_version_table = await conn.scalar(text("SELECT to_regclass('public.alembic_version')"))
+        current_revision = None
+        if has_version_table:
+            current_revision = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+    if expected_head and current_revision == expected_head:
+        return
+    await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
 
 
 async def get_session() -> AsyncSession:  # type: ignore[misc]

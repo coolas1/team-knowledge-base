@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.reranker import get_reranker
-from src.db.models import Chunk
+from src.db.models import Chunk, Document
 from src.db.neo4j_client import Neo4jClient, GraphQueryResult
 from src.pipeline.embedder import embedder
 
@@ -25,6 +25,8 @@ class SearchChunk:
     chunk_text: str
     reranker_score: float
     vector_score: float
+    owner_team_id: str
+    scope: str
 
 
 @dataclass
@@ -46,6 +48,10 @@ async def vector_search(
     session: AsyncSession,
     query: str,
     top_k: int = DEFAULT_TOP_K,
+    team_id: str = "default",
+    team_ids: list[str] | tuple[str, ...] | None = None,
+    tags: list[str] | None = None,
+    scopes: list[str] | None = None,
 ) -> list[dict]:
     """第一层：向量粗筛。
 
@@ -56,6 +62,8 @@ async def vector_search(
     """
     query_embedding = await embedder.embed_text(query)
 
+    visible_team_ids = tuple(dict.fromkeys(team_ids or (team_id,)))
+
     stmt = (
         select(
             Chunk.id.label("chunk_id"),
@@ -64,11 +72,22 @@ async def vector_search(
             Chunk.overview,
             Chunk.doc_uri,
             Chunk.doc_id,
+            Document.team_id.label("owner_team_id"),
+            Document.scope,
             (1 - Chunk.embedding.cosine_distance(query_embedding)).label("score"),
+        )
+        .join(Document, Document.id == Chunk.doc_id)
+        .where(
+            Chunk.team_id == Document.team_id,
+            or_(Document.team_id.in_(visible_team_ids), Document.scope == "public"),
         )
         .order_by(Chunk.embedding.cosine_distance(query_embedding))
         .limit(top_k)
     )
+    if scopes:
+        stmt = stmt.where(Document.scope.in_(scopes))
+    if tags:
+        stmt = stmt.where(or_(*(Document.tags.contains([tag]) for tag in tags)))
 
     result = await session.execute(stmt)
     rows = result.all()
@@ -82,6 +101,8 @@ async def vector_search(
             "overview": row.overview,
             "doc_uri": row.doc_uri,
             "doc_id": str(row.doc_id),
+            "owner_team_id": row.owner_team_id,
+            "scope": row.scope,
         }
         for row in rows
     ]
@@ -133,6 +154,7 @@ async def graph_enrich(
     neo4j: Neo4jClient,
     survivors: list[dict],
     hops: int = 2,
+    team_id: str = "default",
 ) -> list[GraphQueryResult]:
     """从存活 chunks 的 (doc_id, chunk_index) 查找关联实体。
 
@@ -145,14 +167,16 @@ async def graph_enrich(
         doc_id = c["doc_id"]
         chunk_index = c.get("chunk_index", 0)
 
-        entities = await neo4j.find_entities_by_source(doc_id, chunk_index)
+        graph_team_id = "public" if c.get("scope") == "public" else c.get("owner_team_id", team_id)
+        entities = await neo4j.find_entities_by_source(doc_id, chunk_index, graph_team_id)
         for entity in entities:
-            if entity.name not in all_entities:
-                details = await neo4j.get_entity_details(entity.name)
+            entity_key = f"{graph_team_id}:{entity.name}"
+            if entity_key not in all_entities:
+                details = await neo4j.get_entity_details(entity.name, graph_team_id)
                 if details:
-                    all_entities[entity.name] = details
+                    all_entities[entity_key] = details
                 else:
-                    all_entities[entity.name] = entity
+                    all_entities[entity_key] = entity
 
     return list(all_entities.values())
 
@@ -164,6 +188,11 @@ async def full_search(
     top_k: int = DEFAULT_TOP_K,
     threshold: float = RERANKER_THRESHOLD,
     top_n: int = RERANKER_TOP_N,
+    team_id: str = "default",
+    team_ids: list[str] | tuple[str, ...] | None = None,
+    tags: list[str] | None = None,
+    scopes: list[str] | None = None,
+    include_graph: bool = True,
 ) -> SearchResult:
     """完整检索流程：向量粗筛 → Reranker 守门 → 图谱增强 + 关联文档。
 
@@ -171,13 +200,25 @@ async def full_search(
         SearchResult(chunks, related_entities, related_docs) — 无 answer，由 Agent 合成。
     """
     # 第一层：向量粗筛
-    candidates = await vector_search(session, query, top_k)
+    candidates = await vector_search(
+        session,
+        query,
+        top_k,
+        team_id=team_id,
+        team_ids=team_ids,
+        tags=tags,
+        scopes=scopes,
+    )
 
     # 第二层：Reranker 守门
     survivors = reranker_filter(query, candidates, threshold, top_n)
 
     # 第三层：图谱增强
-    related_entities = await graph_enrich(neo4j, survivors)
+    related_entities = (
+        await graph_enrich(neo4j, survivors, team_id=team_id)
+        if include_graph
+        else []
+    )
 
     # 构造结果
     chunks = [
@@ -191,6 +232,8 @@ async def full_search(
             chunk_text=c["chunk_text"],
             reranker_score=c["reranker_score"],
             vector_score=c["score"],
+            owner_team_id=c["owner_team_id"],
+            scope=c["scope"],
         )
         for c in survivors
     ]
@@ -205,8 +248,14 @@ async def full_search(
     ]
 
     # 查询关联文档
-    doc_ids = list({c["doc_id"] for c in survivors})
-    related_docs = await neo4j.get_related_docs(doc_ids)
+    related_docs = []
+    if include_graph:
+        for graph_team_id in {"public" if c["scope"] == "public" else c["owner_team_id"] for c in survivors}:
+            doc_ids = [
+                c["doc_id"] for c in survivors
+                if ("public" if c["scope"] == "public" else c["owner_team_id"]) == graph_team_id
+            ]
+            related_docs.extend(await neo4j.get_related_docs(doc_ids, graph_team_id))
 
     return SearchResult(
         chunks=chunks,

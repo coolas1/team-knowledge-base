@@ -7,10 +7,17 @@ import logging
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
-from src.db.models import Chunk, Document
-from src.db.neo4j_client import Neo4jClient, EntityData, EntitySource, RelationData
+from src.db.models import (
+    Chunk,
+    Document,
+    DocumentRelation,
+    ExtractedEntity,
+    ExtractedRelation,
+    OutboxEvent,
+)
+from src.db.neo4j_client import Neo4jClient
 from src.db.postgres import async_session_factory
 from src.pipeline.analyzer import analyzer, ChunkAnalysisResult
 from src.pipeline.chunker import chunk_text
@@ -32,6 +39,7 @@ class Pipeline:
         file_path: Path,
         title: str,
         file_type: str,
+        team_id: str = "default",
     ) -> None:
         """处理新上传的文件：提取 → 分块 → 分析 → embedding → 写入。
 
@@ -43,7 +51,11 @@ class Pipeline:
             content_hash = hashlib.sha256(raw_bytes).hexdigest()
 
             # 检查幂等性
-            doc = await session.get(Document, doc_id)
+            doc = await session.scalar(
+                select(Document).where(Document.id == doc_id, Document.team_id == team_id)
+            )
+            if not doc:
+                raise ValueError(f"文档不存在或不属于 team {team_id}: {doc_id}")
             if doc and doc.content_hash == content_hash and doc.status == "indexed":
                 logger.info(f"文档 {doc_id} 内容未变，跳过 pipeline")
                 return
@@ -51,7 +63,7 @@ class Pipeline:
             # 2. 标记为 processing
             await session.execute(
                 update(Document)
-                .where(Document.id == doc_id)
+                .where(Document.id == doc_id, Document.team_id == team_id)
                 .values(status="processing", error_msg=None)
             )
             await session.commit()
@@ -93,12 +105,15 @@ class Pipeline:
 
                 # 8. 写入 Postgres（overview 使用 doc_analysis.overview）
                 await session.execute(
-                    Chunk.__table__.delete().where(Chunk.doc_id == doc_id)  # type: ignore[union-attr]
+                    Chunk.__table__.delete().where(  # type: ignore[union-attr]
+                        Chunk.doc_id == doc_id, Chunk.team_id == team_id
+                    )
                 )
 
                 doc_uri = f"{doc_id}:{title}"
                 for chunk, embedding in zip(chunks, embeddings):
                     db_chunk = Chunk(
+                        team_id=team_id,
                         doc_id=doc_id,
                         chunk_index=chunk.index,
                         chunk_text=chunk.text,
@@ -109,47 +124,59 @@ class Pipeline:
                     )
                     session.add(db_chunk)
 
+                document_version = doc.version or 1
+                await self._persist_knowledge_facts(
+                    session,
+                    team_id=team_id,
+                    doc_id=doc_id,
+                    document_version=document_version,
+                    chunk_analyses=chunk_analyses,
+                    file_relations=doc_analysis.file_relations,
+                )
+
                 await session.execute(
                     update(Document)
-                    .where(Document.id == doc_id)
+                    .where(Document.id == doc_id, Document.team_id == team_id)
                     .values(
                         raw_text=raw_text,
                         overview=doc_analysis.overview,
                         content_hash=content_hash,
                         status="indexed",
+                        graph_status="pending",
                         error_msg=None,
                     )
                 )
-                await session.commit()
-                logger.info(f"文档 {doc_id} Postgres 写入完成")
-
-                # 9. 写入 Neo4j（三层图谱）
-                await self._write_graph(
-                    doc_id=str(doc_id),
-                    title=title,
-                    file_type=file_type,
-                    overview=doc_analysis.overview,
-                    chunk_analyses=chunk_analyses,
-                    file_relations=doc_analysis.file_relations,
-                    session=session,
+                session.add(
+                    OutboxEvent(
+                        team_id=team_id,
+                        aggregate_type="document",
+                        aggregate_id=str(doc_id),
+                        aggregate_version=document_version,
+                        event_type="document_graph_upsert_requested",
+                        payload={"document_id": str(doc_id)},
+                    )
                 )
-                logger.info(f"文档 {doc_id} Pipeline 完成 ✓")
+                await session.commit()
+                logger.info(f"文档 {doc_id} Postgres + Outbox 写入完成")
 
             except Exception as e:
                 logger.error(f"文档 {doc_id} Pipeline 失败: {e}", exc_info=True)
                 await session.execute(
                     update(Document)
-                    .where(Document.id == doc_id)
+                    .where(Document.id == doc_id, Document.team_id == team_id)
                     .values(status="failed", error_msg=str(e))
                 )
                 await session.commit()
+                raise
 
     async def reindex_document(
-        self, doc_id: UUID, new_text: str
+        self, doc_id: UUID, new_text: str, team_id: str = "default"
     ) -> None:
         """编辑后重新索引：跳过文本提取，直接从文本开始分析。"""
         async with async_session_factory() as session:
-            doc = await session.get(Document, doc_id)
+            doc = await session.scalar(
+                select(Document).where(Document.id == doc_id, Document.team_id == team_id)
+            )
             if not doc:
                 raise ValueError(f"文档不存在: {doc_id}")
 
@@ -158,7 +185,7 @@ class Pipeline:
 
             await session.execute(
                 update(Document)
-                .where(Document.id == doc_id)
+                .where(Document.id == doc_id, Document.team_id == team_id)
                 .values(status="processing", error_msg=None)
             )
             await session.commit()
@@ -178,7 +205,9 @@ class Pipeline:
                     embeddings = []
 
                 await session.execute(
-                    Chunk.__table__.delete().where(Chunk.doc_id == doc_id)  # type: ignore[union-attr]
+                    Chunk.__table__.delete().where(  # type: ignore[union-attr]
+                        Chunk.doc_id == doc_id, Chunk.team_id == team_id
+                    )
                 )
 
                 # 更新 overview
@@ -187,6 +216,7 @@ class Pipeline:
                 doc_uri = f"{doc_id}:{title}"
                 for chunk, embedding in zip(chunks, embeddings):
                     db_chunk = Chunk(
+                        team_id=team_id,
                         doc_id=doc_id,
                         chunk_index=chunk.index,
                         chunk_text=chunk.text,
@@ -197,136 +227,130 @@ class Pipeline:
                     )
                     session.add(db_chunk)
 
+                document_version = (doc.version or 1) + 1
+                await self._persist_knowledge_facts(
+                    session,
+                    team_id=team_id,
+                    doc_id=doc_id,
+                    document_version=document_version,
+                    chunk_analyses=chunk_analyses,
+                    file_relations=doc_analysis.file_relations,
+                )
+
                 await session.execute(
                     update(Document)
-                    .where(Document.id == doc_id)
+                    .where(Document.id == doc_id, Document.team_id == team_id)
                     .values(
                         raw_text=new_text,
                         overview=doc_analysis.overview,
                         content_hash=content_hash,
                         status="indexed",
+                        version=document_version,
+                        graph_status="pending",
                         error_msg=None,
                     )
                 )
-                await session.commit()
-
-                # 更新 Neo4j（先清理旧图谱数据，防止过时实体残留）
-                await self._neo4j.delete_document_graph(str(doc_id))
-                await self._neo4j.upsert_document_node(
-                    doc_id=str(doc_id),
-                    title=title,
-                    file_type=doc.file_type,
-                    overview=doc_analysis.overview,
+                session.add(
+                    OutboxEvent(
+                        team_id=team_id,
+                        aggregate_type="document",
+                        aggregate_id=str(doc_id),
+                        aggregate_version=document_version,
+                        event_type="document_graph_upsert_requested",
+                        payload={"document_id": str(doc_id)},
+                    )
                 )
-                # 写入 chunk 级实体和关系
-                for ca in chunk_analyses:
-                    source = EntitySource(
-                        doc_id=str(doc_id), chunk_index=ca.chunk_index, doc_title=title
-                    )
-                    for entity in ca.entities:
-                        await self._neo4j.upsert_entity(
-                            entity=EntityData(name=entity.name, entity_type=entity.type, description=entity.description),
-                            source=source,
-                        )
-                    for relation in ca.relations:
-                        await self._neo4j.upsert_relation(
-                            relation=RelationData(from_name=relation.from_name, to_name=relation.to_name, relation_type=relation.type, description=relation.description),
-                            source=source,
-                        )
-
-                # L3: file_relations → Document↔Document 边
-                if doc_analysis.file_relations:
-                    await self._write_file_relations(
-                        str(doc_id), doc_analysis.file_relations, session
-                    )
-
-                logger.info(f"文档 {doc_id} re-index 完成 ✓")
+                await session.commit()
+                logger.info(f"文档 {doc_id} re-index + Outbox 完成 ✓")
 
             except Exception as e:
                 logger.error(f"文档 {doc_id} re-index 失败: {e}", exc_info=True)
                 await session.execute(
                     update(Document)
-                    .where(Document.id == doc_id)
+                    .where(Document.id == doc_id, Document.team_id == team_id)
                     .values(status="failed", error_msg=str(e))
                 )
                 await session.commit()
+                raise
 
-    async def _write_graph(
+    async def _persist_knowledge_facts(
         self,
-        doc_id: str,
-        title: str,
-        file_type: str,
-        overview: str,
+        session,
+        team_id: str,
+        doc_id: UUID,
+        document_version: int,
         chunk_analyses: list[ChunkAnalysisResult],
         file_relations: list,
-        session,
     ) -> None:
-        """三层图谱写入：L1 chunk 级 + L2 文档内聚合 + L3 跨文档关联。"""
-        # Document 节点（仅元数据）
-        await self._neo4j.upsert_document_node(
-            doc_id=doc_id, title=title, file_type=file_type, overview=overview
+        """将 LLM 抽取结果持久化为 PostgreSQL 权威知识事实。"""
+        await session.execute(
+            delete(ExtractedEntity).where(
+                ExtractedEntity.doc_id == doc_id, ExtractedEntity.team_id == team_id
+            )
+        )
+        await session.execute(
+            delete(ExtractedRelation).where(
+                ExtractedRelation.doc_id == doc_id, ExtractedRelation.team_id == team_id
+            )
+        )
+        await session.execute(
+            delete(DocumentRelation).where(
+                DocumentRelation.source_doc_id == doc_id,
+                DocumentRelation.team_id == team_id,
+            )
         )
 
-        # L1+L2: 逐 chunk 写入实体和关系（MERGE 自然聚合）
         for ca in chunk_analyses:
-            source = EntitySource(
-                doc_id=doc_id, chunk_index=ca.chunk_index, doc_title=title
-            )
-
-            # 实体节点
             for entity in ca.entities:
-                await self._neo4j.upsert_entity(
-                    entity=EntityData(
+                if not entity.name:
+                    continue
+                session.add(
+                    ExtractedEntity(
+                        team_id=team_id,
+                        doc_id=doc_id,
+                        document_version=document_version,
+                        chunk_index=ca.chunk_index,
                         name=entity.name,
-                        entity_type=entity.type,
+                        normalized_name=entity.name.strip().casefold(),
+                        entity_type=entity.type or "Unknown",
                         description=entity.description,
-                    ),
-                    source=source,
+                    )
                 )
-
-            # 关系边
             for relation in ca.relations:
-                await self._neo4j.upsert_relation(
-                    relation=RelationData(
+                if not relation.from_name or not relation.to_name:
+                    continue
+                session.add(
+                    ExtractedRelation(
+                        team_id=team_id,
+                        doc_id=doc_id,
+                        document_version=document_version,
+                        chunk_index=ca.chunk_index,
                         from_name=relation.from_name,
                         to_name=relation.to_name,
-                        relation_type=relation.type,
+                        relation_type=relation.type or "RELATED_TO",
                         description=relation.description,
-                    ),
-                    source=source,
+                    )
                 )
 
-        # L3: file_relations → Document↔Document 边
-        if file_relations:
-            await self._write_file_relations(doc_id, file_relations, session)
-
-    async def _write_file_relations(
-        self, doc_id: str, file_relations: list, session
-    ) -> None:
-        """解析 file_relations 并写入 Document↔Document 边。"""
         for fr in file_relations:
             target_title = fr.related_doc_title
             if not target_title:
                 continue
-
-            # 通过 Postgres 按 title 查找目标文档
             result = await session.execute(
-                select(Document.id).where(Document.title == target_title).limit(1)
+                select(Document.id).where(
+                    Document.team_id == team_id, Document.title == target_title
+                ).limit(1)
             )
             target_doc = result.scalar_one_or_none()
-
             if target_doc is None:
-                logger.info(
-                    f"file_relation 目标不存在: {target_title}, 跳过"
-                )
+                logger.info(f"file_relation 目标不存在: {target_title}, 跳过")
                 continue
-
-            await self._neo4j.create_doc_relation(
-                source_doc_id=doc_id,
-                target_doc_id=str(target_doc),
-                relation_type=fr.type,
-                reason=fr.reason,
-            )
-            logger.info(
-                f"file_relation: {doc_id} → {target_doc} ({fr.type})"
+            session.add(
+                DocumentRelation(
+                    team_id=team_id,
+                    source_doc_id=doc_id,
+                    target_doc_id=target_doc,
+                    relation_type=fr.type,
+                    reason=fr.reason,
+                )
             )
