@@ -100,4 +100,20 @@ export const api = {
   getFullGraph() {
     return request<GraphData>('/graph/full')
   },
+
+  // 搜索
+  search(query: string, topK = 20) {
+    return request<{ chunks: any[]; related_entities: any[]; related_docs: any[] }>(
+      '/search',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, top_k: topK }) },
+    )
+  },
+
+  // Agent
+  ask(query: string) {
+    return request<{ query: string; answer: string; sources: any }>(
+      '/agent/ask',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) },
+    )
+  },
 }

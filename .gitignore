@@ -21,7 +21,9 @@ uploads/
 
 # Node
 node_modules/
-frontend/dist/
+src/frontend/webapp/client/dist/
+src/frontend/webapp/client/node_modules/
+src/frontend/webapp/client/tsconfig.tsbuildinfo
 
 # OS
 .DS_Store
