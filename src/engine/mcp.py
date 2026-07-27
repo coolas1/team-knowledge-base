@@ -91,11 +91,37 @@ async def upload_document(file_name: str, content: str) -> dict[str, Any]:
     }
 
 
+async def list_documents(
+    page: int = 1, page_size: int = 20,
+    file_type: str | None = None, status: str | None = None,
+) -> dict[str, Any]:
+    """文件列表（分页，按 type/status 筛选）。"""
+    return await _get_kb().list_documents(page, page_size, file_type, status)
+
+
+async def remove_document(doc_id: str) -> dict[str, Any]:
+    """删除文件（级联删 chunks + Neo4j + 本地文件）。"""
+    await _get_kb().remove(doc_id)
+    return {"removed": doc_id}
+
+
+async def get_full_graph() -> dict[str, Any]:
+    """返回全图数据（所有实体 + 关系）。"""
+    graph = await _get_kb().get_graph(None)
+    return {"nodes": [{"name": n.name, "type": n.type, "description": n.description,
+                        "sources": n.sources} for n in graph.nodes],
+            "links": [{"source": l.source, "target": l.target, "type": l.type,
+                        "description": l.description} for l in graph.links]}
+
+
 # Register the async functions as MCP tools (FastMCP introspects signatures).
 mcp.tool()(search)
 mcp.tool()(get_document)
 mcp.tool()(query_graph)
 mcp.tool()(upload_document)
+mcp.tool()(list_documents)
+mcp.tool()(remove_document)
+mcp.tool()(get_full_graph)
 
 
 def build_app():

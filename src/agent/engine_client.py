@@ -51,6 +51,16 @@ class InProcessEngineClient:
     async def get_neighbors(self, entity: str) -> dict:
         return _jsonable(await self._kb.get_neighbors(entity))
 
+    async def list_documents(
+        self, page: int = 1, page_size: int = 20,
+        file_type: str | None = None, status: str | None = None,
+    ) -> dict:
+        return await self._kb.list_documents(page, page_size, file_type, status)
+
+    async def remove(self, doc_id: str) -> dict:
+        await self._kb.remove(doc_id)
+        return {"removed": doc_id}
+
 
 class McpEngineClient:
     """EngineClient backed by an engine MCP server (streamable HTTP)."""
@@ -79,7 +89,21 @@ class McpEngineClient:
         return await self._call("get_document", {"doc_id": doc_id})
 
     async def get_graph(self, entity: str | None = None) -> dict:
-        return await self._call("query_graph", {"entity_name": entity or "", "include_neighbors": False})
+        if entity is None:
+            return await self._call("get_full_graph", {})
+        return await self._call("query_graph", {"entity_name": entity, "include_neighbors": False})
 
     async def get_neighbors(self, entity: str) -> dict:
         return await self._call("query_graph", {"entity_name": entity, "include_neighbors": True, "hops": 2})
+
+    async def list_documents(
+        self, page: int = 1, page_size: int = 20,
+        file_type: str | None = None, status: str | None = None,
+    ) -> dict:
+        return await self._call("list_documents", {
+            "page": page, "page_size": page_size,
+            "file_type": file_type, "status": status,
+        })
+
+    async def remove(self, doc_id: str) -> dict:
+        return await self._call("remove_document", {"doc_id": doc_id})

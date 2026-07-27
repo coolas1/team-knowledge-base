@@ -62,3 +62,51 @@ async def test_mcp_get_graph_calls_query_graph(monkeypatch):
     monkeypatch.setattr(client, "_call", fake_call)
     out = await client.get_graph("Acme")
     assert out["name"] == "Acme"
+
+
+async def test_inprocess_list_documents():
+    kb = FakeKnowledgeBase()
+    client = InProcessEngineClient(kb)
+    out = await client.list_documents()
+    assert {"total", "page", "page_size", "items"} <= set(out)
+
+
+async def test_inprocess_remove_returns_removed():
+    kb = FakeKnowledgeBase()
+    client = InProcessEngineClient(kb)
+    out = await client.remove("abc")
+    assert out == {"removed": "abc"}
+
+
+async def test_mcp_list_documents_calls_tool(monkeypatch):
+    client = McpEngineClient("http://x/mcp")
+    seen = []
+    async def fake_call(tool, args):
+        seen.append((tool, args))
+        return {"total": 0, "page": 1, "page_size": 20, "items": []}
+    monkeypatch.setattr(client, "_call", fake_call)
+    out = await client.list_documents(page=2, page_size=5, file_type="markdown")
+    assert out["total"] == 0
+    assert seen == [("list_documents", {"page": 2, "page_size": 5, "file_type": "markdown", "status": None})]
+
+
+async def test_mcp_remove_calls_tool(monkeypatch):
+    client = McpEngineClient("http://x/mcp")
+    async def fake_call(tool, args):
+        assert tool == "remove_document"
+        assert args == {"doc_id": "abc"}
+        return {"removed": "abc"}
+    monkeypatch.setattr(client, "_call", fake_call)
+    out = await client.remove("abc")
+    assert out == {"removed": "abc"}
+
+
+async def test_mcp_get_graph_none_calls_full_graph(monkeypatch):
+    client = McpEngineClient("http://x/mcp")
+    seen = []
+    async def fake_call(tool, args):
+        seen.append(tool)
+        return {"nodes": [], "links": []}
+    monkeypatch.setattr(client, "_call", fake_call)
+    await client.get_graph(None)
+    assert seen == ["get_full_graph"]

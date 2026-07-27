@@ -41,3 +41,19 @@ async def test_upload_document(fake_kb):
     res = await mcp_mod.upload_document("x.md", "hello world")
     assert res["title"] == "x.md"
     assert list(fake_kb.raw.values())[0] == b"hello world"
+
+
+async def test_list_documents_tool(fake_kb):
+    res = await mcp_mod.list_documents()
+    assert {"total", "items"} <= set(res)
+
+
+async def test_remove_document_tool(fake_kb):
+    res = await mcp_mod.remove_document("abc")
+    assert res == {"removed": "abc"}
+
+
+async def test_get_full_graph_tool(fake_kb):
+    fake_kb.graph = __import__("src.engine.interface", fromlist=["GraphData"]).GraphData()
+    res = await mcp_mod.get_full_graph()
+    assert res == {"nodes": [], "links": []}
