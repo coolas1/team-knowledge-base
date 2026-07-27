@@ -44,6 +44,12 @@ export function Layout() {
         >
           知识图谱
         </Link>
+        <Link to="/search" style={{ fontSize: 14, textDecoration: 'none', color: '#666', padding: '4px 8px' }}>
+          搜索
+        </Link>
+        <Link to="/ask" style={{ fontSize: 14, textDecoration: 'none', color: '#666', padding: '4px 8px' }}>
+          提问
+        </Link>
         <div style={{ flex: 1 }} />
         <button
           onClick={() => fileRef.current?.click()}
