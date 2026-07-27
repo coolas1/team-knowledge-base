@@ -2,7 +2,7 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from src.pipeline.extractors.base import BaseExtractor
+from src.engine.components.extractors.base import BaseExtractor
 
 
 class PDFExtractor(BaseExtractor):

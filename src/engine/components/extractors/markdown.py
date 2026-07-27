@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.pipeline.extractors.base import BaseExtractor
+from src.engine.components.extractors.base import BaseExtractor
 
 
 class MarkdownExtractor(BaseExtractor):

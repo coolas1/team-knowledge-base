@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from src.pipeline.extractors.base import BaseExtractor
-from src.pipeline.extractors.docx import DocxExtractor
-from src.pipeline.extractors.image import ImageExtractor
-from src.pipeline.extractors.markdown import MarkdownExtractor
-from src.pipeline.extractors.pdf import PDFExtractor
-from src.pipeline.extractors.pptx import PPTXExtractor
+from src.engine.components.extractors.base import BaseExtractor
+from src.engine.components.extractors.docx import DocxExtractor
+from src.engine.components.extractors.image import ImageExtractor
+from src.engine.components.extractors.markdown import MarkdownExtractor
+from src.engine.components.extractors.pdf import PDFExtractor
+from src.engine.components.extractors.pptx import PPTXExtractor
 
 
 class ExtractorRegistry:

@@ -4,7 +4,7 @@ from PIL import Image
 
 import pytesseract
 
-from src.pipeline.extractors.base import BaseExtractor
+from src.engine.components.extractors.base import BaseExtractor
 
 
 class ImageExtractor(BaseExtractor):
