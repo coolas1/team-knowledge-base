@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from src.db.config import settings
+from config.settings import settings
 
 
 class Embedder:
