@@ -10,11 +10,12 @@ from pathlib import Path
 import httpx
 import yaml
 
-from src.db.config import settings
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-_ENTITY_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "config" / "entity_schema.yaml"
+_DEFAULT_SCHEMA_PATH = Path("config/engine/graphrag/entity_schema.yaml")
+_DEFAULT_MODEL_CONFIG_PATH = Path("config/engine/graphrag/model_config.yaml")
 
 
 @dataclass
@@ -55,10 +56,10 @@ class AnalysisResult:
     file_relations: list[FileRelation] = field(default_factory=list)
 
 
-def _load_entity_schema() -> dict:
+def _load_entity_schema(path: Path) -> dict:
     """加载 entity_schema.yaml。"""
-    if _ENTITY_SCHEMA_PATH.exists():
-        with open(_ENTITY_SCHEMA_PATH, encoding="utf-8") as f:
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     return {}
 
@@ -119,17 +120,20 @@ def _build_prompt(text: str, title: str, schema: dict) -> str:
 class Analyzer:
     """LLM 分析器，支持 Ollama 和 OpenAI 兼容 API。"""
 
-    def __init__(self) -> None:
-        schema = _load_entity_schema()
-        self._schema = schema
-        # 从 model_config.yaml 读取 LLM 配置
-        self._config = self._load_model_config()
+    def __init__(
+        self,
+        schema_path: Path | None = None,
+        model_config_path: Path | None = None,
+    ) -> None:
+        self._schema_path = schema_path or _DEFAULT_SCHEMA_PATH
+        self._model_config_path = model_config_path or _DEFAULT_MODEL_CONFIG_PATH
+        self._schema = _load_entity_schema(self._schema_path)
+        self._config = self._load_model_config(self._model_config_path)
 
     @staticmethod
-    def _load_model_config() -> dict:
-        config_path = Path(__file__).resolve().parents[2] / "config" / "model_config.yaml"
-        if config_path.exists():
-            with open(config_path, encoding="utf-8") as f:
+    def _load_model_config(path: Path) -> dict:
+        if path.exists():
+            with open(path, encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
                 return config.get("llm", {})
         return {}
