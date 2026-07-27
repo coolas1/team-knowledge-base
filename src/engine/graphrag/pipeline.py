@@ -9,13 +9,13 @@ from uuid import UUID
 
 from sqlalchemy import select, update
 
-from src.db.models import Chunk, Document
-from src.db.neo4j_client import Neo4jClient, EntityData, EntitySource, RelationData
-from src.db.postgres import async_session_factory
-from src.pipeline.analyzer import analyzer, ChunkAnalysisResult
-from src.pipeline.chunker import chunk_text
-from src.pipeline.embedder import embedder
-from src.pipeline.extractors.registry import registry
+from src.engine.components.store.models import Chunk, Document
+from src.engine.components.store.neo4j import Neo4jClient, EntityData, EntitySource, RelationData
+from src.engine.components.store.postgres import async_session_factory
+from src.engine.components.analyzer import Analyzer, ChunkAnalysisResult
+from src.engine.components.chunker import chunk_text
+from src.engine.components.embedder import embedder
+from src.engine.components.extractors.registry import registry
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,13 @@ logger = logging.getLogger(__name__)
 class Pipeline:
     """文件入库 Pipeline 编排器。"""
 
-    def __init__(self, neo4j: Neo4jClient) -> None:
+    def __init__(
+        self,
+        neo4j: Neo4jClient,
+        analyzer: Analyzer | None = None,
+    ) -> None:
         self._neo4j = neo4j
+        self._analyzer = analyzer or Analyzer()
 
     async def process_file(
         self,
@@ -66,7 +71,7 @@ class Pipeline:
                 logger.info(f"文档 {doc_id} 分块完成: {len(chunks)} chunks")
 
                 # 5. 文档级 overview + file_relations
-                doc_analysis = await analyzer.analyze_overview(raw_text, title)
+                doc_analysis = await self._analyzer.analyze_overview(raw_text, title)
                 logger.info(
                     f"文档 {doc_id} overview 生成完成, "
                     f"{len(doc_analysis.file_relations)} file_relations"
@@ -75,7 +80,7 @@ class Pipeline:
                 # 6. 逐 Chunk LLM 分析
                 chunk_analyses: list[ChunkAnalysisResult] = []
                 for chunk in chunks:
-                    ca = await analyzer.analyze_chunk(
+                    ca = await self._analyzer.analyze_chunk(
                         chunk.text, title, chunk.index
                     )
                     chunk_analyses.append(ca)
@@ -168,7 +173,7 @@ class Pipeline:
                 chunks = chunk_text(new_text)
                 chunk_analyses: list[ChunkAnalysisResult] = []
                 for chunk in chunks:
-                    ca = await analyzer.analyze_chunk(chunk.text, title, chunk.index)
+                    ca = await self._analyzer.analyze_chunk(chunk.text, title, chunk.index)
                     chunk_analyses.append(ca)
 
                 if chunks:
@@ -182,7 +187,7 @@ class Pipeline:
                 )
 
                 # 更新 overview
-                doc_analysis = await analyzer.analyze_overview(new_text, title)
+                doc_analysis = await self._analyzer.analyze_overview(new_text, title)
 
                 doc_uri = f"{doc_id}:{title}"
                 for chunk, embedding in zip(chunks, embeddings):
