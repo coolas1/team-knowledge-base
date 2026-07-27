@@ -1,0 +1,11 @@
+engine:
+  impl: graphrag
+  config: config/engine/graphrag
+agent:
+  harness: codex
+  skills: [search_and_answer, ingest_and_summarize]
+  memory: { impl: null }
+frontend:
+  impl: webapp
+webapp:
+  engine_access: inprocess
