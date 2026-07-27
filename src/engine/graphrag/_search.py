@@ -7,10 +7,10 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.reranker import get_reranker
-from src.db.models import Chunk
-from src.db.neo4j_client import Neo4jClient, GraphQueryResult
-from src.pipeline.embedder import embedder
+from src.engine.components.reranker import get_reranker
+from src.engine.components.store.models import Chunk
+from src.engine.components.store.neo4j import Neo4jClient, GraphQueryResult
+from src.engine.components.embedder import embedder
 
 # 默认参数
 DEFAULT_TOP_K = 20
