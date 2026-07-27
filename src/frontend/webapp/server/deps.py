@@ -6,15 +6,18 @@ by the app lifespan.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from src.agent.codex.plugin import build_plugin
 from src.agent.engine_client import InProcessEngineClient, McpEngineClient
-from src.agent.interface import AgentPlugin, EngineClient
+from src.agent.interface import AgentPlugin, EngineClient, LlmClient
 from src.engine.components.store.postgres import init_db
 from src.engine.config import EngineConfig, build_engine
 from config.schema import AppConfig, load_config
 
 _engine_client: EngineClient | None = None
 _plugin: AgentPlugin | None = None
+_llm: LlmClient | None = None
 _app_config: AppConfig | None = None
 
 
@@ -35,6 +38,9 @@ async def startup() -> None:
         kb = build_engine(EngineConfig(impl=cfg.engine.impl, config_dir=cfg.engine.config))
         _engine_client = InProcessEngineClient(kb)
     _plugin = build_plugin(cfg)
+    global _llm
+    from src.agent.llm import build_llm
+    _llm = build_llm(Path(cfg.engine.config) / "model_config.yaml")
 
 
 async def shutdown() -> None:
@@ -49,3 +55,7 @@ def get_engine() -> EngineClient:
 def get_plugin() -> AgentPlugin:
     assert _plugin is not None, "plugin not initialized"
     return _plugin
+
+
+def get_llm() -> LlmClient | None:
+    return _llm

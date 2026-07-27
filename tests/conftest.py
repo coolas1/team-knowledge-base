@@ -73,4 +73,9 @@ class FakeKnowledgeBase:
 
     async def get_document(self, doc_id: str) -> dict | None:
         ref = self.docs.get(doc_id)
-        return None if ref is None else ref.__dict__
+        if ref is None:
+            return None
+        out = ref.__dict__
+        raw = self.raw.get(doc_id, b"")
+        out["raw_text"] = raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else ""
+        return out
