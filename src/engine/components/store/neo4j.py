@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from neo4j import AsyncGraphDatabase
 
-from src.db.config import settings
+from config.settings import settings
 
 
 @dataclass

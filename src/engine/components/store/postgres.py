@@ -1,8 +1,8 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from src.db.config import settings
-from src.db.models import Base
+from config.settings import settings
+from src.engine.components.store.models import Base
 
 engine = create_async_engine(settings.postgres_dsn, echo=False)
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
