@@ -72,6 +72,10 @@ services:
       NEO4J_PASSWORD: ${NEO4J_PASSWORD}
       # Ollama is external; the container reaches it via the host network.
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      # Chat/analysis LLM (was in model_config.yaml; now env-driven).
+      LLM_PROVIDER: ${LLM_PROVIDER:-todo}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
       LLM_API_KEY: ${LLM_API_KEY}
       APP_HOST: 0.0.0.0
       APP_PORT: "8000"

@@ -15,7 +15,6 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SCHEMA_PATH = Path("config/engine/graphrag/entity_schema.yaml")
-_DEFAULT_MODEL_CONFIG_PATH = Path("config/engine/graphrag/model_config.yaml")
 
 
 @dataclass
@@ -120,30 +119,16 @@ def _build_prompt(text: str, title: str, schema: dict) -> str:
 class Analyzer:
     """LLM 分析器，支持 Ollama 和 OpenAI 兼容 API。"""
 
-    def __init__(
-        self,
-        schema_path: Path | None = None,
-        model_config_path: Path | None = None,
-    ) -> None:
+    def __init__(self, schema_path: Path | None = None) -> None:
         self._schema_path = schema_path or _DEFAULT_SCHEMA_PATH
-        self._model_config_path = model_config_path or _DEFAULT_MODEL_CONFIG_PATH
         self._schema = _load_entity_schema(self._schema_path)
-        self._config = self._load_model_config(self._model_config_path)
-
-    @staticmethod
-    def _load_model_config(path: Path) -> dict:
-        if path.exists():
-            with open(path, encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-                return config.get("llm", {})
-        return {}
 
     async def analyze(self, text: str, title: str) -> AnalysisResult:
         """分析文档，返回 overview + 实体 + 关系。
 
         如果 LLM 未配置（provider: todo），返回空结果占位。
         """
-        provider = self._config.get("provider", "todo")
+        provider = settings.llm_provider
         if provider == "todo":
             # LLM 未配置，返回占位结果
             return AnalysisResult(
@@ -170,7 +155,7 @@ class Analyzer:
         self, chunk_text: str, doc_title: str, chunk_index: int
     ) -> ChunkAnalysisResult:
         """对单个 chunk 做实体和关系抽取。"""
-        provider = self._config.get("provider", "todo")
+        provider = settings.llm_provider
         if provider == "todo":
             return ChunkAnalysisResult(chunk_index=chunk_index)
 
@@ -191,7 +176,7 @@ class Analyzer:
         self, text: str, title: str
     ) -> AnalysisResult:
         """文档级分析，仅提取 overview + file_relations。"""
-        provider = self._config.get("provider", "todo")
+        provider = settings.llm_provider
         if provider == "todo":
             return AnalysisResult(
                 overview=f"[待 LLM 生成] {title}",
@@ -213,8 +198,8 @@ class Analyzer:
 
     async def _call_ollama(self, prompt: str) -> str:
         """通过 Ollama /api/generate 调用。"""
-        base_url = self._config.get("base_url", settings.ollama_base_url).rstrip("/")
-        model = self._config.get("model", "llama3")
+        base_url = (settings.llm_base_url or settings.ollama_base_url).rstrip("/")
+        model = settings.llm_model or "llama3"
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(
@@ -232,10 +217,9 @@ class Analyzer:
 
     async def _call_openai_compatible(self, prompt: str) -> str:
         """通过 OpenAI 兼容 API 调用。"""
-        base_url = self._config.get("base_url", "https://api.openai.com/v1").rstrip("/")
-        model = self._config.get("model", "gpt-4o-mini")
-        # 优先从 model_config.yaml 读取，为空则 fallback 到 .env 的 LLM_API_KEY
-        api_key = self._config.get("api_key", "") or settings.llm_api_key
+        base_url = (settings.llm_base_url or "https://api.openai.com/v1").rstrip("/")
+        model = settings.llm_model or "gpt-4o-mini"
+        api_key = settings.llm_api_key
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(

@@ -26,7 +26,7 @@ def test_pipeline_methods_exist():
 @pytest.mark.integration
 async def test_process_file_end_to_end():
     # Requires: docker compose up postgres; Neo4j running; Ollama with
-    # nomic-embed-text; config/engine/graphrag/model_config.yaml LLM provider.
+    # nomic-embed-text; an LLM configured via .env (LLM_PROVIDER etc.).
     from pathlib import Path
     from uuid import uuid4
 

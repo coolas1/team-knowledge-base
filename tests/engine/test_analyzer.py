@@ -40,13 +40,13 @@ def test_parse_chunk_response_bad_json_empty():
     assert ca.relations == []
 
 
-def test_analyzer_with_todo_provider_returns_placeholder(tmp_path):
-    cfg = tmp_path / "model_config.yaml"
-    cfg.write_text("llm:\n  provider: todo\n")
+def test_analyzer_with_todo_provider_returns_placeholder(tmp_path, monkeypatch):
+    from config.settings import settings
+    monkeypatch.setattr(settings, "llm_provider", "todo")
     schema = tmp_path / "entity_schema.yaml"
     schema.write_text("entity_types:\n  core: [Person]\n  open: true\n"
                       "relation_types:\n  core: [WORKS_AT]\n  open: true\n")
-    a = Analyzer(schema_path=schema, model_config_path=cfg)
+    a = Analyzer(schema_path=schema)
 
     async def go():
         return await a.analyze_overview("some text", "title")

@@ -17,6 +17,10 @@ class InfraSettings(BaseSettings):
 
     ollama_base_url: str = "http://localhost:11434"
 
+    # Chat/analysis LLM (OpenAI-compatible or Ollama). provider="todo" disables it.
+    llm_provider: str = "todo"
+    llm_model: str = "gpt-4o-mini"
+    llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
 
     app_host: str = "0.0.0.0"

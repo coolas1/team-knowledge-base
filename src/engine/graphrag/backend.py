@@ -242,9 +242,6 @@ def build(config: EngineConfig) -> GraphRAGBackend:
     from src.engine.components.analyzer import Analyzer
 
     neo4j = Neo4jClient()
-    analyzer = Analyzer(
-        schema_path=config.config_dir / "entity_schema.yaml",
-        model_config_path=config.config_dir / "model_config.yaml",
-    )
+    analyzer = Analyzer(schema_path=config.config_dir / "entity_schema.yaml")
     pipeline = Pipeline(neo4j, analyzer=analyzer)
     return GraphRAGBackend(neo4j, pipeline)

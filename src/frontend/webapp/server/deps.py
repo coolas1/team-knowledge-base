@@ -6,8 +6,6 @@ by the app lifespan.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 from src.agent.codex.plugin import build_plugin
 from src.agent.engine_client import InProcessEngineClient, McpEngineClient
 from src.agent.interface import AgentPlugin, EngineClient, LlmClient
@@ -40,7 +38,7 @@ async def startup() -> None:
     _plugin = build_plugin(cfg)
     global _llm
     from src.agent.llm import build_llm
-    _llm = build_llm(Path(cfg.engine.config) / "model_config.yaml")
+    _llm = build_llm()
 
 
 async def shutdown() -> None:

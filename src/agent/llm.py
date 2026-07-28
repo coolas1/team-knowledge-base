@@ -1,5 +1,5 @@
-"""ConfiguredLlmClient: an LlmClient backed by the OpenAI-compatible LLM
-configured in config/engine/graphrag/model_config.yaml. Used by the webapp BFF
+"""ConfiguredLlmClient: an LlmClient backed by the chat LLM configured via the
+LLM_* env vars in .env (provider/model/base_url/api_key). Used by the webapp BFF
 to synthesize answers/summaries when invoking agent skills in-process.
 
 (The codex harness, when run as its own process, supplies its own LLM or lets
@@ -7,10 +7,7 @@ codex synthesize - skills tolerate ctx.llm=None.)
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import httpx
-import yaml
 
 from config.settings import settings
 from src.agent.interface import LlmClient
@@ -39,15 +36,11 @@ class ConfiguredLlmClient:
             return resp.json()["choices"][0]["message"]["content"]
 
 
-def build_llm(model_config_path: Path) -> ConfiguredLlmClient | None:
-    """Build a ConfiguredLlmClient from model_config.yaml; None if provider is 'todo'."""
-    if not model_config_path.exists():
+def build_llm() -> ConfiguredLlmClient | None:
+    """Build a ConfiguredLlmClient from .env (LLM_*); None if provider is 'todo'."""
+    if settings.llm_provider == "todo":
         return None
-    data = yaml.safe_load(model_config_path.read_text(encoding="utf-8")) or {}
-    llm = data.get("llm", {})
-    if llm.get("provider", "todo") == "todo":
-        return None
-    base_url = llm.get("base_url", "https://api.openai.com/v1")
-    model = llm.get("model", "gpt-4o-mini")
-    api_key = llm.get("api_key", "") or settings.llm_api_key
+    base_url = settings.llm_base_url or "https://api.openai.com/v1"
+    model = settings.llm_model or "gpt-4o-mini"
+    api_key = settings.llm_api_key
     return ConfiguredLlmClient(base_url, model, api_key)
