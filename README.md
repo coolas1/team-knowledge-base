@@ -3,6 +3,18 @@
 Three-module architecture: `src/{engine,agent,frontend}/`. See
 `docs/specs/three-module-refactor-spec.md`.
 
+## Services (Docker)
+
+Backing services for the graphrag engine - Postgres+pgvector and Neo4j - are
+managed by `docker-compose.yml`. Ollama is external (set `OLLAMA_BASE_URL` in
+`.env`; copy `.env.example` to `.env` first). All credentials/ports live in `.env`,
+which both compose and the app read.
+
+    cp .env.example .env            # then edit .env (esp. OLLAMA_BASE_URL)
+    docker compose up -d            # starts kb-postgres (:5433) + kb-neo4j (:7687/:7474)
+    docker compose ps               # wait for both to be "healthy"
+    docker compose down             # stop (add -v to wipe data volumes)
+
 ## Run
 
 Engine MCP server (port 8000, /mcp):
