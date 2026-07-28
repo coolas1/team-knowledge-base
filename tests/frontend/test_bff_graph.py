@@ -25,16 +25,16 @@ def client(monkeypatch):
 
 
 def test_full_graph(client):
-    res = client.get("/graph/full")
+    res = client.get("/api/graph/full")
     assert res.status_code == 200
     assert res.json()["nodes"][0]["name"] == "Acme"
 
 
 def test_entity_graph(client):
-    res = client.get("/graph/entity/Acme")
+    res = client.get("/api/graph/entity/Acme")
     assert res.status_code == 200
 
 
 def test_neighbors(client):
-    res = client.get("/graph/neighbors/Acme?hops=2")
+    res = client.get("/api/graph/neighbors/Acme?hops=2")
     assert res.status_code == 200

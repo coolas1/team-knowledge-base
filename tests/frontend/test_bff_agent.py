@@ -34,7 +34,7 @@ def client(monkeypatch):
 
 
 def test_agent_ask(client):
-    res = client.post("/agent/ask", json={"query": "where is Acme?"})
+    res = client.post("/api/agent/ask", json={"query": "where is Acme?"})
     assert res.status_code == 200
     out = res.json()
     assert out["answer"] == "ANSWER FROM LLM"
@@ -43,7 +43,7 @@ def test_agent_ask(client):
 
 def test_agent_ingest_summarize(client):
     res = client.post(
-        "/agent/ingest-summarize",
+        "/api/agent/ingest-summarize",
         files={"file": ("r.md", b"# T\n\nAcme is in Building A.", "text/markdown")},
     )
     assert res.status_code == 200
@@ -53,7 +53,7 @@ def test_agent_ingest_summarize(client):
 
 
 def test_config_get(client):
-    res = client.get("/config")
+    res = client.get("/api/config")
     assert res.status_code == 200
     cfg = res.json()
     assert cfg["engine"]["impl"] == "graphrag"
@@ -64,7 +64,7 @@ def test_config_put_validates(client, tmp_path, monkeypatch):
     monkeypatch.setattr(
         "src.frontend.webapp.server.routes_config.CONFIG_PATH", tmp_path / "app.yaml"
     )
-    res = client.put("/config", json={
+    res = client.put("/api/config", json={
         "engine": {"impl": "graphrag", "config": "config/engine/graphrag"},
         "agent": {"harness": "codex", "skills": ["search_and_answer"], "memory": {"impl": None}},
         "frontend": {"impl": "webapp"},
@@ -78,5 +78,5 @@ def test_config_put_rejects_invalid(client, tmp_path, monkeypatch):
     monkeypatch.setattr(
         "src.frontend.webapp.server.routes_config.CONFIG_PATH", tmp_path / "app.yaml"
     )
-    res = client.put("/config", json={"webapp": {"engine_access": "bogus"}})
+    res = client.put("/api/config", json={"webapp": {"engine_access": "bogus"}})
     assert res.status_code == 422

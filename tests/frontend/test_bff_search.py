@@ -22,7 +22,7 @@ def client(monkeypatch):
 
 
 def test_search(client):
-    res = client.post("/search", json={"query": "acme"})
+    res = client.post("/api/search", json={"query": "acme"})
     assert res.status_code == 200
     out = res.json()
     assert "chunks" in out and "related_entities" in out and "related_docs" in out

@@ -24,7 +24,7 @@ def client(monkeypatch):
 
 def test_list_documents(client):
     c, _ = client
-    res = c.get("/documents")
+    res = c.get("/api/documents")
     assert res.status_code == 200
     assert "items" in res.json()
 
@@ -32,7 +32,7 @@ def test_list_documents(client):
 def test_upload_document(client):
     c, kb = client
     res = c.post(
-        "/documents/upload",
+        "/api/documents/upload",
         files={"file": ("r.md", b"# T\n\nAcme", "text/markdown")},
     )
     assert res.status_code == 200
@@ -42,7 +42,7 @@ def test_upload_document(client):
 
 def test_delete_document(client):
     c, _ = client
-    res = c.delete("/documents/abc")
+    res = c.delete("/api/documents/abc")
     assert res.status_code == 200
     assert res.json() == {"removed": "abc"}
 
@@ -50,5 +50,5 @@ def test_delete_document(client):
 def test_get_document_not_found(client):
     c, _ = client
     # FakeKnowledgeBase.get_document returns None -> EngineClient returns {"error": ...}
-    res = c.get("/documents/00000000-0000-0000-0000-000000000000")
+    res = c.get("/api/documents/00000000-0000-0000-0000-000000000000")
     assert res.status_code == 404
