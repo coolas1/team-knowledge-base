@@ -23,6 +23,15 @@ class InfraSettings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
 
+    # Reranker (search gatekeeper). provider: local|http|none.
+    #   local = CrossEncoder (needs the `reranker` extra / torch);
+    #   http  = external /v1/rerank API (Cohere/Jina/OpenAI-compatible);
+    #   none  = disabled (vector-only ranking, no torch).
+    reranker_provider: str = "none"
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_base_url: str = ""
+    reranker_api_key: str = ""
+
     app_host: str = "0.0.0.0"
     app_port: int = 8000
 
