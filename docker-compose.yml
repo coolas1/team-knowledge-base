@@ -85,10 +85,9 @@ services:
       # Reuse the host HuggingFace cache: the reranker loads
       # BAAI/bge-reranker-v2-m3 in offline mode, so the model must already be
       # cached on the host (it is, if the host app has run search).
-      # Defaults to $HOME/.cache/huggingface (compose expands $HOME from your
-      # shell). .env values are literal ($HOME is NOT expanded there), so to
-      # override set HF_HOME_HOST to an ABSOLUTE path in .env.
-      - ${HF_HOME_HOST:-${HOME}/.cache/huggingface}:/root/.cache/huggingface
+      # ${HOME} is read from your shell. (podman-compose 1.x can't expand $HOME
+      # inside a .env value or a ${VAR:-default}, so reference it directly here.)
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
     restart: unless-stopped
 
 volumes:
