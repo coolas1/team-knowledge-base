@@ -25,5 +25,8 @@ src/frontend/webapp/client/dist/
 src/frontend/webapp/client/node_modules/
 src/frontend/webapp/client/tsconfig.tsbuildinfo
 
+# Local-only generated docs (plugin plan files; not shared)
+docs/superpowers/
+
 # OS
 .DS_Store
