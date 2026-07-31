@@ -1,51 +1,94 @@
 # Team Knowledge Base
 
-Three-module architecture: `src/{engine,agent,frontend}/`. See
-`docs/specs/three-module-refactor-spec.md`.
+A GraphRAG-powered knowledge base for teams. Ingest documents (PDF, DOCX, PPTX,
+Markdown, images) and the engine builds a **three-layer knowledge graph** —
+entities, relations, and text chunks — indexed for semantic search with
+reranking. Query it through a CLI, an MCP server, or a web UI.
 
-## Services (Docker)
+## Features
 
-Backing services for the graphrag engine - Postgres+pgvector and Neo4j - are
-managed by `docker-compose.yml`. Ollama is external (set `OLLAMA_BASE_URL` in
-`.env`; copy `.env.example` to `.env` first). All credentials/ports live in `.env`,
-which both compose and the app read.
+- **GraphRAG retrieval** — vector search (Postgres + pgvector) over a knowledge
+  graph (Neo4j) of extracted entities and relations.
+- **Multi-format ingestion** — PDF, DOCX, PPTX, Markdown, and image (OCR) extractors.
+- **Pluggable reranker** — external `/v1/rerank` API (default), a local
+  CrossEncoder (optional, torch), or none.
+- **Three interfaces** — CLI (`src.engine.cli`), MCP server (`src.engine.mcp`),
+  and a FastAPI BFF + React SPA.
+- **Containerized** — single-stage Containerfile; compose for backing services.
 
-    cp .env.example .env            # then edit .env (esp. OLLAMA_BASE_URL, HF_HOME_HOST)
-    docker compose up -d            # starts kb-postgres (:5433) + kb-neo4j (:7687/:7474)
-    docker compose ps               # wait for both to be "healthy"
-    docker compose down             # stop (add -v to wipe data volumes)
+## Installation
 
-## Run (containerized webapp)
+### Prerequisites
 
-Build the webapp image (BFF + built SPA, served together on :8000) and bring up
-the whole stack. The webapp connects to Postgres/Neo4j over the compose network
-and to Ollama at `OLLAMA_BASE_URL`. The reranker reuses your host HuggingFace
-cache via `HF_HOME_HOST` (the `BAAI/bge-reranker-v2-m3` model must be cached
-there - it is, if the host app has run a search).
+- Python ≥ 3.12 and [`uv`](https://docs.astral.sh/uv/)
+- Node.js (for the SPA)
+- Docker or Podman (for backing services)
 
-    podman compose up -d --build    # builds team-kb-webapp + starts all services
-    podman compose logs -f webapp   # BFF startup creates the DB schema (init_db)
-    open http://localhost:8000      # SPA + /api/* + /health
+### Steps
 
-Replace `podman` with `docker` if preferred. To run only the backing services and
-develop the app on the host, use the "Run" section below instead.
+1. Clone and install Python dependencies:
+   ```bash
+   git clone https://github.com/Cried1/team-knowledge-base.git
+   cd team-knowledge-base
+   uv sync                       # add --extra reranker only for a local torch reranker
+   ```
+2. Configure environment:
+   ```bash
+   cp .env.example .env          # then edit, especially OLLAMA_BASE_URL and HF_HOME_HOST
+   ```
+3. Start backing services (Postgres+pgvector, Neo4j):
+   ```bash
+   docker compose up -d          # kb-postgres :5433, kb-neo4j :7687/:7474
+   docker compose ps             # wait until both are "healthy"
+   ```
 
-## Run
+## Usage
 
-Engine MCP server (port 8000, /mcp):
-    uv run python -m src.engine.mcp
+### Run the app on the host
 
-Engine CLI:
-    uv run python -m src.engine.cli recall --query "acme"
+```bash
+# Engine MCP server (port 8000, /mcp)
+uv run python -m src.engine.mcp
 
-Webapp BFF (port 8000):
-    uv run uvicorn src.frontend.webapp.server.app:app --reload
+# Engine CLI
+uv run python -m src.engine.cli recall --query "acme"
 
-Webapp SPA (port 5173, proxies /api -> :8000):
-    cd src/frontend/webapp/client && npm install && npm run dev
+# Webapp BFF (port 8000)
+uv run uvicorn src.frontend.webapp.server.app:app --reload
 
-## Tests
+# Webapp SPA (port 5173, proxies /api -> :8000)
+cd src/frontend/webapp/client && npm install && npm run dev
+```
 
-    uv run pytest                                  # all unit + contract + BFF tests
-    cd src/frontend/webapp/client && npm test      # SPA api-client tests
-    RUN_INTEGRATION=1 uv run pytest                # graphrag + MCP round-trip vs live services
+### Run the full stack containerized
+
+Builds the webapp image (BFF + built SPA, served together on :8000) and brings
+up the whole stack. The reranker reuses your host HuggingFace cache via
+`HF_HOME_HOST` (the `BAAI/bge-reranker-v2-m3` model must be cached there).
+
+```bash
+podman compose up -d --build    # or: docker compose up -d --build
+podman compose logs -f webapp   # BFF startup creates the DB schema (init_db)
+open http://localhost:8000      # SPA + /api/* + /health
+```
+
+To run only the backing services and develop the app on the host, use the host
+run commands above instead.
+
+### Tests
+
+```bash
+uv run pytest                                   # unit + contract + BFF tests
+cd src/frontend/webapp/client && npm test       # SPA api-client tests
+RUN_INTEGRATION=1 uv run pytest                 # graphrag + MCP vs live services
+```
+
+## Contributing
+
+Development conventions, commands, and architecture notes live in
+[`CLAUDE.md`](CLAUDE.md) (mirrored to Codex and other harnesses via the tracked
+`AGENTS.md` symlink). Quick rules:
+
+- Lint and test before pushing: `uv run ruff check && uv run pytest`.
+- Follow Conventional Commits, scoped to the module touched — for example
+  `feat(engine): ...`, `fix(webapp): ...`, `refactor(config): ...`.
