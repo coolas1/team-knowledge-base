@@ -9,12 +9,12 @@ from .fakes import FakeProviders, FakeRepository, candidate
 
 class RecallSpy:
     def __init__(self) -> None:
-        self.queries: list[tuple[str, str]] = []
+        self.queries: list[tuple[str, str, int | None]] = []
 
     async def recall(
         self, query: str, *, mode: str = "deep", top_k: int | None = None
     ) -> RecallResult:
-        self.queries.append((query, mode))
+        self.queries.append((query, mode, top_k))
         item = (
             candidate("memory-a", "first-hop evidence")
             if len(self.queries) == 1
@@ -40,8 +40,8 @@ async def test_reflect_calls_recall_then_expands_missing_hop() -> None:
     result = await engine.reflect("multi-hop question")
 
     assert recall.queries == [
-        ("multi-hop question", "deep"),
-        ("second hop", "deep"),
+        ("multi-hop question", "deep", None),
+        ("second hop", "deep", None),
     ]
     assert result.text.startswith("Grounded answer")
     assert len(result.tool_trace) == 2
@@ -49,3 +49,20 @@ async def test_reflect_calls_recall_then_expands_missing_hop() -> None:
         "memory-a",
         "memory-b",
     }
+
+
+async def test_reflect_forwards_recall_mode_and_top_k() -> None:
+    recall = RecallSpy()
+    engine = ReflectEngine(
+        recall,
+        FakeRepository(),
+        FakeProviders(),
+        HindsightOptions(),
+    )
+
+    await engine.reflect("question", mode="fast", top_k=4)
+
+    assert recall.queries == [
+        ("question", "fast", 4),
+        ("second hop", "fast", 4),
+    ]

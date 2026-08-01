@@ -30,8 +30,14 @@ class ReflectEngine:
         self._providers = providers
         self._options = options
 
-    async def reflect(self, query: str) -> ReflectResult:
-        initial = await self._recall.recall(query, mode="deep")
+    async def reflect(
+        self,
+        query: str,
+        *,
+        mode: str = "deep",
+        top_k: int | None = None,
+    ) -> ReflectResult:
+        initial = await self._recall.recall(query, mode=mode, top_k=top_k)
         evidence = {item.id: item for item in initial.results}
         try:
             plan = await self._providers.json(
@@ -46,7 +52,7 @@ class ReflectEngine:
         tool_trace: list[dict[str, Any]] = [
             {
                 "tool": "recall",
-                "input": {"query": query, "mode": "deep"},
+                "input": {"query": query, "mode": mode},
                 "output_count": len(evidence),
                 "iteration": 1,
             }
@@ -54,12 +60,12 @@ class ReflectEngine:
         for iteration, subquery in enumerate(
             plan.get("subqueries", [])[: self._options.reflect_subquery_limit], start=2
         ):
-            recalled = await self._recall.recall(str(subquery), mode="deep")
+            recalled = await self._recall.recall(str(subquery), mode=mode, top_k=top_k)
             evidence.update({item.id: item for item in recalled.results})
             tool_trace.append(
                 {
                     "tool": "recall",
-                    "input": {"query": str(subquery), "mode": "deep"},
+                    "input": {"query": str(subquery), "mode": mode},
                     "output_count": len(recalled.results),
                     "iteration": iteration,
                 }

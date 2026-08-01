@@ -44,5 +44,11 @@ class HindsightService:
     ) -> RecallResult:
         return await self._recall.recall(query, mode=mode, top_k=top_k)
 
-    async def reflect(self, query: str) -> ReflectResult:
-        return await self._reflect.reflect(query)
+    async def reflect(
+        self,
+        query: str,
+        *,
+        mode: str = "deep",
+        top_k: int | None = None,
+    ) -> ReflectResult:
+        return await self._reflect.reflect(query, mode=mode, top_k=top_k)
