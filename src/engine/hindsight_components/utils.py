@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import re
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,7 +22,20 @@ def parse_datetime(value: Any) -> datetime | None:
 
 
 def normalize_entity(value: str) -> str:
-    return " ".join(value.casefold().split())
+    return re.sub(r"[^\w]+", " ", value.casefold(), flags=re.UNICODE).strip()
+
+
+def lexical_tokens(value: str) -> list[str]:
+    normalized = value.casefold()
+    words = re.findall(r"[a-z0-9_]+", normalized)
+    for run in re.findall(r"[\u3040-\u30ff\u3400-\u9fff]+", normalized):
+        words.extend(run[index : index + 2] for index in range(max(1, len(run) - 1)))
+    return words
+
+
+def document_lock_key(document_id: uuid.UUID) -> int:
+    value = document_id.int & ((1 << 64) - 1)
+    return value - (1 << 64) if value >= (1 << 63) else value
 
 
 def cosine(left: list[float] | None, right: list[float] | None) -> float:
