@@ -4,6 +4,7 @@ This is THE contract every engine implementation must satisfy. Adapters
 (cli.py, mcp.py) and consumers (agent engine_client, frontend BFF) program
 against these types, never against a concrete backend.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ class NotSupported(Exception):
 @dataclass
 class Capabilities:
     """Declares what a backend supports. Optional methods raise NotSupported."""
+
     graph: bool = False
     partial_update: bool = False
     multimodal: bool = False
@@ -27,6 +29,7 @@ class Capabilities:
 @dataclass
 class IngestSource:
     """A file to ingest: either raw bytes (name+data) or a path on disk."""
+
     name: str
     data: bytes = b""
     path: Path | None = None
@@ -106,3 +109,22 @@ class KnowledgeBase(Protocol):
         status: str | None = None,
     ) -> dict: ...
     async def get_document(self, doc_id: str) -> dict | None: ...
+
+
+class DocumentIndexHook(Protocol):
+    """Optional sidecar index lifecycle extension.
+
+    Hooks must not own file extraction or the Document lifecycle. Implementors
+    receive text only after the primary GraphRAG index succeeds.
+    """
+
+    async def after_indexed(
+        self,
+        *,
+        document_id: str,
+        title: str,
+        content: str,
+        file_type: str,
+    ) -> None: ...
+
+    async def before_remove(self, document_id: str) -> None: ...

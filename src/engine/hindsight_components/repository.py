@@ -102,6 +102,67 @@ class PostgresMemoryRepository:
                     )
                 )
 
+    async def set_document_state(
+        self,
+        document_id: str,
+        status: str,
+        *,
+        error_msg: str | None = None,
+    ) -> None:
+        async with self._session_factory() as session:
+            await session.execute(
+                insert(HindsightDocumentState)
+                .values(
+                    document_id=uuid.UUID(document_id),
+                    status=status,
+                    error_msg=error_msg,
+                )
+                .on_conflict_do_update(
+                    index_elements=[HindsightDocumentState.document_id],
+                    set_={
+                        "status": status,
+                        "error_msg": error_msg,
+                        "updated_at": func.now(),
+                    },
+                )
+            )
+            await session.commit()
+
+    async def delete_document(self, document_id: str) -> None:
+        uid = uuid.UUID(document_id)
+        async with self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    select(func.pg_advisory_xact_lock(document_lock_key(uid)))
+                )
+                memory_ids = list(
+                    await session.scalars(
+                        select(MemoryUnit.id).where(MemoryUnit.document_id == uid)
+                    )
+                )
+                if memory_ids:
+                    await session.execute(
+                        delete(MemoryUnit).where(
+                            MemoryUnit.memory_type == "observation",
+                            MemoryUnit.source_memory_ids.overlap(memory_ids),
+                        )
+                    )
+                await session.execute(
+                    delete(MemoryUnit).where(MemoryUnit.document_id == uid)
+                )
+                await session.execute(
+                    delete(HindsightDocumentState).where(
+                        HindsightDocumentState.document_id == uid
+                    )
+                )
+                await session.execute(
+                    delete(MemoryEntity).where(
+                        ~select(MemoryUnitEntity.entity_id)
+                        .where(MemoryUnitEntity.entity_id == MemoryEntity.id)
+                        .exists()
+                    )
+                )
+
     async def _insert_memories(self, session: AsyncSession, plan: RetainPlan) -> None:
         for draft in plan.memories:
             row = MemoryUnit(

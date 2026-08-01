@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    ARRAY,
     Boolean,
     DateTime,
     Float,
@@ -23,7 +22,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text as sql_text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.engine.components.store.models import EMBEDDING_DIM, Base

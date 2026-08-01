@@ -10,12 +10,18 @@ from uuid import UUID
 from sqlalchemy import select, update
 
 from src.engine.components.store.models import Chunk, Document
-from src.engine.components.store.neo4j import Neo4jClient, EntityData, EntitySource, RelationData
+from src.engine.components.store.neo4j import (
+    Neo4jClient,
+    EntityData,
+    EntitySource,
+    RelationData,
+)
 from src.engine.components.store.postgres import async_session_factory
 from src.engine.components.analyzer import Analyzer, ChunkAnalysisResult
 from src.engine.components.chunker import chunk_text
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
+from src.engine.interface import DocumentIndexHook
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +33,11 @@ class Pipeline:
         self,
         neo4j: Neo4jClient,
         analyzer: Analyzer | None = None,
+        index_hook: DocumentIndexHook | None = None,
     ) -> None:
         self._neo4j = neo4j
         self._analyzer = analyzer or Analyzer()
+        self._index_hook = index_hook
 
     async def process_file(
         self,
@@ -138,6 +146,12 @@ class Pipeline:
                     file_relations=doc_analysis.file_relations,
                     session=session,
                 )
+                await self._notify_indexed(
+                    document_id=str(doc_id),
+                    title=title,
+                    content=raw_text,
+                    file_type=file_type,
+                )
                 logger.info(f"文档 {doc_id} Pipeline 完成 ✓")
 
             except Exception as e:
@@ -149,9 +163,7 @@ class Pipeline:
                 )
                 await session.commit()
 
-    async def reindex_document(
-        self, doc_id: UUID, new_text: str
-    ) -> None:
+    async def reindex_document(self, doc_id: UUID, new_text: str) -> None:
         """编辑后重新索引：跳过文本提取，直接从文本开始分析。"""
         async with async_session_factory() as session:
             doc = await session.get(Document, doc_id)
@@ -173,7 +185,9 @@ class Pipeline:
                 chunks = chunk_text(new_text)
                 chunk_analyses: list[ChunkAnalysisResult] = []
                 for chunk in chunks:
-                    ca = await self._analyzer.analyze_chunk(chunk.text, title, chunk.index)
+                    ca = await self._analyzer.analyze_chunk(
+                        chunk.text, title, chunk.index
+                    )
                     chunk_analyses.append(ca)
 
                 if chunks:
@@ -230,12 +244,21 @@ class Pipeline:
                     )
                     for entity in ca.entities:
                         await self._neo4j.upsert_entity(
-                            entity=EntityData(name=entity.name, entity_type=entity.type, description=entity.description),
+                            entity=EntityData(
+                                name=entity.name,
+                                entity_type=entity.type,
+                                description=entity.description,
+                            ),
                             source=source,
                         )
                     for relation in ca.relations:
                         await self._neo4j.upsert_relation(
-                            relation=RelationData(from_name=relation.from_name, to_name=relation.to_name, relation_type=relation.type, description=relation.description),
+                            relation=RelationData(
+                                from_name=relation.from_name,
+                                to_name=relation.to_name,
+                                relation_type=relation.type,
+                                description=relation.description,
+                            ),
                             source=source,
                         )
 
@@ -244,6 +267,13 @@ class Pipeline:
                     await self._write_file_relations(
                         str(doc_id), doc_analysis.file_relations, session
                     )
+
+                await self._notify_indexed(
+                    document_id=str(doc_id),
+                    title=title,
+                    content=new_text,
+                    file_type=doc.file_type,
+                )
 
                 logger.info(f"文档 {doc_id} re-index 完成 ✓")
 
@@ -255,6 +285,36 @@ class Pipeline:
                     .values(status="failed", error_msg=str(e))
                 )
                 await session.commit()
+
+    async def _notify_indexed(
+        self,
+        *,
+        document_id: str,
+        title: str,
+        content: str,
+        file_type: str,
+    ) -> None:
+        if self._index_hook is None:
+            return
+        try:
+            await self._index_hook.after_indexed(
+                document_id=document_id,
+                title=title,
+                content=content,
+                file_type=file_type,
+            )
+        except Exception:
+            # A secondary index must never change primary GraphRAG status.
+            logger.exception("文档 %s 的附加索引钩子失败", document_id)
+
+    async def before_remove(self, document_id: str) -> None:
+        if self._index_hook is None:
+            return
+        try:
+            await self._index_hook.before_remove(document_id)
+        except Exception:
+            # Document FK cascade remains the final cleanup guarantee.
+            logger.exception("文档 %s 的附加索引清理钩子失败", document_id)
 
     async def _write_graph(
         self,
@@ -321,9 +381,7 @@ class Pipeline:
             target_doc = result.scalar_one_or_none()
 
             if target_doc is None:
-                logger.info(
-                    f"file_relation 目标不存在: {target_title}, 跳过"
-                )
+                logger.info(f"file_relation 目标不存在: {target_title}, 跳过")
                 continue
 
             await self._neo4j.create_doc_relation(
@@ -332,6 +390,4 @@ class Pipeline:
                 relation_type=fr.type,
                 reason=fr.reason,
             )
-            logger.info(
-                f"file_relation: {doc_id} → {target_doc} ({fr.type})"
-            )
+            logger.info(f"file_relation: {doc_id} → {target_doc} ({fr.type})")

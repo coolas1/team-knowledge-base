@@ -110,6 +110,7 @@ class GraphRAGBackend:
             doc = await session.get(Document, uid)
             if not doc:
                 return
+            await self._pipeline.before_remove(doc_id)
             if doc.file_path:
                 doc_dir = Path(doc.file_path).parent
                 if doc_dir.exists():
@@ -243,5 +244,5 @@ def build(config: EngineConfig) -> GraphRAGBackend:
 
     neo4j = Neo4jClient()
     analyzer = Analyzer(schema_path=config.config_dir / "entity_schema.yaml")
-    pipeline = Pipeline(neo4j, analyzer=analyzer)
+    pipeline = Pipeline(neo4j, analyzer=analyzer, index_hook=config.index_hook)
     return GraphRAGBackend(neo4j, pipeline)
