@@ -198,7 +198,9 @@ class Analyzer:
 
     async def _call_ollama(self, prompt: str) -> str:
         """通过 Ollama /api/generate 调用。"""
-        base_url = (settings.llm_base_url or settings.ollama_base_url).rstrip("/")
+        # Ollama's native API lives at /api/* and must not inherit the
+        # OpenAI-compatible LLM_BASE_URL (which commonly ends in /v1).
+        base_url = settings.ollama_base_url.rstrip("/")
         model = settings.llm_model or "llama3"
 
         async with httpx.AsyncClient(timeout=300.0) as client:

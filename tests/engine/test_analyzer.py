@@ -61,3 +61,44 @@ def test_build_overview_prompt_contains_title():
     p = Analyzer._build_overview_prompt("My Title", "body text here")
     assert "My Title" in p
     assert "body text here" in p
+
+
+async def test_ollama_call_uses_native_ollama_base_url(monkeypatch):
+    from config.settings import settings
+    from src.engine.components import analyzer as analyzer_module
+
+    requested: dict = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"response": '{"overview": "ok"}'}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, **kwargs):
+            requested["url"] = url
+            requested["json"] = kwargs["json"]
+            return FakeResponse()
+
+    monkeypatch.setattr(settings, "ollama_base_url", "http://ollama:11434/")
+    monkeypatch.setattr(settings, "llm_base_url", "http://ollama:11434/v1")
+    monkeypatch.setattr(settings, "llm_model", "qwen3:14b")
+    monkeypatch.setattr(
+        analyzer_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: FakeClient(),
+    )
+
+    result = await Analyzer()._call_ollama("test prompt")
+
+    assert result == '{"overview": "ok"}'
+    assert requested["url"] == "http://ollama:11434/api/generate"
+    assert requested["json"]["model"] == "qwen3:14b"
