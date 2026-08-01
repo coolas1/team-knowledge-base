@@ -4,13 +4,14 @@ InProcessEngineClient wraps a KnowledgeBase directly (used by the webapp BFF
 when engine_access=inprocess). McpEngineClient calls the engine's MCP tools
 over streamable HTTP (used by the codex harness and when engine_access=mcp).
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Literal
 
-from src.engine.interface import KnowledgeBase
+from src.engine.interface import KnowledgeBase, KnowledgeQuery
 
 
 def _jsonable(obj: Any) -> Any:
@@ -26,14 +27,40 @@ def _jsonable(obj: Any) -> Any:
 class InProcessEngineClient:
     """EngineClient backed by an in-process KnowledgeBase instance."""
 
-    def __init__(self, kb: KnowledgeBase) -> None:
+    def __init__(
+        self, kb: KnowledgeBase, query_service: KnowledgeQuery | None = None
+    ) -> None:
         self._kb = kb
+        self._query_service = query_service
 
     async def recall(self, query: str, top_k: int = 10) -> dict:
         from src.engine.interface import RecallRequest
 
         res = await self._kb.recall(RecallRequest(query=query, top_k=top_k))
         return _jsonable(res)
+
+    async def query(
+        self,
+        query: str,
+        strategy: Literal["auto", "recall", "reflect"] = "auto",
+        mode: Literal["fast", "deep"] = "deep",
+        top_k: int = 10,
+        needs_answer: bool = True,
+    ) -> dict:
+        from src.engine.interface import KnowledgeQueryRequest
+
+        if self._query_service is None:
+            raise RuntimeError("Hindsight 查询服务未初始化")
+        result = await self._query_service.query(
+            KnowledgeQueryRequest(
+                query=query,
+                strategy=strategy,
+                mode=mode,
+                top_k=top_k,
+                needs_answer=needs_answer,
+            )
+        )
+        return _jsonable(result)
 
     async def ingest(self, name: str, data: bytes) -> dict:
         from src.engine.interface import IngestSource
@@ -52,8 +79,11 @@ class InProcessEngineClient:
         return _jsonable(await self._kb.get_neighbors(entity))
 
     async def list_documents(
-        self, page: int = 1, page_size: int = 20,
-        file_type: str | None = None, status: str | None = None,
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        file_type: str | None = None,
+        status: str | None = None,
     ) -> dict:
         return await self._kb.list_documents(page, page_size, file_type, status)
 
@@ -80,10 +110,31 @@ class McpEngineClient:
         return json.loads(text)
 
     async def recall(self, query: str, top_k: int = 10) -> dict:
-        return await self._call("search", {"query": query})
+        return await self._call("search", {"query": query, "top_k": top_k})
+
+    async def query(
+        self,
+        query: str,
+        strategy: Literal["auto", "recall", "reflect"] = "auto",
+        mode: Literal["fast", "deep"] = "deep",
+        top_k: int = 10,
+        needs_answer: bool = True,
+    ) -> dict:
+        return await self._call(
+            "query_knowledge",
+            {
+                "query": query,
+                "strategy": strategy,
+                "mode": mode,
+                "top_k": top_k,
+                "needs_answer": needs_answer,
+            },
+        )
 
     async def ingest(self, name: str, data: bytes) -> dict:
-        return await self._call("upload_document", {"file_name": name, "content": data.decode("utf-8")})
+        return await self._call(
+            "upload_document", {"file_name": name, "content": data.decode("utf-8")}
+        )
 
     async def get_document(self, doc_id: str) -> dict:
         return await self._call("get_document", {"doc_id": doc_id})
@@ -91,19 +142,31 @@ class McpEngineClient:
     async def get_graph(self, entity: str | None = None) -> dict:
         if entity is None:
             return await self._call("get_full_graph", {})
-        return await self._call("query_graph", {"entity_name": entity, "include_neighbors": False})
+        return await self._call(
+            "query_graph", {"entity_name": entity, "include_neighbors": False}
+        )
 
     async def get_neighbors(self, entity: str) -> dict:
-        return await self._call("query_graph", {"entity_name": entity, "include_neighbors": True, "hops": 2})
+        return await self._call(
+            "query_graph", {"entity_name": entity, "include_neighbors": True, "hops": 2}
+        )
 
     async def list_documents(
-        self, page: int = 1, page_size: int = 20,
-        file_type: str | None = None, status: str | None = None,
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        file_type: str | None = None,
+        status: str | None = None,
     ) -> dict:
-        return await self._call("list_documents", {
-            "page": page, "page_size": page_size,
-            "file_type": file_type, "status": status,
-        })
+        return await self._call(
+            "list_documents",
+            {
+                "page": page,
+                "page_size": page_size,
+                "file_type": file_type,
+                "status": status,
+            },
+        )
 
     async def remove(self, doc_id: str) -> dict:
         return await self._call("remove_document", {"doc_id": doc_id})

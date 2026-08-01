@@ -2,6 +2,7 @@
 codex harness format + config. The codex harness calls the engine via MCP
 (there is no harness to test against yet; the manifest describes the wiring).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,13 +10,15 @@ from typing import Callable
 
 import yaml
 
-from src.agent.interface import AgentPlugin, Skill
+from src.agent.interface import Skill
 from src.agent.skills.ingest_and_summarize import IngestAndSummarizeSkill
+from src.agent.skills.reflective_search import ReflectiveSearchSkill
 from src.agent.skills.search_and_answer import SearchAndAnswerSkill
 
 _SKILL_FACTORIES: dict[str, Callable[[], Skill]] = {
     "search_and_answer": SearchAndAnswerSkill,
     "ingest_and_summarize": IngestAndSummarizeSkill,
+    "reflective_search": ReflectiveSearchSkill,
 }
 
 
@@ -35,7 +38,9 @@ class CodexPlugin:
         return {
             "harness": self.harness,
             "mcp_url": self._mcp_url,
-            "skills": [{"name": s.name, "description": s.description} for s in self._skills],
+            "skills": [
+                {"name": s.name, "description": s.description} for s in self._skills
+            ],
         }
 
 

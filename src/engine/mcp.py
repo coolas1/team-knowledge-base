@@ -1,13 +1,15 @@
 """Thin MCP adapter: exposes a KnowledgeBase instance as MCP tools over
 streamable HTTP. No business logic - each tool wraps one KnowledgeBase method.
 """
+
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import asdict
+from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from src.engine.interface import KnowledgeBase
+from src.engine.interface import KnowledgeBase, KnowledgeQuery, KnowledgeQueryRequest
 
 mcp = FastMCP(
     "Team Knowledge Base",
@@ -15,11 +17,17 @@ mcp = FastMCP(
 )
 
 _kb: KnowledgeBase | None = None
+_query_service: KnowledgeQuery | None = None
 
 
 def set_kb(kb: KnowledgeBase) -> None:
     global _kb
     _kb = kb
+
+
+def set_query_service(query_service: KnowledgeQuery) -> None:
+    global _query_service
+    _query_service = query_service
 
 
 def _get_kb() -> KnowledgeBase:
@@ -28,23 +36,51 @@ def _get_kb() -> KnowledgeBase:
     return _kb
 
 
-async def search(query: str) -> dict[str, Any]:
+def _get_query_service() -> KnowledgeQuery:
+    if _query_service is None:
+        raise RuntimeError("Hindsight 查询服务未初始化")
+    return _query_service
+
+
+async def search(query: str, top_k: int = 20) -> dict[str, Any]:
     """语义检索知识库（向量粗筛 -> Reranker 守门 -> 图谱增强）。"""
     from src.engine.interface import RecallRequest
 
-    result = await _get_kb().recall(RecallRequest(query=query))
+    result = await _get_kb().recall(RecallRequest(query=query, top_k=top_k))
     return {
         "chunks": [
             {
-                "doc_id": c.doc_id, "title": c.title,
+                "doc_id": c.doc_id,
+                "title": c.title,
                 "chunk_text": c.chunk_text[:1000],
-                "reranker_score": c.reranker_score, "vector_score": c.vector_score,
+                "reranker_score": c.reranker_score,
+                "vector_score": c.vector_score,
             }
             for c in result.chunks
         ],
         "related_entities": result.related_entities,
         "related_docs": result.related_docs,
     }
+
+
+async def query_knowledge(
+    query: str,
+    strategy: Literal["auto", "recall", "reflect"] = "auto",
+    mode: Literal["fast", "deep"] = "deep",
+    top_k: int = 10,
+    needs_answer: bool = True,
+) -> dict[str, Any]:
+    """通过 Hindsight 统一入口执行 recall 或 reflect。"""
+    result = await _get_query_service().query(
+        KnowledgeQueryRequest(
+            query=query,
+            strategy=strategy,
+            mode=mode,
+            top_k=top_k,
+            needs_answer=needs_answer,
+        )
+    )
+    return asdict(result)
 
 
 async def get_document(doc_id: str) -> dict[str, Any]:
@@ -65,7 +101,8 @@ async def query_graph(
         return {"error": f"实体不存在: {entity_name}"}
     node = graph.nodes[0]
     out: dict[str, Any] = {
-        "name": node.name, "type": node.type,
+        "name": node.name,
+        "type": node.type,
         "properties": {"description": node.description, "sources": node.sources},
         "relations": [
             {
@@ -93,13 +130,18 @@ async def upload_document(file_name: str, content: str) -> dict[str, Any]:
         IngestSource(name=file_name, data=content.encode("utf-8"))
     )
     return {
-        "id": ref.id, "title": ref.title, "file_type": ref.file_type, "status": ref.status,
+        "id": ref.id,
+        "title": ref.title,
+        "file_type": ref.file_type,
+        "status": ref.status,
     }
 
 
 async def list_documents(
-    page: int = 1, page_size: int = 20,
-    file_type: str | None = None, status: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    file_type: str | None = None,
+    status: str | None = None,
 ) -> dict[str, Any]:
     """文件列表（分页，按 type/status 筛选）。"""
     return await _get_kb().list_documents(page, page_size, file_type, status)
@@ -114,15 +156,31 @@ async def remove_document(doc_id: str) -> dict[str, Any]:
 async def get_full_graph() -> dict[str, Any]:
     """返回全图数据（所有实体 + 关系）。"""
     graph = await _get_kb().get_graph(None)
-    return {"nodes": [{"name": n.name, "type": n.type, "description": n.description,
-                        "sources": n.sources} for n in graph.nodes],
-            "links": [{"source": link.source, "target": link.target,
-                        "type": link.type, "description": link.description}
-                      for link in graph.links]}
+    return {
+        "nodes": [
+            {
+                "name": n.name,
+                "type": n.type,
+                "description": n.description,
+                "sources": n.sources,
+            }
+            for n in graph.nodes
+        ],
+        "links": [
+            {
+                "source": link.source,
+                "target": link.target,
+                "type": link.type,
+                "description": link.description,
+            }
+            for link in graph.links
+        ],
+    }
 
 
 # Register the async functions as MCP tools (FastMCP introspects signatures).
 mcp.tool()(search)
+mcp.tool()(query_knowledge)
 mcp.tool()(get_document)
 mcp.tool()(query_graph)
 mcp.tool()(upload_document)

@@ -4,14 +4,16 @@ Skills are harness-agnostic: callable in-process (by the webapp BFF) and
 wrappable by any harness plugin (codex first). Skills call an EngineClient,
 never engine internals. Memory is interface-only (impl deferred).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Literal, Protocol
 
 
 class LlmClient(Protocol):
     """Minimal LLM interface a skill uses for synthesis (answer/summary)."""
+
     async def complete(self, prompt: str) -> str: ...
 
 
@@ -31,6 +33,7 @@ class SkillResult:
 class Skill(Protocol):
     name: str
     description: str
+
     async def run(self, ctx: SkillContext) -> SkillResult: ...
 
 
@@ -39,6 +42,14 @@ class EngineClient(Protocol):
     never engine internals. All methods return JSON-ish dicts."""
 
     async def recall(self, query: str, top_k: int = 10) -> dict: ...
+    async def query(
+        self,
+        query: str,
+        strategy: Literal["auto", "recall", "reflect"] = "auto",
+        mode: Literal["fast", "deep"] = "deep",
+        top_k: int = 10,
+        needs_answer: bool = True,
+    ) -> dict: ...
     async def ingest(self, name: str, data: bytes) -> dict: ...
     async def get_document(self, doc_id: str) -> dict: ...
     async def get_graph(self, entity: str | None = None) -> dict: ...
@@ -55,5 +66,7 @@ class EngineClient(Protocol):
 
 class AgentPlugin(Protocol):
     """What each harness implementation exposes."""
+
     harness: str
+
     def skills(self) -> list[Skill]: ...

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from src.agent.codex.plugin import CodexPlugin, build_plugin
 from src.agent.skills.ingest_and_summarize import IngestAndSummarizeSkill
+from src.agent.skills.reflective_search import ReflectiveSearchSkill
 from src.agent.skills.search_and_answer import SearchAndAnswerSkill
 
 
@@ -26,10 +27,23 @@ def test_codex_plugin_manifest_shape():
 
 
 def test_build_plugin_reads_config():
-    from config.schema import AppConfig, load_config
+    from config.schema import load_config
 
     cfg = load_config(Path("config/app.yaml"))
     plugin = build_plugin(cfg)
     assert plugin.harness == "codex"
     assert plugin._mcp_url == "http://localhost:8000/mcp"
     assert len(plugin.skills()) == 2
+
+
+def test_build_plugin_can_enable_reflective_search():
+    class AgentConfig:
+        skills = ["reflective_search"]
+
+    class Config:
+        agent = AgentConfig()
+
+    plugin = build_plugin(Config())
+    skills = plugin.skills()
+    assert len(skills) == 1
+    assert isinstance(skills[0], ReflectiveSearchSkill)
