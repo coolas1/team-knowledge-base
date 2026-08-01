@@ -1,15 +1,18 @@
-"""TKB-owned Hindsight-style retain, recall, and reflect components.
+"""TKB-owned Hindsight retain, recall, and reflect core.
 
-The package is intentionally isolated from the engine factory and persistence
-setup.  Importing it does not enable Hindsight or change GraphRAG behaviour.
+This package contains only Hindsight-specific memory behaviour.  Document
+ingestion, file extraction, database sessions, transports, and GraphRAG remain
+owned by the existing project and are connected in later integration batches.
 """
 
-from .backend import HindsightBackend
-from .contracts import DocumentRepository, HindsightMemory, StoredDocument
+from .config import HindsightOptions
+from .service import HindsightService
+from .types import RecallResult, ReflectResult, RetainResult
 
 __all__ = [
-    "DocumentRepository",
-    "HindsightBackend",
-    "HindsightMemory",
-    "StoredDocument",
+    "HindsightOptions",
+    "HindsightService",
+    "RecallResult",
+    "ReflectResult",
+    "RetainResult",
 ]
