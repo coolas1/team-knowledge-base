@@ -6,6 +6,7 @@ SPA's client-side routes (``/``, ``/documents/:id``, ``/search``, ...). Any
 other GET falls through to the built SPA (``index.html``); in dev the SPA is
 served by Vite and only ``/api/*`` is proxied here.
 """
+
 from __future__ import annotations
 
 import os
@@ -23,6 +24,7 @@ from src.frontend.webapp.server import deps
 from src.frontend.webapp.server.routes_documents import router as documents_router
 from src.frontend.webapp.server.routes_search import router as search_router
 from src.frontend.webapp.server.routes_graph import router as graph_router
+from src.frontend.webapp.server.routes_query import router as query_router
 from src.frontend.webapp.server.routes_agent import router as agent_router
 from src.frontend.webapp.server.routes_config import router as config_router
 
@@ -51,6 +53,7 @@ app = FastAPI(title="Team Knowledge Base BFF", version="0.1.0", lifespan=lifespa
 api = APIRouter(prefix="/api")
 api.include_router(documents_router)
 api.include_router(search_router)
+api.include_router(query_router)
 api.include_router(graph_router)
 api.include_router(agent_router)
 api.include_router(config_router)

@@ -4,6 +4,7 @@ The engine is accessed via the agent EngineClient abstraction (dicts), so
 inprocess vs mcp is pure wiring. State is held in module-level singletons set
 by the app lifespan.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,7 +14,7 @@ from src.agent.engine_client import InProcessEngineClient, McpEngineClient
 from src.agent.interface import AgentPlugin, EngineClient, LlmClient
 from src.engine.components.store.postgres import init_db
 from src.engine.config import EngineConfig, build_engine
-from src.engine.mcp import set_kb
+from src.engine.mcp import set_kb, set_query_service
 from config.schema import AppConfig, load_config
 
 _engine_client: EngineClient | None = None
@@ -33,22 +34,39 @@ async def startup() -> None:
     global _engine_client, _plugin
     cfg = app_config()
     if cfg.webapp.engine_access == "mcp":
+        set_query_service(None)
         _engine_client = McpEngineClient("http://localhost:8000/mcp")
     else:
         await init_db()
+        query_service = None
+        index_hook = None
+        if cfg.hindsight.enabled:
+            from src.engine.hindsight_components.hook import build_retain_hook
+            from src.engine.hindsight_components.query import build_query_service
+
+            query_service = build_query_service()
+            index_hook = build_retain_hook(
+                max_concurrent=cfg.hindsight.retain_max_concurrent
+            )
         kb = build_engine(
-            EngineConfig(impl=cfg.engine.impl, config_dir=Path(cfg.engine.config))
+            EngineConfig(
+                impl=cfg.engine.impl,
+                config_dir=Path(cfg.engine.config),
+                index_hook=index_hook,
+            )
         )
         set_kb(kb)
-        _engine_client = InProcessEngineClient(kb)
+        set_query_service(query_service)
+        _engine_client = InProcessEngineClient(kb, query_service=query_service)
     _plugin = build_plugin(cfg)
     global _llm
     from src.agent.llm import build_llm
+
     _llm = build_llm()
 
 
 async def shutdown() -> None:
-    pass
+    set_query_service(None)
 
 
 def get_engine() -> EngineClient:

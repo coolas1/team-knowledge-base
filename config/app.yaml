@@ -9,3 +9,6 @@ frontend:
   impl: webapp
 webapp:
   engine_access: inprocess
+hindsight:
+  enabled: false
+  retain_max_concurrent: 1

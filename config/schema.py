@@ -1,4 +1,5 @@
 """App config: validates config/app.yaml and selects implementations."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,11 +30,17 @@ class WebappCfg(BaseModel):
     engine_access: Literal["inprocess", "mcp"] = "inprocess"
 
 
+class HindsightCfg(BaseModel):
+    enabled: bool = False
+    retain_max_concurrent: int = Field(default=1, ge=1)
+
+
 class AppConfig(BaseModel):
     engine: EngineCfg = Field(default_factory=EngineCfg)
     agent: AgentCfg = Field(default_factory=AgentCfg)
     frontend: FrontendCfg = Field(default_factory=FrontendCfg)
     webapp: WebappCfg = Field(default_factory=WebappCfg)
+    hindsight: HindsightCfg = Field(default_factory=HindsightCfg)
 
 
 def load_config(path: Path | str | None = None) -> AppConfig:

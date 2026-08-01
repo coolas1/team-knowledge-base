@@ -25,7 +25,7 @@ def set_kb(kb: KnowledgeBase) -> None:
     _kb = kb
 
 
-def set_query_service(query_service: KnowledgeQuery) -> None:
+def set_query_service(query_service: KnowledgeQuery | None) -> None:
     global _query_service
     _query_service = query_service
 
