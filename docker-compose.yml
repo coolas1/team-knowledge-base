@@ -1,8 +1,7 @@
 # Team Knowledge Base - backing services + webapp.
 #
-# Postgres+pgvector and Neo4j are provisioned here; Ollama is external (set
-# OLLAMA_BASE_URL in .env). The webapp (BFF + built SPA) is built from
-# Containerfile and runs the engine in-process, connecting to the backing
+# Postgres+pgvector, Neo4j, Ollama, and the webapp are provisioned here. The
+# webapp (BFF + built SPA) runs the engine in-process and reaches all backing
 # services over the compose network.
 #
 # All credentials/ports are sourced from .env, which compose loads
@@ -11,7 +10,7 @@
 services:
   postgres:
     image: docker.io/pgvector/pgvector:pg16
-    container_name: kb-postgres
+    container_name: team-kb-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-knowledge_base}
       POSTGRES_USER: ${POSTGRES_USER:-kb_user}
@@ -30,7 +29,7 @@ services:
 
   neo4j:
     image: docker.io/library/neo4j:5
-    container_name: kb-neo4j
+    container_name: team-kb-neo4j
     environment:
       # Initial password is set only on first init of an empty /data volume.
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-password}
@@ -48,17 +47,29 @@ services:
       retries: 10
     restart: unless-stopped
 
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    container_name: team-kb-ollama
+    gpus: all
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollamadata:/root/.ollama
+    restart: unless-stopped
+
   webapp:
     build:
       context: .
       dockerfile: Containerfile
     image: team-kb-webapp:latest
-    container_name: kb-webapp
+    container_name: team-kb-webapp
     depends_on:
       postgres:
         condition: service_healthy
       neo4j:
         condition: service_healthy
+      ollama:
+        condition: service_started
     environment:
       # Inside the compose network the backing services are reached by name on
       # their internal ports (5432 / 7687), NOT the host-published ports.
@@ -70,13 +81,12 @@ services:
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD}
-      # Ollama is external; the container reaches it via the host network.
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       # Chat/analysis LLM (was in model_config.yaml; now env-driven).
       LLM_PROVIDER: ${LLM_PROVIDER:-todo}
-      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
-      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
-      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL:-qwen3:14b}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-ollama}
       # Reranker (search gatekeeper).
       RERANKER_PROVIDER: ${RERANKER_PROVIDER:-none}
       RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
@@ -98,3 +108,4 @@ services:
 volumes:
   pgdata:
   neo4jdata:
+  ollamadata:

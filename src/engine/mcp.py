@@ -9,7 +9,10 @@ from mcp.server.fastmcp import FastMCP
 
 from src.engine.interface import KnowledgeBase
 
-mcp = FastMCP("Team Knowledge Base")
+mcp = FastMCP(
+    "Team Knowledge Base",
+    streamable_http_path="/",
+)
 
 _kb: KnowledgeBase | None = None
 
@@ -65,9 +68,12 @@ async def query_graph(
         "name": node.name, "type": node.type,
         "properties": {"description": node.description, "sources": node.sources},
         "relations": [
-            {"type": l.type, "other": l.target if l.source == node.name else l.source,
-             "description": l.description}
-            for l in graph.links
+            {
+                "type": link.type,
+                "other": link.target if link.source == node.name else link.source,
+                "description": link.description,
+            }
+            for link in graph.links
         ],
     }
     if include_neighbors:
@@ -110,8 +116,9 @@ async def get_full_graph() -> dict[str, Any]:
     graph = await _get_kb().get_graph(None)
     return {"nodes": [{"name": n.name, "type": n.type, "description": n.description,
                         "sources": n.sources} for n in graph.nodes],
-            "links": [{"source": l.source, "target": l.target, "type": l.type,
-                        "description": l.description} for l in graph.links]}
+            "links": [{"source": link.source, "target": link.target,
+                        "type": link.type, "description": link.description}
+                      for link in graph.links]}
 
 
 # Register the async functions as MCP tools (FastMCP introspects signatures).
@@ -125,5 +132,5 @@ mcp.tool()(get_full_graph)
 
 
 def build_app():
-    """Return the streamable-HTTP ASGI app (no lifespan; caller manages sessions)."""
+    """Return the streamable-HTTP ASGI app; caller manages MCP sessions."""
     return mcp.streamable_http_app()

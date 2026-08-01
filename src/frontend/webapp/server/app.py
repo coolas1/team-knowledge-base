@@ -17,6 +17,8 @@ from fastapi.responses import FileResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 
+from src.engine.mcp import build_app as build_mcp_app
+from src.engine.mcp import mcp as mcp_server
 from src.frontend.webapp.server import deps
 from src.frontend.webapp.server.routes_documents import router as documents_router
 from src.frontend.webapp.server.routes_search import router as search_router
@@ -32,8 +34,15 @@ SPA_DIST = Path(os.getenv("SPA_DIST", "src/frontend/webapp/client/dist"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await deps.startup()
-    yield
-    await deps.shutdown()
+    try:
+        if deps.engine_initialized():
+            async with mcp_server.session_manager.run():
+                yield
+        else:
+            # Unit tests replace startup with a no-op and exercise REST only.
+            yield
+    finally:
+        await deps.shutdown()
 
 
 app = FastAPI(title="Team Knowledge Base BFF", version="0.1.0", lifespan=lifespan)
@@ -46,6 +55,7 @@ api.include_router(graph_router)
 api.include_router(agent_router)
 api.include_router(config_router)
 app.include_router(api)
+app.mount("/mcp", build_mcp_app(), name="mcp")
 
 
 @app.get("/health")

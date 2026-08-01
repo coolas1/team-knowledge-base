@@ -6,11 +6,14 @@ by the app lifespan.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from src.agent.codex.plugin import build_plugin
 from src.agent.engine_client import InProcessEngineClient, McpEngineClient
 from src.agent.interface import AgentPlugin, EngineClient, LlmClient
 from src.engine.components.store.postgres import init_db
 from src.engine.config import EngineConfig, build_engine
+from src.engine.mcp import set_kb
 from config.schema import AppConfig, load_config
 
 _engine_client: EngineClient | None = None
@@ -33,7 +36,10 @@ async def startup() -> None:
         _engine_client = McpEngineClient("http://localhost:8000/mcp")
     else:
         await init_db()
-        kb = build_engine(EngineConfig(impl=cfg.engine.impl, config_dir=cfg.engine.config))
+        kb = build_engine(
+            EngineConfig(impl=cfg.engine.impl, config_dir=Path(cfg.engine.config))
+        )
+        set_kb(kb)
         _engine_client = InProcessEngineClient(kb)
     _plugin = build_plugin(cfg)
     global _llm
@@ -57,3 +63,8 @@ def get_plugin() -> AgentPlugin:
 
 def get_llm() -> LlmClient | None:
     return _llm
+
+
+def engine_initialized() -> bool:
+    """Whether startup created a real engine (false in isolated BFF tests)."""
+    return _engine_client is not None
