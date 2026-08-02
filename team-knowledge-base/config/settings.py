@@ -17,6 +17,13 @@ class InfraSettings(BaseSettings):
 
     ollama_base_url: str = "http://localhost:11434"
 
+    # Embedding provider: ollama | ark (OpenAI-compatible API, e.g. doubao-embedding-vision)
+    embed_provider: str = "ollama"
+    embed_model: str = "nomic-embed-text"
+    embed_base_url: str = ""  # ark: https://ark.cn-beijing.volces.com/api/v3
+    embed_api_key: str = ""
+    embed_dim: int = 1024
+
     # Chat/analysis LLM (OpenAI-compatible or Ollama). provider="todo" disables it.
     llm_provider: str = "todo"
     llm_model: str = "gpt-4o-mini"

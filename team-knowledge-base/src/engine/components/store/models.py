@@ -15,7 +15,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-EMBEDDING_DIM = 768  # nomic-embed-text, 可通过配置切换
+from config.settings import settings
+
+EMBEDDING_DIM = settings.embed_dim  # 默认 768 (nomic-embed-text)，ark 可配 1024/2048
 
 
 class Base(DeclarativeBase):
