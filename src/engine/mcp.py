@@ -83,6 +83,42 @@ async def query_knowledge(
     return asdict(result)
 
 
+async def search_knowledge_fast(
+    query: str,
+    top_k: int = 5,
+) -> dict[str, Any]:
+    """快速知识检索。用于简单事实、定义、明确关键词、指定文件内容和文件定位。
+
+    只返回检索证据，不在服务端生成最终答案；调用此工具的模型应根据 sources
+    组织回答。不要用于跨文档比较、多跳关系、时间线或复杂综合分析。
+    """
+    return await query_knowledge(
+        query,
+        strategy="recall",
+        mode="fast",
+        top_k=top_k,
+        needs_answer=False,
+    )
+
+
+async def search_knowledge_deep(
+    query: str,
+    top_k: int = 10,
+) -> dict[str, Any]:
+    """深度知识检索。用于跨文档比较、多跳关系、时间线、原因分析和综合总结。
+
+    只返回检索证据，不在服务端生成最终答案；调用此工具的模型应综合 sources、
+    related_entities 和 based_on 回答。简单事实查询应优先使用 search_knowledge_fast。
+    """
+    return await query_knowledge(
+        query,
+        strategy="recall",
+        mode="deep",
+        top_k=top_k,
+        needs_answer=False,
+    )
+
+
 async def get_document(doc_id: str) -> dict[str, Any]:
     """获取文件详情。"""
     result = await _get_kb().get_document(doc_id)
@@ -181,6 +217,8 @@ async def get_full_graph() -> dict[str, Any]:
 # Register the async functions as MCP tools (FastMCP introspects signatures).
 mcp.tool()(search)
 mcp.tool()(query_knowledge)
+mcp.tool()(search_knowledge_fast)
+mcp.tool()(search_knowledge_deep)
 mcp.tool()(get_document)
 mcp.tool()(query_graph)
 mcp.tool()(upload_document)

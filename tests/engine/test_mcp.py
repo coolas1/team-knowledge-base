@@ -69,6 +69,36 @@ async def test_query_knowledge_forwards_unified_request():
     assert service.request.top_k == 3
 
 
+@pytest.mark.parametrize(
+    ("tool", "expected_mode", "top_k"),
+    [
+        (mcp_mod.search_knowledge_fast, "fast", 4),
+        (mcp_mod.search_knowledge_deep, "deep", 8),
+    ],
+)
+async def test_search_tools_fix_recall_mode(tool, expected_mode, top_k):
+    class FakeQueryService:
+        request = None
+
+        async def query(self, request):
+            self.request = request
+            return KnowledgeQueryResult(strategy_used="recall")
+
+    service = FakeQueryService()
+    mcp_mod.set_query_service(service)
+    try:
+        out = await tool("acme", top_k=top_k)
+    finally:
+        mcp_mod._query_service = None
+
+    assert out["strategy_used"] == "recall"
+    assert service.request.query == "acme"
+    assert service.request.strategy == "recall"
+    assert service.request.mode == expected_mode
+    assert service.request.top_k == top_k
+    assert service.request.needs_answer is False
+
+
 async def test_get_document_missing_returns_error(fake_kb):
     res = await mcp_mod.get_document("nope")
     assert "error" in res
