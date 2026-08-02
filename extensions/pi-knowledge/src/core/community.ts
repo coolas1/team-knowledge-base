@@ -103,7 +103,7 @@ async function detectCommunities(config: KnowledgeConfig): Promise<DetectedCommu
       config,
       `MATCH (e:Entity) WHERE e.name IN $names RETURN e.name AS name, e.type AS type`,
       { names: memberNames },
-    ) as CommunityMember[];
+    ) as unknown as CommunityMember[];
 
     // 获取组内关系
     const rels = edges.filter(
