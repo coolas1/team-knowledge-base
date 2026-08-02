@@ -79,6 +79,7 @@ async def test_local_ollama_uses_native_chat_api(
     assert url == "http://ollama.local:11434/api/chat"
     assert payload["format"] == "json"
     assert payload["think"] is False
+    assert payload["options"] == {"temperature": 0, "num_predict": 4096}
 
 
 async def test_network_model_uses_openai_compatible_api(

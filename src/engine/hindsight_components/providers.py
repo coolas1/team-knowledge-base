@@ -11,6 +11,8 @@ import httpx
 from config.settings import settings
 from src.engine.components.embedder import embedder
 
+OLLAMA_MAX_OUTPUT_TOKENS = 4096
+
 
 class EmbeddingProvider(Protocol):
     async def embed_batch(self, texts: list[str]) -> list[list[float]]: ...
@@ -90,7 +92,13 @@ class ProjectHindsightProviders:
             ],
             "stream": False,
             "think": False,
-            "options": {"temperature": 0},
+            "options": {
+                "temperature": 0,
+                # Qwen can keep emitting whitespace/repeated JSON after a valid
+                # object. Bound generation so one retain call cannot occupy the
+                # local GPU until the HTTP timeout.
+                "num_predict": OLLAMA_MAX_OUTPUT_TOKENS,
+            },
         }
         if json_mode:
             payload["format"] = "json"
