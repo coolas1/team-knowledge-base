@@ -1,0 +1,248 @@
+[
+  {
+    "id": 1,
+    "query": "数据中台项目选了什么存储引擎？为什么选它？",
+    "expected_source": "技术方案-数据中台建设.pdf",
+    "expected_answer_keywords": [
+      "Apache Iceberg",
+      "引擎兼容性",
+      "不绑定单一计算引擎",
+      "避免厂商锁定"
+    ],
+    "difficulty": "easy",
+    "noise_challenge": "需要跳过前3页模板噪声（封面/修订历史/目录），命中第8页技术选型章节"
+  },
+  {
+    "id": 2,
+    "query": "数据中台项目的总预算是多少？分几期实施？",
+    "expected_source": "技术方案-数据中台建设.pdf",
+    "expected_answer_keywords": [
+      "480万",
+      "三期",
+      "2024 Q3",
+      "2024 Q4",
+      "2025 Q1"
+    ],
+    "difficulty": "easy",
+    "noise_challenge": "需要命中第9页实施计划，不被页眉页脚和水印干扰"
+  },
+  {
+    "id": 3,
+    "query": "Q3数据迁移的具体时间窗口是什么时候？",
+    "expected_source": "邮件-Q3数据迁移方案确认.pdf",
+    "expected_answer_keywords": [
+      "7月15日",
+      "22:00",
+      "7月16日",
+      "06:00"
+    ],
+    "difficulty": "medium",
+    "noise_challenge": "有效信息只在第1页正文11行，其余3页全是引用链和签名档"
+  },
+  {
+    "id": 4,
+    "query": "ERP数据迁移涉及多少张表？迁移到哪个数据库？",
+    "expected_source": "邮件-Q3数据迁移方案确认.pdf",
+    "expected_answer_keywords": [
+      "320张",
+      "Oracle",
+      "PostgreSQL"
+    ],
+    "difficulty": "medium",
+    "noise_challenge": "信息分散在第1页（320张）和第3页引用（Oracle到PostgreSQL），需要跨chunk聚合"
+  },
+  {
+    "id": 5,
+    "query": "数据迁移的回滚方案是什么？",
+    "expected_source": "邮件-Q3数据迁移方案确认.pdf",
+    "expected_answer_keywords": [
+      "Oracle只读副本",
+      "8月15日",
+      "回切"
+    ],
+    "difficulty": "medium",
+    "noise_challenge": "只在最新邮件正文第3条，被签名档和4层引用包围"
+  },
+  {
+    "id": 6,
+    "query": "技术架构部6月份谁的加班时间最长？",
+    "expected_source": "2024年6月考勤汇总-技术架构部.csv",
+    "expected_answer_keywords": [
+      "加班时长"
+    ],
+    "difficulty": "hard",
+    "noise_challenge": "需要跳过12行系统导出头+2行报表标题，命中数据行并做数值比较"
+  },
+  {
+    "id": 7,
+    "query": "技术架构部6月份一共有多少人？迟到最多的是谁？",
+    "expected_source": "2024年6月考勤汇总-技术架构部.csv",
+    "expected_answer_keywords": [
+      "28",
+      "迟到次数"
+    ],
+    "difficulty": "hard",
+    "noise_challenge": "CSV前15行全是噪声，有效数据从第16行开始"
+  },
+  {
+    "id": 8,
+    "query": "Q2市场活动一共获取了多少条销售线索？",
+    "expected_source": "2024Q2市场营销汇报.pptx",
+    "expected_answer_keywords": [
+      "8410",
+      "线索"
+    ],
+    "difficulty": "medium",
+    "noise_challenge": "数据在Slide 7的文本表格里，PPT碎片化bullet可能影响分块"
+  },
+  {
+    "id": 9,
+    "query": "Q2哪个渠道的线索转化率最高？",
+    "expected_source": "2024Q2市场营销汇报.pptx",
+    "expected_answer_keywords": [
+      "老客户转介",
+      "22.6%"
+    ],
+    "difficulty": "medium",
+    "noise_challenge": "表格数据在PPT里是纯文本行，分块后可能表格被切断"
+  },
+  {
+    "id": 10,
+    "query": "Q3市场部的重点工作计划是什么？发布会什么时候？",
+    "expected_source": "2024Q2市场营销汇报.pptx",
+    "expected_answer_keywords": [
+      "秋季产品发布会",
+      "9月中旬",
+      "500人"
+    ],
+    "difficulty": "easy",
+    "noise_challenge": "Slide 9内容，但每页都有页脚噪声"
+  },
+  {
+    "id": 11,
+    "query": "数据中台技术服务合同的总金额是多少？怎么分期支付？",
+    "expected_source": "技术服务合同-数据中台项目.docx",
+    "expected_answer_keywords": [
+      "180万",
+      "1,800,000",
+      "30%",
+      "25%",
+      "20%"
+    ],
+    "difficulty": "medium",
+    "noise_challenge": "有效信息在第二章第5条，前面有3页法律定义和解释样板"
+  },
+  {
+    "id": 12,
+    "query": "数据中台合同的乙方是哪家公司？服务期到什么时候？",
+    "expected_source": "技术服务合同-数据中台项目.docx",
+    "expected_answer_keywords": [
+      "云智数据技术",
+      "深圳",
+      "2025年6月30日"
+    ],
+    "difficulty": "medium",
+    "noise_challenge": "乙方信息在首页（噪声区），服务期在第二章（有效区），需跨chunk"
+  },
+  {
+    "id": 13,
+    "query": "合同里逾期交付的违约金怎么算？",
+    "expected_source": "技术服务合同-数据中台项目.docx",
+    "expected_answer_keywords": [
+      "0.5%",
+      "每个工作日",
+      "不超过合同总额的10%"
+    ],
+    "difficulty": "hard",
+    "noise_challenge": "在第五章违约条款里，被大量法律样板文包围"
+  },
+  {
+    "id": 14,
+    "query": "数据中台周例会上，迁移测试第三轮跑了多长时间？",
+    "expected_source": "会议记录-数据中台周例会W12.txt",
+    "expected_answer_keywords": [
+      "5小时20分钟",
+      "第三轮"
+    ],
+    "difficulty": "medium",
+    "noise_challenge": "有效信息被大量口语填充词包围"
+  },
+  {
+    "id": 15,
+    "query": "周例会上确定了哪几个action item？",
+    "expected_source": "会议记录-数据中台周例会W12.txt",
+    "expected_answer_keywords": [
+      "精度映射",
+      "序列同步",
+      "全量逻辑备份",
+      "停机窗口",
+      "会议纪要模板"
+    ],
+    "difficulty": "medium",
+    "noise_challenge": "action item在文末总结处，前面是1小时35分的口语转写"
+  },
+  {
+    "id": 16,
+    "query": "迁移后数据比对发现哪3张表有差异？原因是什么？",
+    "expected_source": "会议记录-数据中台周例会W12.txt",
+    "expected_answer_keywords": [
+      "t_order_amount",
+      "t_invoice_detail",
+      "t_settlement_record",
+      "NUMBER",
+      "精度"
+    ],
+    "difficulty": "hard",
+    "noise_challenge": "信息在会议中间段，被口语化表达和跑题内容包围"
+  },
+  {
+    "id": 17,
+    "query": "Q2销售报表中华为技术有限公司买了什么产品？",
+    "expected_source": "2024Q2区域销售明细表.xlsx",
+    "expected_answer_keywords": [
+      "华为"
+    ],
+    "difficulty": "hard",
+    "noise_challenge": "Excel前17行是导出元信息，数据在Sheet1第19行开始"
+  },
+  {
+    "id": 18,
+    "query": "数据中台的实时计算链路用了什么技术栈？",
+    "expected_source": "技术方案-数据中台建设.pdf",
+    "expected_answer_keywords": [
+      "Flink CDC",
+      "Kafka",
+      "Flink SQL",
+      "StarRocks"
+    ],
+    "difficulty": "easy",
+    "noise_challenge": "在第7页3.2节，需要跳过前面的页眉页脚和水印"
+  },
+  {
+    "id": 19,
+    "query": "去Oracle化是谁发起的？为什么要做？",
+    "expected_source": "邮件-Q3数据迁移方案确认.pdf",
+    "expected_answer_keywords": [
+      "陈志远",
+      "Oracle许可费",
+      "380万",
+      "节省250万"
+    ],
+    "difficulty": "hard",
+    "noise_challenge": "信息在第3-4页的深层引用链里，被4层签名档和免责声明包围"
+  },
+  {
+    "id": 20,
+    "query": "数据中台合同的技术培训包含多少课时？培训哪些内容？",
+    "expected_source": "技术服务合同-数据中台项目.docx",
+    "expected_answer_keywords": [
+      "40课时",
+      "Iceberg",
+      "Flink",
+      "StarRocks",
+      "15人"
+    ],
+    "difficulty": "medium",
+    "noise_challenge": "在第二章3.4条，被前后大量法律条款包围"
+  }
+]

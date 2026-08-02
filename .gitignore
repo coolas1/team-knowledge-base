@@ -41,3 +41,13 @@ plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh
+
+# team-knowledge-base (Python)
+team-knowledge-base/__pycache__/
+team-knowledge-base/**/__pycache__/
+team-knowledge-base/*.py[oc]
+team-knowledge-base/.venv/
+team-knowledge-base/uploads/
+team-knowledge-base/.env
+team-knowledge-base/src/frontend/webapp/client/dist/
+team-knowledge-base/src/frontend/webapp/client/node_modules/

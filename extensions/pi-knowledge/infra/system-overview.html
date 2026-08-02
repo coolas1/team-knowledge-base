@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pi-knowledge 系统架构总览</title>
+<style>
+:root {
+  --bg: #f8f9fa;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --text: #1a202c;
+  --text-secondary: #4a5568;
+  --accent: #3b82f6;
+  --accent-light: #eff6ff;
+  --green: #10b981;
+  --green-light: #ecfdf5;
+  --purple: #8b5cf6;
+  --purple-light: #f5f3ff;
+  --orange: #f59e0b;
+  --orange-light: #fffbeb;
+  --red: #ef4444;
+  --code-bg: #f1f5f9;
+  --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-md: 0 4px 6px rgba(0,0,0,.05), 0 2px 4px rgba(0,0,0,.04);
+  --radius: 10px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  padding: 2rem 1rem;
+}
+.container { max-width: 900px; margin: 0 auto; }
+h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: .5rem;
+}
+.subtitle {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: .9rem;
+  margin-bottom: 2.5rem;
+}
+.section {
+  margin-bottom: 2rem;
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-bottom: 1rem;
+}
+.section-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  font-size: .85rem;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+.badge-storage { background: var(--accent); }
+.badge-retrieval { background: var(--green); }
+.badge-maintain { background: var(--purple); }
+.section-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow);
+}
+.card-title {
+  font-size: .95rem;
+  font-weight: 700;
+  margin-bottom: .6rem;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+.card-title .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-blue { background: var(--accent); }
+.dot-green { background: var(--green); }
+.dot-purple { background: var(--purple); }
+.dot-orange { background: var(--orange); }
+p, li { font-size: .88rem; color: var(--text-secondary); }
+p { margin-bottom: .5rem; }
+ul { padding-left: 1.2rem; margin-bottom: .5rem; }
+li { margin-bottom: .35rem; }
+li strong { color: var(--text); font-weight: 600; }
+code {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: .8rem;
+  background: var(--code-bg);
+  padding: .15em .4em;
+  border-radius: 4px;
+  color: var(--text);
+}
+.tag {
+  display: inline-block;
+  font-size: .72rem;
+  font-weight: 600;
+  padding: .15em .55em;
+  border-radius: 4px;
+  margin-right: .3rem;
+  vertical-align: middle;
+}
+.tag-det { background: var(--accent-light); color: var(--accent); }
+.tag-llm { background: var(--orange-light); color: #b45309; }
+.tag-agent { background: var(--purple-light); color: var(--purple); }
+.flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .3rem;
+  margin: .6rem 0;
+}
+.flow-step {
+  font-size: .78rem;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  padding: .25em .6em;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.flow-arrow { color: var(--text-secondary); font-size: .75rem; }
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 640px) { .grid-2 { grid-template-columns: 1fr; } }
+.table-wrap { overflow-x: auto; margin: .5rem 0; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .82rem;
+}
+th, td {
+  text-align: left;
+  padding: .5rem .7rem;
+  border-bottom: 1px solid var(--border);
+}
+th {
+  font-weight: 600;
+  color: var(--text);
+  background: var(--code-bg);
+}
+td { color: var(--text-secondary); }
+.note {
+  font-size: .8rem;
+  color: var(--text-secondary);
+  border-left: 3px solid var(--accent);
+  padding: .5rem .8rem;
+  background: var(--accent-light);
+  border-radius: 0 6px 6px 0;
+  margin: .6rem 0;
+}
+.divider {
+  border: none;
+  border-top: 1px dashed var(--border);
+  margin: 1.5rem 0;
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>pi-knowledge 系统架构总览</h1>
+<p class="subtitle">存储 · 检索 · 维护 — 三大子系统概览</p>
+
+<!-- ==================== 存储侧 ==================== -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-badge badge-storage">存</span>
+    <span class="section-title">存储侧</span>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-blue"></span>基础设施与数据形态</div>
+    <p><strong>基础设施：</strong>向量数据库（ParadeDB / pgvector）+ 图数据库（Neo4j）</p>
+    <p><strong>存储内容：</strong>多模态文档 + 记忆原文（会话） + 长期记忆</p>
+    <p style="margin-top:.6rem;font-weight:600;color:var(--text)">三类数据形态：</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th>形态</th><th>含义</th><th>示例</th></tr>
+        <tr><td>原始格式</td><td>用户放入 vault 的源文件</td><td>.pdf / .docx / .pptx / .xlsx / .jsonl</td></tr>
+        <tr><td>中间形态</td><td>统一转 md 方便 LLM 语义理解；所有切分、向量化入口均从 md 开始</td><td>.derived/*.md（影子文件）；会话保持 jsonl</td></tr>
+        <tr><td>系统形态</td><td>入库后的可检索结构</td><td>向量（chunks.embedding）+ 图（Neo4j 节点/边）</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-blue"></span>三类内容的存储方式</div>
+    <ul>
+      <li><strong>多模态文件</strong> — 代码解析转 md → 切分 → 存入向量 + 图数据库</li>
+      <li><strong>记忆原文（会话）</strong> — 用户 <code>/quit</code> 结束会话时触发存储：对话切分后存入向量 + 图；继续之前会话时，增量更新最后一个 chunk</li>
+      <li><strong>长期记忆</strong> — 记录用户事实/决策/经验/偏好，保存为 md 文件；作为系统提示词注入，同时入向量 + 图与其它信息建立联系</li>
+    </ul>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title"><span class="dot dot-blue"></span>向量数据库（6 张表）</div>
+      <ul>
+        <li><strong>documents</strong> — 文档元数据（记忆也作为文档存储）</li>
+        <li><strong>chunks</strong> — 正文 + 标题 + embedding + doc_id 外键</li>
+        <li><strong>graph_jobs</strong> — 图谱构建任务队列</li>
+        <li><strong>entity_vectors</strong> — 图结构实体表</li>
+        <li><strong>relation_vectors</strong> — 图结构关系表</li>
+        <li><strong>index_meta</strong> — KV 配置（embedding 维度等）</li>
+      </ul>
+      <div class="note">chunks 表含两类索引：BM25 全文索引（jieba 分词）+ HNSW 向量索引（cosine）</div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="dot dot-blue"></span>图数据库（Neo4j）</div>
+      <p style="font-weight:600;color:var(--text)">节点 5 种：</p>
+      <p>Doc · Dir · Month · Entity · Community</p>
+      <p style="font-weight:600;color:var(--text);margin-top:.5rem">边 6 种：</p>
+      <p>IN_DIR · MODIFIED_IN · MENTIONS · REL · IN_COMMUNITY · DOC_REL</p>
+      <div class="note">图中存储的是三元组（头节点, 边, 尾节点）；关系边附带文档/chunk 来源，一个关系只来自一个文档</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-orange"></span>Chunk 切分策略</div>
+    <p>目标 ≤800 字符，overlap = 150；超 1600 字符递归降级到句号/感叹号/问号切分。</p>
+    <div class="flow">
+      <span class="flow-step">按标题行切章节</span><span class="flow-arrow">→</span>
+      <span class="flow-step">章节内按空行切段落</span><span class="flow-arrow">→</span>
+      <span class="flow-step">贪心聚合到目标大小</span><span class="flow-arrow">→</span>
+      <span class="flow-step">超长递归切分</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-orange"></span>图构建流程</div>
+    <div class="flow">
+      <span class="flow-step">预定义节点/关系类型</span><span class="flow-arrow">→</span>
+      <span class="flow-step">全量扫描文档</span><span class="flow-arrow">→</span>
+      <span class="flow-step">LLM 文档级抽取</span><span class="flow-arrow">→</span>
+      <span class="flow-step">写入 Neo4j</span><span class="flow-arrow">→</span>
+      <span class="flow-step">向量库建实体/关系表</span><span class="flow-arrow">→</span>
+      <span class="flow-step">社区摘要</span>
+    </div>
+    <ul>
+      <li>关系中附带文档/chunk 来源（非节点附带），一个关系只来自一个文档</li>
+      <li>对节点密集区域（"社区"）生成一套 LLM 摘要</li>
+    </ul>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== 检索侧 ==================== -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-badge badge-retrieval">检</span>
+    <span class="section-title">检索侧</span>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-green"></span>架构</div>
+    <p>主 agent 与用户对话；触发存检功能时，启动 <strong>subagent</strong> 执行检索，结果返回主 agent，保持对话上下文整洁。</p>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-green"></span>检索管线</div>
+    <div class="table-wrap">
+      <table>
+        <tr><th>#</th><th>阶段</th><th>说明</th></tr>
+        <tr><td>1</td><td>Query 改写/扩展</td><td>子 agent 深度检索模式才有；快查模式直接用原始 query</td></tr>
+        <tr><td>2</td><td>三路并行召回</td><td>BM25 + 向量 + 图（权重 1 : 1 : 0.5）</td></tr>
+        <tr><td>3</td><td>RRF 融合粗排</td><td>多路信号交叉打分，图谱路衰减 0.5</td></tr>
+        <tr><td>4</td><td>Reranker 精排</td><td>规划中，cross-encoder 对 top-N 重排</td></tr>
+        <tr><td>5</td><td>全文补读</td><td>对关键命中 read_doc 读全文，避免片段误判</td></tr>
+        <tr><td>6</td><td>LLM 生成答案</td><td>子 agent 预算：最多 15 次工具调用</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-green"></span>图检索流程</div>
+    <div class="flow">
+      <span class="flow-step">jieba 分词</span><span class="flow-arrow">→</span>
+      <span class="flow-step">Neo4j 匹配实体名</span><span class="flow-arrow">→</span>
+      <span class="flow-step">未命中? fallback 向量搜实体描述</span><span class="flow-arrow">→</span>
+      <span class="flow-step">MENTIONS 边定位文档+chunk</span><span class="flow-arrow">→</span>
+      <span class="flow-step">1 跳关系遍历扩展</span><span class="flow-arrow">→</span>
+      <span class="flow-step">ParadeDB 拉取 chunk 原文</span>
+    </div>
+    <ul>
+      <li>分词是轻量 jieba 切词，非 LLM 提取实体</li>
+      <li>精确匹配 + 包含匹配；fallback 向量相似度 &gt; 0.3 才取</li>
+      <li>每文档最多 3 个 chunk，总上限 15</li>
+    </ul>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== 维护侧 ==================== -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-badge badge-maintain">维</span>
+    <span class="section-title">维护侧</span>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-purple"></span>文档维护 <span class="tag tag-det">确定性管线</span></div>
+    <p><code>ingestVault</code> + <code>processGraphJobs</code>：vault 增量扫描 → 摄取 → 图谱异步消费 → 消失清理，全程无 agentic 循环。</p>
+    <ul>
+      <li><strong>SHA256 短路</strong> — 源文件字节哈希与 <code>documents.content_hash</code> 比对，未变则跳过</li>
+      <li><strong>ingestFile</strong> — 转影子 md → chunkMarkdown 切分 → embed → 单事务写入（documents UPSERT + chunks 全删重建 + graph_jobs 置 pending）</li>
+      <li><strong>processGraphJobs</strong> — 认领 pending（limit=200, FOR UPDATE SKIP LOCKED）→ 清旧派生边 → 结构边 → LLM 抽取 → 语义边 → entity/relation 向量 MERGE；失败 &lt;3 次回 pending，≥3 标 failed</li>
+      <li><strong>removeDocument</strong> — vault 中消失的文件：DELETE documents（级联 chunks）+ 删影子 md + 删 Neo4j REL 边 + DETACH DELETE Doc 节点</li>
+      <li><strong>cleanupOrphanNodes</strong> — 无连接 Entity 删除，Dir/Month 级联循环删</li>
+      <li><strong>normalizeRelations</strong> — 硬编码字典（18 条）把中文自创关系类型批量映射回标准大写类型</li>
+      <li><strong>refreshCommunities</strong> — Union-Find 连通分量（≥3 成员）→ LLM 摘要 ≤300 字 → 先清后建 Community 节点 + IN_COMMUNITY 边</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-purple"></span>记忆维护 <span class="tag tag-agent">agentic 循环</span><span class="tag tag-llm">LLM + function calling</span></div>
+    <p><code>maintainMemories</code>：把全部 active 记忆列表交给模型，模型通过 4 个工具自主决策：</p>
+    <ul>
+      <li><strong>memory_read</strong> — 读全文核实</li>
+      <li><strong>memory_update</strong> — 合并要点到保留条目</li>
+      <li><strong>memory_supersede</strong> — 标记被取代（不删文件，退出注入视图）</li>
+      <li><strong>memory_delete</strong> — 彻底删除文件 + 索引 + Neo4j 节点</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-purple"></span>图谱维护 <span class="tag tag-agent">agentic 循环</span><span class="tag tag-llm">LLM + function calling</span></div>
+    <p><code>maintainGraph</code>：把全部实体列表交给模型，3 个工具：</p>
+    <ul>
+      <li><strong>graph_entity_docs</strong> — 核实两实体各自出现在哪些文档</li>
+      <li><strong>graph_merge_entities</strong> — 合并重复实体（重定向 MENTIONS/REL 边，记入 aliases，删除 duplicate）</li>
+      <li><strong>graph_link_docs</strong> — 建立文档间关系（如 UPDATES）</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot dot-purple"></span>审计报告</div>
+    <p>生成结构化 markdown 报告写入 <code>vault/maintenance/{timestamp}.md</code>，并 <code>ingestFile</code> 入索引（报告本身也可被检索到）。同时更新 <code>.derived/maintenance-state.json</code> 记录最后执行时间。</p>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

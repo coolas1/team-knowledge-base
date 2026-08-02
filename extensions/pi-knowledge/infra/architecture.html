@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pi-knowledge 系统架构：存储 · 检索 · 维护</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #22252f;
+  --border: #2a2d3a;
+  --text: #e4e4e7;
+  --muted: #9ca3af;
+  --accent: #6366f1;
+  --accent2: #22d3ee;
+  --green: #34d399;
+  --orange: #fb923c;
+  --red: #f87171;
+  --yellow: #fbbf24;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  padding: 2rem;
+}
+.container { max-width: 1000px; margin: 0 auto; }
+h1 {
+  font-size: 2rem;
+  margin-bottom: 0.3rem;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.subtitle { color: var(--muted); margin-bottom: 2.5rem; font-size: 0.9rem; }
+h2 {
+  font-size: 1.4rem;
+  margin: 3rem 0 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--accent2);
+}
+h3 { font-size: 1.1rem; margin: 1.8rem 0 0.75rem; color: var(--text); }
+h4 { font-size: 0.95rem; margin: 1.2rem 0 0.5rem; color: var(--muted); }
+p { margin-bottom: 1rem; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1rem 0;
+}
+.card-title { font-weight: 600; margin-bottom: 0.75rem; color: var(--accent); }
+.card-warn { border-left: 3px solid var(--orange); }
+.card-info { border-left: 3px solid var(--accent2); }
+.card-ok { border-left: 3px solid var(--green); }
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.88rem; }
+th, td { padding: 0.55rem 0.7rem; border: 1px solid var(--border); text-align: left; }
+th { background: var(--surface); color: var(--accent2); font-weight: 600; }
+tr:nth-child(even) { background: rgba(99,102,241,0.04); }
+code {
+  background: var(--surface2);
+  padding: 0.12rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.83em;
+  color: var(--green);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.2rem;
+  margin: 1rem 0;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: var(--muted);
+}
+.tag {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  margin-right: 0.25rem;
+  font-weight: 500;
+}
+.t-node { background: rgba(99,102,241,0.2); color: var(--accent); }
+.t-edge { background: rgba(34,211,238,0.2); color: var(--accent2); }
+.t-file { background: rgba(52,211,153,0.2); color: var(--green); }
+.t-new { background: rgba(251,191,36,0.2); color: var(--yellow); }
+ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+li { margin-bottom: 0.35rem; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.8rem; margin: 1rem 0; }
+@media (max-width: 700px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+.toc { list-style: none; margin-left: 0; columns: 2; }
+.toc li { margin-bottom: 0.25rem; }
+.toc a { color: var(--accent2); text-decoration: none; font-size: 0.9rem; }
+.toc a:hover { text-decoration: underline; }
+.flow { color: var(--accent2); font-weight: 600; }
+.dim { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>pi-knowledge 系统架构</h1>
+<p class="subtitle">存储 · 知识图谱 · 检索 · 维护 | 目标规模：1000+ 文档 | 2026-07</p>
+
+<ul class="toc">
+  <li><a href="#overview">0. 系统总览</a></li>
+  <li><a href="#storage">1. 存储层</a></li>
+  <li><a href="#graph">2. 知识图谱层</a></li>
+  <li><a href="#retrieval">3. 检索层</a></li>
+  <li><a href="#maintenance">4. 维护层</a></li>
+  <li><a href="#infra">5. 基础设施</a></li>
+  <li><a href="#files">6. 文件与模块映射</a></li>
+</ul>
+
+<!-- ==================== 0. OVERVIEW ==================== -->
+<h2 id="overview">0. 系统总览</h2>
+
+<pre>
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            pi-agent（宿主进程）                               │
+│  session_shutdown 事件 ──→ 触发知识扩展                                      │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         pi-knowledge 扩展                                    │
+│                                                                              │
+│  ┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │ 摄取管线  │───→│  存储层       │    │  检索层       │←───│  pi-agent    │  │
+│  │ (ingest) │    │  ParadeDB    │←──→│  三路并行     │    │  工具调用    │  │
+│  └──────────┘    │  + Neo4j     │    │  BM25/Vec/KG │    └──────────────┘  │
+│       │          └──────────────┘    └──────────────┘                       │
+│       │                 ↑                     ↑                              │
+│       ▼                 │                     │                              │
+│  ┌──────────┐    ┌──────────────┐    ┌──────────────┐                      │
+│  │ 知识图谱  │───→│  维护层       │───→│  社区摘要     │                      │
+│  │ 构建     │    │  (maintain)  │    │  (每日刷新)  │                      │
+│  └──────────┘    └──────────────┘    └──────────────┘                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+</pre>
+
+<div class="card card-info">
+  <div class="card-title">设计原则</div>
+  <ul>
+    <li><strong>图谱是纯派生索引</strong>：任何时候可从源文档完全重建，不是 source of truth</li>
+    <li><strong>影子 Markdown 是系统内部语言</strong>：所有格式统一转为 md 再处理</li>
+    <li><strong>增量优先</strong>：文档级增量抽取，社区级定期全量</li>
+    <li><strong>三路互补</strong>：BM25 精确匹配 / 向量语义相似 / 图谱结构遍历</li>
+  </ul>
+</div>
+
+<!-- ==================== 1. STORAGE ==================== -->
+<h2 id="storage">1. 存储层</h2>
+
+<h3>1.1 摄取管线（端到端）</h3>
+<pre>
+源文件（vault 目录）
+    │
+    ▼
+格式转换 ──→ 影子 Markdown（.derived/ 目录）
+    │              │
+    │              ▼
+    │         分块（chunkMarkdown）
+    │              │
+    │              ▼
+    │         向量化（doubao-embedding-vision-251215, 1024d）
+    │              │
+    │              ▼
+    │         写入 ParadeDB（documents + chunks 表）
+    │              │
+    │              ▼
+    └────→ 写入 graph_jobs（status=pending）──→ 图谱构建（异步）
+</pre>
+
+<h3>1.2 格式转换</h3>
+<table>
+  <tr><th>源格式</th><th>转换方式</th><th>输出</th><th>实现文件</th></tr>
+  <tr><td>PDF</td><td>pdfjs-dist/legacy（含 CMap）</td><td>逐页文本拼接</td><td><code>convert/pdf.ts</code></td></tr>
+  <tr><td>DOCX</td><td>mammoth（按段落）</td><td>Markdown 段落</td><td><code>convert/docx.ts</code></td></tr>
+  <tr><td>XLSX</td><td>ExcelJS → 每 sheet</td><td>Markdown 表格（| 分隔）</td><td><code>convert/xlsx.ts</code></td></tr>
+  <tr><td>CSV</td><td>parseCsv → rowsToMarkdownTable</td><td>Markdown 表格</td><td><code>convert/text.ts</code></td></tr>
+  <tr><td>PPTX</td><td>逐 slide 文本框</td><td>按页分段</td><td><code>convert/pptx.ts</code></td></tr>
+  <tr><td>TXT/MD</td><td>直读</td><td>原文</td><td><code>convert/text.ts</code></td></tr>
+  <tr><td>图片</td><td>VLM（doubao-seed-2-0）</td><td>图片描述文本</td><td><code>convert/image.ts</code></td></tr>
+</table>
+
+<div class="card">
+  <div class="card-title">影子文件（.derived/）</div>
+  <ul>
+    <li>路径：<code>D:\knowledge-vault\.derived\{相对路径}.md</code></li>
+    <li>用途：缓存昂贵转换、给 agent 提供全文读取、调试窗口</li>
+    <li>Session 不生成影子文件（独立管线，直接入库）</li>
+  </ul>
+</div>
+
+<h3>1.3 分块策略</h3>
+<table>
+  <tr><th>参数</th><th>值</th><th>含义</th></tr>
+  <tr><td>TARGET_CHARS</td><td>800</td><td>目标块大小（≈400-500 token）</td></tr>
+  <tr><td>MAX_CHARS</td><td>1600</td><td>硬上限，超过必切</td></tr>
+  <tr><td>MIN_CHARS</td><td>100</td><td>尾块小于此值并入前块</td></tr>
+</table>
+<p>切分逻辑：按标题行切章节 → 章节内按空行切段落 → 贪心聚合到目标大小 → 超长硬切。代码围栏内不切。</p>
+
+<h3>1.4 数据库 Schema（ParadeDB / PostgreSQL）</h3>
+<pre>
+-- 4 张表
+documents (id, source_path UNIQUE, kind, title, content_hash, shadow_path,
+           mtime_ms, meta JSONB, embedding_model, indexed_at)
+
+chunks    (id, doc_id FK, seq, heading, content, asset_path,
+           embedding vector(1024))
+
+graph_jobs (doc_id FK, status, attempts, last_error, updated_at)
+
+index_meta (key UNIQUE, value JSONB)
+
+-- 2 个索引
+BM25 全文索引: USING bm25 (id, content::pdb.jieba, heading::pdb.jieba)
+HNSW 向量索引: USING hnsw (embedding vector_cosine_ops)
+</pre>
+
+<h3>1.5 Session 摄取（增量尾部重做）</h3>
+<pre>
+~/.pi/agent/sessions/*.jsonl
+    │
+    ▼
+extractSessionText（只保留 user + assistant 文本）
+    │
+    ├── 首次：全量分块 → embed → 入库（meta.line_count = N）
+    │
+    └── 续聊（lines > meta.line_count）：
+         取新增行 → 提取文本 → 合并最后旧 chunk → 重新分块
+         → 删最后旧 chunk → 插入新 chunk → 更新 line_count
+</pre>
+<div class="card card-ok">
+  <div class="card-title">方案 C 优势</div>
+  <p>续聊时只重新 embed 尾部 1-2 个 chunk，前面的 chunk 不动。省 API 调用，保证分块边界正确。</p>
+</div>
+
+<!-- ==================== 2. GRAPH ==================== -->
+<h2 id="graph">2. 知识图谱层</h2>
+
+<h3>2.1 节点类型（13 种）</h3>
+<table>
+  <tr><th>标签</th><th>含义</th><th>典型来源</th><th>示例</th></tr>
+  <tr><td><span class="tag t-node">Person</span></td><td>人物</td><td>所有文档</td><td>王建国、李明辉</td></tr>
+  <tr><td><span class="tag t-node">Organization</span></td><td>组织/部门</td><td>合同、邮件</td><td>星辰科技、技术架构部</td></tr>
+  <tr><td><span class="tag t-node">Project</span></td><td>项目/专项</td><td>方案、会议</td><td>数据中台、去Oracle化</td></tr>
+  <tr><td><span class="tag t-node">Technology</span></td><td>通用技术/工具</td><td>技术方案</td><td>PostgreSQL、Apache Iceberg</td></tr>
+  <tr><td><span class="tag t-node">System</span></td><td>具体系统实例</td><td>运维、方案</td><td>星辰ERP V8.2、OA系统</td></tr>
+  <tr><td><span class="tag t-node">Document</span></td><td>文档/交付物</td><td>自动（每篇入库文档）</td><td>技术方案V2.3</td></tr>
+  <tr><td><span class="tag t-node">Event</span></td><td>事件/决策</td><td>会议、邮件</td><td>架构委员会评审、Q3迁移确认</td></tr>
+  <tr><td><span class="tag t-node">Role</span></td><td>角色/职位</td><td>合同、考勤</td><td>技术总监、DBA</td></tr>
+  <tr><td><span class="tag t-node">Metric</span></td><td>数值/指标</td><td>邮件、方案</td><td>预算480万、许可费380万/年</td></tr>
+  <tr><td><span class="tag t-node">Feature</span></td><td>功能/需求</td><td>PRD</td><td>用户登录、数据导出</td></tr>
+  <tr><td><span class="tag t-node">Milestone</span></td><td>里程碑/版本</td><td>计划、邮件</td><td>Q3上线、V2.3定稿</td></tr>
+  <tr><td><span class="tag t-node">Risk</span></td><td>风险/问题</td><td>会议、方案</td><td>序列同步停机风险</td></tr>
+  <tr><td><span class="tag t-node">Task</span></td><td>任务/Action Item</td><td>会议记录</td><td>修复精度映射、周五全量备份</td></tr>
+</table>
+
+<h3>2.2 关系类型（半开放）</h3>
+<div class="card">
+  <div class="card-title">推荐关系列表（LLM 优先使用，允许自创）</div>
+  <table>
+    <tr><th>关系</th><th>方向</th><th>语义</th></tr>
+    <tr><td><span class="tag t-edge">WORKS_AT</span></td><td>Person → Organization</td><td>任职于</td></tr>
+    <tr><td><span class="tag t-edge">HAS_ROLE</span></td><td>Person → Role</td><td>担任职位</td></tr>
+    <tr><td><span class="tag t-edge">REPORTS_TO</span></td><td>Person → Person</td><td>汇报给</td></tr>
+    <tr><td><span class="tag t-edge">PARTICIPATES</span></td><td>Person → Project</td><td>参与项目</td></tr>
+    <tr><td><span class="tag t-edge">RESPONSIBLE</span></td><td>Person → Project/Task</td><td>负责</td></tr>
+    <tr><td><span class="tag t-edge">DEPENDS_ON</span></td><td>Technology → Technology</td><td>技术依赖</td></tr>
+    <tr><td><span class="tag t-edge">DEPLOYED_ON</span></td><td>System → Technology</td><td>系统部署于</td></tr>
+    <tr><td><span class="tag t-edge">PART_OF</span></td><td>Feature → Project</td><td>功能属于项目</td></tr>
+    <tr><td><span class="tag t-edge">IMPLEMENTS</span></td><td>Feature → System/Technology</td><td>功能实现于</td></tr>
+    <tr><td><span class="tag t-edge">REQUIRES</span></td><td>Feature → Feature</td><td>需求依赖</td></tr>
+    <tr><td><span class="tag t-edge">AFFECTS</span></td><td>Risk → System/Project</td><td>风险影响</td></tr>
+    <tr><td><span class="tag t-edge">ASSIGNED_TO</span></td><td>Task → Person</td><td>任务分配给</td></tr>
+    <tr><td><span class="tag t-edge">BLOCKS</span></td><td>Risk/Task → Milestone/Task</td><td>阻塞</td></tr>
+    <tr><td><span class="tag t-edge">DECIDED_IN</span></td><td>Event → Document</td><td>决策记录于</td></tr>
+    <tr><td><span class="tag t-edge">HAS_METRIC</span></td><td>Project/System → Metric</td><td>拥有指标</td></tr>
+    <tr><td><span class="tag t-edge">VERSION_OF</span></td><td>Document → Document</td><td>版本演进</td></tr>
+    <tr><td><span class="tag t-edge">DERIVED_FROM</span></td><td>Document → Document</td><td>派生自（记忆→会话）</td></tr>
+    <tr><td><span class="tag t-edge">MENTIONS</span></td><td>Document → Entity</td><td>文档提及（通用）</td></tr>
+    <tr><td><span class="tag t-edge">RELATES_TO</span></td><td>Entity → Entity</td><td>兜底泛化关系</td></tr>
+  </table>
+  <p class="dim">维护任务定期归一化：合并语义重复的自创关系（"管理""领导""带" → REPORTS_TO）</p>
+</div>
+
+<h3>2.3 实体链接粒度</h3>
+<pre>
+抽取方式：文档级（全文送入 LLM，截断 8000 字）
+链接方式：Doc ──MENTIONS {chunks: [0, 3, 7]}──→ Entity
+
+含义：该文档的第 0、3、7 号 chunk 提到了此实体
+查询时：可通过 chunks 属性精确定位到段落，无需二次搜索
+</pre>
+
+<h3>2.4 构建流程</h3>
+<pre>
+文档入库 ──→ graph_jobs (pending)
+                  │
+         维护任务 / session_shutdown 触发
+                  │
+                  ▼
+         读文档全文（chunks 拼接，截断 8000 字）
+                  │
+                  ▼
+         LLM 抽取（doubao-seed-2-0-lite）
+         Prompt 要求输出：
+         {
+           "entities": [{"name", "type", "chunks": [0,3]}],
+           "relations": [{"source", "target", "relation"}]
+         }
+                  │
+                  ▼
+         写入 Neo4j：
+         - MERGE Entity 节点
+         - MERGE Doc ──MENTIONS {chunks}──→ Entity
+         - MERGE Entity ──REL {type, source_path}──→ Entity
+                  │
+                  ▼
+         graph_jobs.status = 'done'
+</pre>
+
+<h3>2.5 社区层（每日刷新）</h3>
+<pre>
+每日维护任务：
+    │
+    ├── 1. Leiden 社区检测（Neo4j GDS 或 JS 实现）
+    │       → 每个节点分配 community_id
+    │
+    ├── 2. 社区摘要生成
+    │       → 每个社区：收集成员实体 + 关系 → LLM 生成 200 字摘要
+    │       → 存入 Neo4j 节点 (Community {id, summary, member_count})
+    │
+    └── 3. 社区层级（可选）
+            → 社区间的跨社区边 → 二级聚类 → 更高层摘要
+</pre>
+<div class="card card-warn">
+  <div class="card-title">成本估算（1000 篇文档）</div>
+  <ul>
+    <li>实体抽取：1000 次 LLM 调用（增量，分散在每次入库时）</li>
+    <li>社区检测：纯算法，无 LLM 成本</li>
+    <li>社区摘要：~50 个社区 × 1 次 LLM = 50 次/天</li>
+    <li>实体对齐：~10 次/天（只处理新增冲突）</li>
+  </ul>
+</div>
+
+<h3>2.6 结构边（非语义）</h3>
+<table>
+  <tr><th>边</th><th>含义</th><th>用途</th></tr>
+  <tr><td>Doc → IN_DIR → Dir</td><td>目录层级</td><td>按文件夹浏览/过滤</td></tr>
+  <tr><td>Doc → MODIFIED_IN → Month</td><td>修改时间</td><td>时序查询</td></tr>
+  <tr><td>Doc → DERIVED_FROM → Doc</td><td>记忆派生自会话</td><td>溯源</td></tr>
+</table>
+
+<!-- ==================== 3. RETRIEVAL ==================== -->
+<h2 id="retrieval">3. 检索层</h2>
+
+<h3>3.1 三路并行架构</h3>
+<pre>
+用户 Query: "负责数据迁移的人，他的上级是谁？"
+    │
+    ├──────────────────┬──────────────────┬──────────────────┐
+    ▼                  ▼                  ▼                  │
+┌────────┐      ┌────────────┐      ┌────────────┐         │
+│  BM25  │      │   向量检索   │      │  图谱检索   │         │
+│        │      │            │      │            │         │
+│ jieba  │      │ embed(query)│      │ 实体匹配   │         │
+│ 分词   │      │ cosine sim │      │ + 图遍历   │         │
+│        │      │            │      │            │         │
+│ top-20 │      │ top-20     │      │ top-N docs │         │
+└───┬────┘      └─────┬──────┘      └─────┬──────┘         │
+    │                  │                    │                │
+    └──────────────────┴────────────────────┘                │
+                       │                                     │
+                       ▼                                     │
+              ┌─────────────────┐                            │
+              │   RRF 融合       │                            │
+              │ score = Σ 1/(60+rank) │                       │
+              └────────┬────────┘                            │
+                       │                                     │
+                       ▼                                     │
+              ┌─────────────────┐                            │
+              │  全局问题路由     │←── 社区摘要匹配            │
+              │  (可选第四路)    │                            │
+              └────────┬────────┘                            │
+                       │                                     │
+                       ▼                                     │
+                  最终排序结果 ──→ 返回给 pi-agent            │
+</pre>
+
+<h3>3.2 各路细节</h3>
+
+<div class="grid3">
+<div class="card">
+  <div class="card-title">BM25 路</div>
+  <ul>
+    <li>引擎：ParadeDB BM25 索引</li>
+    <li>分词：jieba（中文）</li>
+    <li>查询：<code>content ||| '词1 词2'</code></li>
+    <li>评分：<code>pdb.score()</code></li>
+    <li>返回：top-20 chunks</li>
+  </ul>
+</div>
+<div class="card">
+  <div class="card-title">向量路</div>
+  <ul>
+    <li>模型：doubao-embedding-vision-251215</li>
+    <li>维度：1024</li>
+    <li>距离：cosine</li>
+    <li>索引：HNSW</li>
+    <li>返回：top-20 chunks</li>
+  </ul>
+</div>
+<div class="card">
+  <div class="card-title">图谱路 <span class="tag t-new">重设计</span></div>
+  <ul>
+    <li>入口：query → jieba → 匹配 Entity.name</li>
+    <li>遍历：1-2 跳邻居</li>
+    <li>返回：关联文档的 chunks（通过 MENTIONS.chunks 定位）</li>
+    <li>全局：匹配 Community.summary</li>
+  </ul>
+</div>
+</div>
+
+<h3>3.3 图谱检索路径（新设计）</h3>
+<pre>
+Query: "王建国和李明辉什么关系？"
+    │
+    ▼
+jieba 分词: ["王建国", "李明辉", "关系"]
+    │
+    ▼
+实体匹配: MATCH (e:Entity) WHERE e.name IN ["王建国", "李明辉"]
+    │
+    ▼
+关系查询: MATCH (a)-[r:REL]->(b) WHERE a.name="王建国" AND b.name="李明辉"
+    │
+    ▼
+命中: (王建国)-[:REL {type:"管理"}]->(李明辉)
+    │
+    ▼
+溯源: r.source_path → 找到来源文档 → 返回对应 chunks
+</pre>
+
+<pre>
+Query: "这些文档整体在讲什么？"（全局问题）
+    │
+    ▼
+意图判断: 无具体实体 / 含"整体""概括""所有"等关键词
+    │
+    ▼
+社区摘要匹配: MATCH (c:Community) RETURN c.summary
+    │
+    ▼
+返回: 所有社区摘要拼接（或 top-N 相关社区）
+</pre>
+
+<h3>3.4 RRF 融合</h3>
+<div class="card">
+  <div class="card-title">Reciprocal Rank Fusion</div>
+  <p><code>fused_score(chunk) = Σ 1 / (K + rank_in_path)</code>，K = 60</p>
+  <ul>
+    <li>同一 chunk 被多路命中 → 分数叠加 → 排名靠前</li>
+    <li>不依赖各路原始分数的可比性</li>
+    <li>图谱路补充的结果：使用 fusedFloor × 0.9 作为保底分</li>
+  </ul>
+</div>
+
+<h3>3.5 过滤与降噪</h3>
+<ul>
+  <li><strong>泛化实体黑名单</strong>：公司名（"星辰科技"）不作为图谱扩展依据</li>
+  <li><strong>共享实体阈值</strong>：邻居文档需共享 ≥2 个实体才补充（避免单实体噪声）</li>
+  <li><strong>kind 过滤</strong>：session 类文档永不注入上下文（仅供检索兜底）</li>
+</ul>
+
+<!-- ==================== 4. MAINTENANCE ==================== -->
+<h2 id="maintenance">4. 维护层</h2>
+
+<h3>4.1 触发机制</h3>
+<table>
+  <tr><th>触发点</th><th>执行内容</th></tr>
+  <tr><td>session_shutdown</td><td>vault 增量扫描 + session 摄取 + graph_jobs 消费</td></tr>
+  <tr><td>每日定时</td><td>社区检测 + 摘要刷新 + 实体对齐 + 关系归一化</td></tr>
+  <tr><td>手动（工具调用）</td><td>全量重建 / 单文档重建 / 健康检查</td></tr>
+</table>
+
+<h3>4.2 维护任务清单</h3>
+<pre>
+maintain() 执行顺序：
+    │
+    ├── 1. vault 增量扫描
+    │       新增/修改 → 转换 → 分块 → embed → 入库 → graph_jobs
+    │       删除 → 清理 documents + chunks + Neo4j 派生边
+    │
+    ├── 2. Session 摄取
+    │       扫描 ~/.pi/agent/sessions/ → 增量尾部重做
+    │       消失的 session → 清理
+    │
+    ├── 3. 图谱构建（消费 graph_jobs）
+    │       pending → LLM 抽取 → 写 Neo4j → done
+    │       失败重试（最多 3 次）
+    │
+    ├── 4. 实体对齐（LLM 辅助）
+    │       找出疑似重复实体 → graph_merge_entities
+    │
+    ├── 5. 关系归一化 <span class="tag t-new">新增</span>
+    │       找出语义重复的关系类型 → 合并为推荐列表中的标准类型
+    │
+    ├── 6. 社区检测 + 摘要（每日）<span class="tag t-new">新增</span>
+    │       Leiden → 社区摘要 → 存入 Neo4j
+    │
+    ├── 7. 孤儿回收
+    │       无连接的 Entity / Dir / Month 节点删除
+    │
+    └── 8. 记忆提炼（可选）
+            会话 → LLM 提炼 → memories/ 目录 → 入库
+</pre>
+
+<h3>4.3 实体对齐策略</h3>
+<div class="card">
+  <div class="card-title">维护时 LLM 辅助合并</div>
+  <ol>
+    <li>找出疑似重复：名称编辑距离 &lt; 3，或一个包含另一个（"王建国" vs "王总"）</li>
+    <li>LLM 判断：给出两个实体各自出现的文档列表，问"是否同一实体？"</li>
+    <li>合并：保留最完整名称，MERGE 所有边到目标节点，删除源节点</li>
+  </ol>
+  <p class="dim">工具：<code>graph_entity_docs</code>（查文档）+ <code>graph_merge_entities</code>（执行合并）</p>
+</div>
+
+<h3>4.4 图谱重建保障</h3>
+<div class="card card-ok">
+  <div class="card-title">幂等性设计</div>
+  <ul>
+    <li>每条语义边携带 <code>source_path</code> → 文档更新时精确清除旧边再重建</li>
+    <li>MERGE 语义（存在则更新）→ 重复执行不产生重复数据</li>
+    <li>全量重建：清空 Neo4j → 所有 documents 重新入 graph_jobs → 消费</li>
+  </ul>
+</div>
+
+<!-- ==================== 5. INFRA ==================== -->
+<h2 id="infra">5. 基础设施</h2>
+
+<h3>5.1 服务依赖</h3>
+<table>
+  <tr><th>服务</th><th>用途</th><th>端口</th><th>部署</th></tr>
+  <tr><td>ParadeDB (PostgreSQL)</td><td>文档/chunk 存储 + BM25 + 向量</td><td>5433</td><td>Docker</td></tr>
+  <tr><td>Neo4j</td><td>知识图谱</td><td>7687 (Bolt)</td><td>Docker</td></tr>
+  <tr><td>ARK API (v3 端点)</td><td>Embedding + LLM 抽取</td><td>HTTPS</td><td>云端</td></tr>
+</table>
+
+<h3>5.2 模型分工</h3>
+<table>
+  <tr><th>模型</th><th>用途</th><th>调用时机</th></tr>
+  <tr><td>doubao-embedding-vision-251215</td><td>文本/图片向量化（1024d）</td><td>入库时</td></tr>
+  <tr><td>doubao-seed-2-0-lite</td><td>实体/关系抽取</td><td>图谱构建时</td></tr>
+  <tr><td>doubao-seed-2-0-lite</td><td>实体对齐判断</td><td>维护时</td></tr>
+  <tr><td>doubao-seed-2-0-lite</td><td>社区摘要生成</td><td>每日维护</td></tr>
+  <tr><td>doubao-seed-2-0（VLM）</td><td>图片描述</td><td>图片入库时</td></tr>
+</table>
+
+<h3>5.3 数据路径</h3>
+<pre>
+D:\knowledge-vault\              ← 用户文档（source of truth）
+├── test-dirty/                  ← 测试文档
+├── memories/                    ← 提炼记忆
+├── maintenance/                 ← 维护文档
+└── .derived/                    ← 影子 Markdown（派生，可重建）
+    ├── test-dirty/
+    └── sessions/                ← 会话影子（可选，统一备份用）
+
+~/.pi/agent/sessions/            ← pi-agent 会话 JSONL（vault 外）
+
+Docker volumes:
+├── paradedb_data/               ← PostgreSQL 数据
+└── neo4j_data/                  ← Neo4j 数据
+</pre>
+
+<!-- ==================== 6. FILES ==================== -->
+<h2 id="files">6. 文件与模块映射</h2>
+
+<table>
+  <tr><th>模块</th><th>文件</th><th>职责</th></tr>
+  <tr><td>摄取</td><td><code>src/core/ingest.ts</code></td><td>vault 增量扫描、格式转换、分块、embed、入库</td></tr>
+  <tr><td>Session 摄取</td><td><code>src/core/session-ingest.ts</code></td><td>JSONL → 文本 → 增量尾部重做</td></tr>
+  <tr><td>分块</td><td><code>src/core/chunk.ts</code></td><td>Markdown 感知分块</td></tr>
+  <tr><td>向量化</td><td><code>src/core/embedding.ts</code></td><td>ARK embedding API 调用</td></tr>
+  <tr><td>数据库</td><td><code>src/core/db.ts</code></td><td>ParadeDB 连接池、SQL 工具</td></tr>
+  <tr><td>检索</td><td><code>src/core/search.ts</code></td><td>三路并行 + RRF 融合</td></tr>
+  <tr><td>图谱构建</td><td><code>src/core/graph-build.ts</code></td><td>LLM 抽取 + Neo4j 写入</td></tr>
+  <tr><td>图谱连接</td><td><code>src/core/graph.ts</code></td><td>Neo4j driver、Cypher 执行</td></tr>
+  <tr><td>图谱探索</td><td><code>src/core/graph-explore.ts</code></td><td>实体/文档邻域漫游（供工具调用）</td></tr>
+  <tr><td>社区 <span class="tag t-new">新增</span></td><td><code>src/core/community.ts</code></td><td>Leiden 检测 + 摘要生成</td></tr>
+  <tr><td>维护</td><td><code>src/core/maintain.ts</code></td><td>维护任务编排（扫描+图谱+对齐+社区）</td></tr>
+  <tr><td>格式转换</td><td><code>src/core/convert/*.ts</code></td><td>PDF/DOCX/XLSX/CSV/PPTX/图片</td></tr>
+  <tr><td>配置</td><td><code>src/config.ts</code></td><td>knowledge.json 读取、路径解析</td></tr>
+  <tr><td>Schema</td><td><code>infra/schema.sql</code></td><td>ParadeDB 建表 + 索引 DDL</td></tr>
+</table>
+
+<div class="card card-info">
+  <div class="card-title">演进路线</div>
+  <ol>
+    <li><strong>当前</strong>：升级抽取 prompt（13 节点 + 半开放关系 + chunk 序号）</li>
+    <li><strong>下一步</strong>：图谱路改为独立并行路径（query → 实体匹配 → 遍历）</li>
+    <li><strong>之后</strong>：实现 community.ts（Leiden + 摘要）</li>
+    <li><strong>长期</strong>：关系归一化自动化、社区层级、全局问题路由</li>
+  </ol>
+</div>
+
+</div>
+</body>
+</html>

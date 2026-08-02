@@ -1,0 +1,108 @@
+"""Engine module contract: the KnowledgeBase Protocol + shared types.
+
+This is THE contract every engine implementation must satisfy. Adapters
+(cli.py, mcp.py) and consumers (agent engine_client, frontend BFF) program
+against these types, never against a concrete backend.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Protocol
+
+
+class NotSupported(Exception):
+    """Raised by an optional KnowledgeBase method the backend does not support."""
+
+
+@dataclass
+class Capabilities:
+    """Declares what a backend supports. Optional methods raise NotSupported."""
+    graph: bool = False
+    partial_update: bool = False
+    multimodal: bool = False
+    namespace: bool = False
+
+
+@dataclass
+class IngestSource:
+    """A file to ingest: either raw bytes (name+data) or a path on disk."""
+    name: str
+    data: bytes = b""
+    path: Path | None = None
+
+
+@dataclass
+class DocumentRef:
+    id: str
+    title: str
+    file_type: str
+    status: str
+    overview: str = ""
+    error_msg: str | None = None
+
+
+@dataclass
+class RecallRequest:
+    query: str
+    top_k: int = 20
+
+
+@dataclass
+class RecallChunk:
+    doc_id: str
+    title: str
+    chunk_text: str
+    reranker_score: float
+    vector_score: float
+
+
+@dataclass
+class RecallResult:
+    chunks: list[RecallChunk] = field(default_factory=list)
+    related_entities: list[dict] = field(default_factory=list)
+    related_docs: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class GraphNode:
+    name: str
+    type: str
+    description: str = ""
+    sources: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class GraphLink:
+    source: str
+    target: str
+    type: str
+    description: str = ""
+
+
+@dataclass
+class GraphData:
+    nodes: list[GraphNode] = field(default_factory=list)
+    links: list[GraphLink] = field(default_factory=list)
+
+
+class KnowledgeBase(Protocol):
+    """Stable engine contract. Engine = no agents; LLM only for embeddings,
+    chunk summaries (overview), and graph entity/relation extraction."""
+
+    capabilities: Capabilities
+
+    async def ingest(self, source: IngestSource) -> DocumentRef: ...
+    async def reingest(self, doc_id: str) -> DocumentRef: ...
+    async def remove(self, doc_id: str) -> None: ...
+    async def recall(self, request: RecallRequest) -> RecallResult: ...
+    async def get_graph(self, entity: str | None = None) -> GraphData: ...
+    async def get_neighbors(self, entity: str) -> GraphData: ...
+    async def list_documents(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        file_type: str | None = None,
+        status: str | None = None,
+    ) -> dict: ...
+    async def get_document(self, doc_id: str) -> dict | None: ...

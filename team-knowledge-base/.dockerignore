@@ -1,0 +1,28 @@
+# Keep the build context small. Only pyproject.toml, uv.lock, src/, config/,
+# and the SPA client source are needed (see COPY lines in Containerfile).
+
+# VCS
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node - the image builds the SPA itself; never copy host node_modules/dist.
+**/node_modules/
+**/dist/
+
+# Secrets / env - never bake into the image (compose injects them at runtime).
+.env
+.env.example
+
+# Not needed in the runtime image.
+docs/
+tests/
+uploads/

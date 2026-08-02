@@ -1,0 +1,5 @@
+# Files that are gitignored but needed in every git worktree. A worktree is a
+# fresh checkout, so without these it cannot run the app. One path/glob per
+# line; blank lines and lines starting with # are ignored.
+CLAUDE.local.md
+.env

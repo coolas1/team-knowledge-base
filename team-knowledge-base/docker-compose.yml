@@ -1,0 +1,100 @@
+# Team Knowledge Base - backing services + webapp.
+#
+# Postgres+pgvector and Neo4j are provisioned here; Ollama is external (set
+# OLLAMA_BASE_URL in .env). The webapp (BFF + built SPA) is built from
+# Containerfile and runs the engine in-process, connecting to the backing
+# services over the compose network.
+#
+# All credentials/ports are sourced from .env, which compose loads
+# automatically for variable substitution (and the app loads via pydantic-settings).
+
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:pg16
+    container_name: kb-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-knowledge_base}
+      POSTGRES_USER: ${POSTGRES_USER:-kb_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kb_pass}
+    ports:
+      # host port (from .env) -> container's fixed 5432
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kb_user} -d ${POSTGRES_DB:-knowledge_base}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  neo4j:
+    image: docker.io/library/neo4j:5
+    container_name: kb-neo4j
+    environment:
+      # Initial password is set only on first init of an empty /data volume.
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-password}
+    ports:
+      # bolt (app) + browser (http UI). Host ports come from .env; keep the bolt
+      # port consistent with the port embedded in NEO4J_URI.
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD:-password} 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  webapp:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: team-kb-webapp:latest
+    container_name: kb-webapp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      # Inside the compose network the backing services are reached by name on
+      # their internal ports (5432 / 7687), NOT the host-published ports.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      # Ollama is external; the container reaches it via the host network.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      # Chat/analysis LLM (was in model_config.yaml; now env-driven).
+      LLM_PROVIDER: ${LLM_PROVIDER:-todo}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY}
+      # Reranker (search gatekeeper).
+      RERANKER_PROVIDER: ${RERANKER_PROVIDER:-none}
+      RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+      RERANKER_BASE_URL: ${RERANKER_BASE_URL:-}
+      RERANKER_API_KEY: ${RERANKER_API_KEY}
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8000"
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      # Reuse the host HuggingFace cache: the reranker loads
+      # BAAI/bge-reranker-v2-m3 in offline mode, so the model must already be
+      # cached on the host (it is, if the host app has run search).
+      # ${HOME} is read from your shell. (podman-compose 1.x can't expand $HOME
+      # inside a .env value or a ${VAR:-default}, so reference it directly here.)
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  neo4jdata:

@@ -1,0 +1,19 @@
+{
+  "name": "pi-tkb-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi extension: agentic RAG via team-knowledge-base MCP server",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "typescript": "7.0.2"
+  }
+}

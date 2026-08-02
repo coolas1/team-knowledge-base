@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识图谱解读：从问题到架构</title>
+<style>
+:root {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --border: #e8e8ed;
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --accent: #5856d6;
+  --accent-light: #ededfc;
+  --teal: #0d9488;
+  --teal-light: #ecfdf5;
+  --orange: #ea580c;
+  --orange-light: #fff7ed;
+  --blue: #2563eb;
+  --blue-light: #eff6ff;
+  --radius: 16px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.8;
+  padding: 3rem 1.5rem;
+}
+.container { max-width: 820px; margin: 0 auto; }
+
+/* Header */
+.hero {
+  text-align: center;
+  margin-bottom: 4rem;
+  padding: 3rem 2rem;
+  background: linear-gradient(160deg, #667eea11, #764ba211);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 2.2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.75rem;
+  background: linear-gradient(135deg, var(--accent), #764ba2);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.hero p { color: var(--muted); font-size: 1.05rem; }
+
+/* Section */
+section { margin-bottom: 3.5rem; }
+.section-tag {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.25rem 0.75rem;
+  border-radius: 99px;
+  margin-bottom: 0.75rem;
+}
+.tag-purple { background: var(--accent-light); color: var(--accent); }
+.tag-teal { background: var(--teal-light); color: var(--teal); }
+.tag-orange { background: var(--orange-light); color: var(--orange); }
+.tag-blue { background: var(--blue-light); color: var(--blue); }
+
+h2 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.25rem; }
+h3 { font-size: 1.1rem; font-weight: 600; margin: 1.75rem 0 0.75rem; color: var(--text); }
+p { margin-bottom: 1rem; color: #3a3a3c; }
+
+/* Problem cards */
+.problem-grid { display: grid; gap: 1rem; }
+.problem-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  display: grid;
+  grid-template-columns: 2.5rem 1fr;
+  gap: 1rem;
+  align-items: start;
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+.problem-card:hover {
+  box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+  transform: translateY(-2px);
+}
+.problem-icon {
+  width: 2.5rem; height: 2.5rem;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.2rem;
+}
+.icon-purple { background: var(--accent-light); }
+.icon-teal { background: var(--teal-light); }
+.icon-orange { background: var(--orange-light); }
+.icon-blue { background: var(--blue-light); }
+.problem-card h4 { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.35rem; }
+.problem-card .example {
+  font-size: 0.88rem;
+  color: var(--muted);
+  font-style: italic;
+  margin-bottom: 0.35rem;
+}
+.problem-card .desc { font-size: 0.88rem; color: #555; }
+
+/* Model section */
+.model-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+}
+.model-block h4 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--accent);
+}
+code {
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 0.82rem;
+  background: #f4f4f5;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+pre {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  margin: 0.75rem 0 1rem;
+}
+pre .key { color: #89b4fa; }
+pre .str { color: #a6e3a1; }
+pre .comment { color: #6c7086; font-style: italic; }
+
+/* Callout */
+.callout {
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+.callout-info { background: var(--blue-light); border-left: 3px solid var(--blue); }
+.callout-warn { background: var(--orange-light); border-left: 3px solid var(--orange); }
+.callout-tip { background: var(--teal-light); border-left: 3px solid var(--teal); }
+.callout strong { display: block; margin-bottom: 0.25rem; }
+
+/* Pipeline */
+.pipeline {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 1.5rem 0;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.pipe-step {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.pipe-arrow { color: var(--muted); margin: 0 0.4rem; font-size: 0.9rem; }
+
+/* List */
+.detail-list { margin: 0.75rem 0 1rem 1.25rem; }
+.detail-list li {
+  margin-bottom: 0.6rem;
+  font-size: 0.9rem;
+  color: #3a3a3c;
+}
+.detail-list li strong { color: var(--text); }
+
+/* Compare table */
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin: 1rem 0;
+  background: var(--surface);
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.compare-table th {
+  background: #f8f8fa;
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.compare-table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.compare-table tr:last-child td { border-bottom: none; }
+
+/* Layer diagram */
+.layers { margin: 1.5rem 0; }
+.layer {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.layer-box {
+  flex: 1;
+  padding: 0.7rem 1.25rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-align: center;
+}
+.layer-label {
+  width: 5rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-align: right;
+  padding-right: 0.75rem;
+  flex-shrink: 0;
+}
+.layer-arrow {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin: 0.15rem 0;
+  padding-left: 5rem;
+}
+.l3 { background: #ede9fe; color: #5b21b6; }
+.l2 { background: #dbeafe; color: #1d4ed8; }
+.l1 { background: #d1fae5; color: #065f46; }
+.l0 { background: #f3f4f6; color: #374151; }
+
+/* Footer */
+.footer {
+  text-align: center;
+  margin-top: 4rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="hero">
+  <h1>知识图谱解读</h1>
+  <p>从问题出发，理解 GraphRAG 的核心模型、构建管线与主流架构</p>
+</div>
+
+<!-- Section 1: Problems -->
+<section>
+  <span class="section-tag tag-purple">Part 1</span>
+  <h2>知识图谱解决什么问题？</h2>
+  <p>传统 RAG 把文档切成 chunk，用向量相似度检索。这在"答案就在某一个 chunk 里"时很好用，但遇到以下场景就力不从心：</p>
+
+  <div class="problem-grid">
+    <div class="problem-card">
+      <div class="problem-icon icon-purple">&#x1F4C4;</div>
+      <div>
+        <h4>跨文档聚合</h4>
+        <div class="example">"王建国在所有文档里分别做了什么？"</div>
+        <div class="desc">答案分散在多个文档中，单次向量检索只能命中部分片段，无法给出完整画像。</div>
+      </div>
+    </div>
+    <div class="problem-card">
+      <div class="problem-icon icon-teal">&#x1F517;</div>
+      <div>
+        <h4>关系多跳</h4>
+        <div class="example">"负责数据迁移的人，他的上级是谁？"</div>
+        <div class="desc">需要搜索两次：先找到负责数据迁移的人，再找到这个人的上级。向量检索无法做链式推理。</div>
+      </div>
+    </div>
+    <div class="problem-card">
+      <div class="problem-icon icon-orange">&#x1F30D;</div>
+      <div>
+        <h4>全局概括</h4>
+        <div class="example">"这些文档整体在讲什么事？有哪些主要主题？"</div>
+        <div class="desc">没有任何一个 chunk 能回答这个问题。需要对全部文档进行高度概括。GraphRAG 的做法：把实体聚类成"社区"，给每个社区写摘要，查询时匹配社区摘要。</div>
+      </div>
+    </div>
+    <div class="problem-card">
+      <div class="problem-icon icon-blue">&#x1F9E9;</div>
+      <div>
+        <h4>实体消歧聚合</h4>
+        <div class="example">"王建国、王总、王经理分别做了什么？"</div>
+        <div class="desc">其实是同一个人，但纯 chunk 检索会把命中分散到不同片段。图谱通过实体对齐把别名合并为同一节点，一次查询即可聚合该人全部相关信息。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Section 2: Core Model -->
+<section>
+  <span class="section-tag tag-teal">Part 2</span>
+  <h2>核心模型</h2>
+
+  <div class="model-block">
+    <h4>三元组 (Triple)</h4>
+    <p style="margin:0">图的最小单元：<code>(头实体, 关系, 尾实体)</code>。例如 <code>(张三, WORKS_AT, 万科物业)</code>。</p>
+  </div>
+
+  <div class="model-block">
+    <h4>Schema 约束（预定义类型）</h4>
+    <p style="margin-bottom:0.5rem">预定义的实体类型和关系类型，作为 LLM 抽取时的候选引导：</p>
+<pre><span class="key">entity_types</span>:
+  core: [Person, Company, Building, Facility, Space, WorkOrder, Complaint, ...]
+
+<span class="key">relation_types</span>:
+  core: [WORKS_AT, MANAGES, LOCATED_IN, BELONGS_TO, ASSIGNED_TO, ...]</pre>
+    <div class="callout callout-info">
+      <strong>术语澄清：Schema 约束 vs 本体 (Ontology)</strong>
+      这里更准确的叫法是"Schema 约束"而非严格意义上的"本体"。<br>
+      <b>Schema 约束</b>：预定义 entity_types / relation_types 列表，作为 LLM 抽取时的候选引导，不具备形式化推理能力。（实际在用的）<br>
+      <b>本体 (Ontology)</b>：带继承层级、基数约束、推理规则的形式化模型（OWL/RDF），支持自动推导隐含关系。（学术含义，暂未用到）
+    </div>
+  </div>
+
+  <div class="model-block">
+    <h4>实例 (Instance)</h4>
+    <p style="margin-bottom:0.5rem">实际的实体和关系数据：</p>
+<pre>{
+  <span class="key">"entities"</span>: [
+    {<span class="key">"name"</span>: <span class="str">"张三"</span>, <span class="key">"type"</span>: <span class="str">"Person"</span>, <span class="key">"description"</span>: <span class="str">"3栋业主"</span>},
+    {<span class="key">"name"</span>: <span class="str">"万科物业"</span>, <span class="key">"type"</span>: <span class="str">"Company"</span>, <span class="key">"description"</span>: <span class="str">"园区物业公司"</span>}
+  ],
+  <span class="key">"relations"</span>: [
+    {<span class="key">"from"</span>: <span class="str">"张三"</span>, <span class="key">"to"</span>: <span class="str">"万科物业"</span>, <span class="key">"type"</span>: <span class="str">"COMPLAINS_ABOUT"</span>, <span class="key">"desc"</span>: <span class="str">"投诉电梯故障"</span>}
+  ]
+}</pre>
+  </div>
+
+  <div class="model-block">
+    <h4>子图 & 社区</h4>
+    <p style="margin:0"><b>子图</b>：完整图中的一块（如"3栋相关的所有实体和关系"）。<br><b>社区</b>：紧密连接的节点簇，由聚类算法（如 Leiden）自动发现，代表一个主题领域。</p>
+  </div>
+</section>
+
+<!-- Section 3: Pipeline -->
+<section>
+  <span class="section-tag tag-orange">Part 3</span>
+  <h2>构建管线</h2>
+
+  <div class="pipeline">
+    <div class="pipe-step">原始文档</div><span class="pipe-arrow">&rarr;</span>
+    <div class="pipe-step">文本提取</div><span class="pipe-arrow">&rarr;</span>
+    <div class="pipe-step">实体/关系抽取</div><span class="pipe-arrow">&rarr;</span>
+    <div class="pipe-step">图写入</div><span class="pipe-arrow">&rarr;</span>
+    <div class="pipe-step">后处理</div>
+  </div>
+
+  <h3>实体/关系抽取</h3>
+  <ul class="detail-list">
+    <li><b>实体抽取</b>：使用 LLM，prompt 要求输出 JSON 格式，包含 name / type / description</li>
+    <li><b>关系抽取</b>：关系 = 两个实体之间的有向边。采用"预定义 + LLM 半开放自由发挥"的策略，既保证核心关系可控，又不遗漏长尾关系</li>
+    <li><b>实体对齐</b>：王建国 = 王总，识别为同一人，合并为一个节点</li>
+  </ul>
+
+  <div class="callout callout-warn">
+    <strong>已知局限：同名消歧</strong>
+    当前对齐只处理"别名合并"（王建国 = 王总），尚未处理"同名消歧"（两个不同人都叫张伟，出现在不同文档中）。目前靠 LLM 抽取时附带的 description + type 字段做隐式区分，没有显式消歧模块。
+  </div>
+
+  <h3>图写入与后处理</h3>
+  <ul class="detail-list">
+    <li><b>Merge 语义</b>：防止出现两个相同节点。先查找"张三"这个节点，没有的话再新建</li>
+    <li><b>溯源</b>：来源信息挂在 relation 上，每一个 relation 对应一个来源文档。文档更新时可精确清除对应边</li>
+    <li><b>级联删除</b>：文档删除后，清除其对应的 relation，再无连接的孤立实体节点一并删除</li>
+  </ul>
+</section>
+
+<!-- Section 4: Architecture -->
+<section>
+  <span class="section-tag tag-blue">Part 4</span>
+  <h2>主流架构对比</h2>
+
+  <h3>GraphRAG：分层聚合</h3>
+  <p>核心思想：建立图的多层聚合，回答"整体讲什么"的问题。</p>
+
+  <div class="layers">
+    <div class="layer"><div class="layer-label">Layer 3</div><div class="layer-box l3">全局摘要 —"整个语料库的主题"</div></div>
+    <div class="layer-arrow">&uarr; 聚合</div>
+    <div class="layer"><div class="layer-label">Layer 2</div><div class="layer-box l2">社区摘要 —"数据中台相关的所有信息概括"</div></div>
+    <div class="layer-arrow">&uarr; 聚类（Leiden 算法）</div>
+    <div class="layer"><div class="layer-label">Layer 1</div><div class="layer-box l1">实体 + 关系（基础图）</div></div>
+    <div class="layer-arrow">&uarr; 抽取</div>
+    <div class="layer"><div class="layer-label">Layer 0</div><div class="layer-box l0">原始文本 chunks</div></div>
+  </div>
+
+  <h3>LightRAG：双表索引</h3>
+  <p>在 GraphRAG 基础上轻量化，建了两张索引表解决两类问题：</p>
+
+  <table class="compare-table">
+    <tr><th>索引表</th><th>解决的问题</th><th>工作方式</th></tr>
+    <tr>
+      <td><b>实体表</b></td>
+      <td>简单局部问题<br><span style="color:var(--muted);font-size:0.8rem">"张三负责什么？"</span></td>
+      <td>命中"张三"这一行，顺带关联出"项目X"</td>
+    </tr>
+    <tr>
+      <td><b>关系表</b></td>
+      <td>抽象主题问题<br><span style="color:var(--muted);font-size:0.8rem">"反映了什么技术决策和花钱情况？"</span></td>
+      <td>拿"技术决策""花钱"等抽象主题词，在关系表的标签里匹配，找到对应关系和实体</td>
+    </tr>
+  </table>
+
+  <h3>核心差异</h3>
+  <table class="compare-table">
+    <tr><th></th><th>GraphRAG</th><th>LightRAG</th></tr>
+    <tr>
+      <td><b>全局问题</b></td>
+      <td>社区摘要（Leiden 聚类 &rarr; LLM 生成）</td>
+      <td>关系表标签匹配（抽象主题词 &rarr; 关系 &rarr; 实体）</td>
+    </tr>
+    <tr>
+      <td><b>局部问题</b></td>
+      <td>实体邻域子图遍历</td>
+      <td>实体表行命中 &rarr; 顺带关联</td>
+    </tr>
+    <tr>
+      <td><b>构建代价</b></td>
+      <td>社区构建贵（O(n) 次 LLM 调用）</td>
+      <td>索引构建轻，但关系标签质量依赖抽取效果</td>
+    </tr>
+  </table>
+</section>
+
+<div class="footer">
+  Knowledge Graph Notes &middot; 2026
+</div>
+
+</div>
+</body>
+</html>

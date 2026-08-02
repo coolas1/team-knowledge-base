@@ -1,0 +1,54 @@
+# pi-knowledge 索引基础设施
+# 所有数据均为派生索引，可随时 down -v 后从 vault 重建。
+#
+# 启动: docker compose -p pi-knowledge up -d
+# 停止: docker compose -p pi-knowledge down
+# 重置: docker compose -p pi-knowledge down -v  (删除全部索引数据)
+#
+# 端口说明（避开本机已占用端口）：
+#   ParadeDB  -> localhost:5433  (WeKnora-postgres 等可能占 5432)
+#   Neo4j UI  -> localhost:7475  (WeKnora-neo4j 占 7474)
+#   Neo4j Bolt-> localhost:7688  (WeKnora-neo4j 占 7687)
+
+services:
+  paradedb:
+    image: paradedb/paradedb:v0.22.2-pg17
+    container_name: pi-knowledge-paradedb
+    restart: unless-stopped
+    ports:
+      - "${PI_KNOWLEDGE_PG_PORT:-5433}:5432"
+    environment:
+      POSTGRES_USER: ${PI_KNOWLEDGE_PG_USER:-pi}
+      POSTGRES_PASSWORD: ${PI_KNOWLEDGE_PG_PASSWORD:-pi_knowledge}
+      POSTGRES_DB: ${PI_KNOWLEDGE_PG_DB:-knowledge}
+    volumes:
+      - paradedb-data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PI_KNOWLEDGE_PG_USER:-pi} -d ${PI_KNOWLEDGE_PG_DB:-knowledge}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  neo4j:
+    image: neo4j:2025.10.1
+    container_name: pi-knowledge-neo4j
+    restart: unless-stopped
+    ports:
+      - "${PI_KNOWLEDGE_NEO4J_HTTP_PORT:-7475}:7474"
+      - "${PI_KNOWLEDGE_NEO4J_BOLT_PORT:-7688}:7687"
+    environment:
+      NEO4J_AUTH: neo4j/${PI_KNOWLEDGE_NEO4J_PASSWORD:-pi_knowledge}
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_server_memory_pagecache_size: 512M
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  paradedb-data:
+  neo4j-data:

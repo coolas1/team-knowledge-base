@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识图谱：从第一性原理到工程实践</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --border: #2a2d3a;
+  --text: #e4e4e7;
+  --muted: #9ca3af;
+  --accent: #6366f1;
+  --accent2: #22d3ee;
+  --green: #34d399;
+  --orange: #fb923c;
+  --red: #f87171;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  padding: 2rem;
+}
+.container { max-width: 960px; margin: 0 auto; }
+h1 {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.subtitle { color: var(--muted); margin-bottom: 3rem; font-size: 0.95rem; }
+h2 {
+  font-size: 1.4rem;
+  margin: 3rem 0 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--accent2);
+}
+h3 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; color: var(--text); }
+p { margin-bottom: 1rem; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1rem 0;
+}
+.card-title {
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  color: var(--accent);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+th, td {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+th { background: var(--surface); color: var(--accent2); font-weight: 600; }
+tr:nth-child(even) { background: rgba(99,102,241,0.05); }
+code {
+  background: var(--surface);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.85em;
+  color: var(--green);
+}
+.diagram {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--muted);
+}
+.highlight { color: var(--accent2); }
+.tag {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  margin-right: 0.3rem;
+}
+.tag-node { background: rgba(99,102,241,0.2); color: var(--accent); }
+.tag-edge { background: rgba(34,211,238,0.2); color: var(--accent2); }
+.tag-prop { background: rgba(52,211,153,0.2); color: var(--green); }
+ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+li { margin-bottom: 0.4rem; }
+.compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+@media (max-width: 700px) { .compare { grid-template-columns: 1fr; } }
+.compare .card { margin: 0; }
+.section-num {
+  display: inline-block;
+  width: 2rem;
+  height: 2rem;
+  line-height: 2rem;
+  text-align: center;
+  background: var(--accent);
+  color: white;
+  border-radius: 50%;
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin-right: 0.5rem;
+}
+.toc { list-style: none; margin-left: 0; }
+.toc li { margin-bottom: 0.3rem; }
+.toc a { color: var(--accent2); text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>知识图谱：从第一性原理到工程实践</h1>
+<p class="subtitle">面向 RAG 系统开发者的完整认知框架 | 2026-07</p>
+
+<ul class="toc">
+  <li><a href="#s1">1. 第一性原理：为什么需要知识图谱</a></li>
+  <li><a href="#s2">2. 核心模型：图的结构与概念</a></li>
+  <li><a href="#s3">3. 构建管线：从原始文本到图</a></li>
+  <li><a href="#s4">4. 数据流动：构建期 vs 查询期</a></li>
+  <li><a href="#s5">5. 主流架构：GraphRAG / LightRAG / 传统 KG</a></li>
+  <li><a href="#s6">6. 边界与局限：什么不能做</a></li>
+  <li><a href="#s7">7. 与你的系统的映射</a></li>
+</ul>
+
+<!-- ============ Section 1 ============ -->
+<h2 id="s1"><span class="section-num">1</span>第一性原理：为什么需要知识图谱</h2>
+
+<h3>从人类认知出发</h3>
+<p>人脑存储知识的方式不是"一段一段文本"，而是<strong>概念 + 关系</strong>的网络。当你想到"王建国"，你脑中浮现的不是某段文字，而是：</p>
+<div class="card">
+  <div class="card-title">人脑中的"王建国"</div>
+  <p>王建国 → 是技术总监 → 在星辰科技 → 管理李明辉和张薇 → 负责数据中台项目 → 向陈志远汇报</p>
+  <p style="color:var(--muted)">这是一张<strong>网</strong>，不是一段<strong>文</strong>。</p>
+</div>
+
+<h3>向量检索的根本局限</h3>
+<p>向量检索的本质是：<strong>把 query 和 chunk 都压缩成一个点，然后量距离。</strong></p>
+<table>
+  <tr><th>能力</th><th>向量检索</th><th>知识图谱</th></tr>
+  <tr><td>找"语义相似"的文本</td><td>擅长</td><td>不适用</td></tr>
+  <tr><td>跨文档实体聚合</td><td>受 top-K 限制，覆盖不全</td><td>一次遍历全部关联文档</td></tr>
+  <tr><td>多跳推理（A→B→C）</td><td>无法保证中间节点被召回</td><td>沿边遍历，天然支持</td></tr>
+  <tr><td>全局概括（"整体讲什么"）</td><td>不可能（只能看局部）</td><td>社区摘要可回答</td></tr>
+  <tr><td>关系型问答（"谁管谁"）</td><td>碰运气（取决于文本表述）</td><td>直接查边</td></tr>
+</table>
+
+<div class="card">
+  <div class="card-title">第一性原理总结</div>
+  <p><strong>文本是知识的投影，图是知识的结构。</strong>向量检索在投影空间里找相似，知识图谱在结构空间里做遍历。两者互补，不替代。</p>
+</div>
+
+<!-- ============ Section 2 ============ -->
+<h2 id="s2"><span class="section-num">2</span>核心模型：图的结构与概念</h2>
+
+<h3>属性图（Property Graph）</h3>
+<p>工业界主流模型。三个基本元素：</p>
+
+<div class="card">
+  <span class="tag tag-node">节点 Node</span> 实体（人、组织、概念、文档）<br>
+  <span class="tag tag-edge">边 Edge</span> 关系（负责、属于、依赖、提及）<br>
+  <span class="tag tag-prop">属性 Property</span> 键值对（name="王建国", type="person"）
+</div>
+
+<div class="diagram">
+┌─────────────────────────────────────────────────────────────────┐
+│                        属性图示例                                 │
+│                                                                   │
+│  (Doc:邮件.pdf)──MENTIONS──→(Entity:王建国 {type:person})        │
+│       │                          │                                │
+│    IN_DIR                    REL:管理                             │
+│       ↓                          ↓                                │
+│  (Dir:test-dirty)     (Entity:李明辉 {type:person})              │
+│                              │                                    │
+│                          REL:负责                                 │
+│                              ↓                                    │
+│                     (Entity:数据迁移 {type:project})              │
+│                                                                   │
+│  节点有标签(Label)：Doc, Entity, Dir, Month                      │
+│  边有类型(Type)：MENTIONS, REL, IN_DIR, MODIFIED_IN              │
+│  边可携带属性：REL {type:"管理", source_path:"会议记录.txt"}      │
+└─────────────────────────────────────────────────────────────────┘
+</div>
+
+<h3>关键概念</h3>
+<table>
+  <tr><th>概念</th><th>含义</th><th>类比</th></tr>
+  <tr><td>Schema / Ontology</td><td>图的"类型系统"：允许哪些节点类型、边类型</td><td>数据库的 DDL</td></tr>
+  <tr><td>三元组 (Triple)</td><td>(头实体, 关系, 尾实体) — 最小知识单元</td><td>一行数据</td></tr>
+  <tr><td>本体 (Ontology)</td><td>领域概念的形式化定义（"人可以有上级"）</td><td>ER 图</td></tr>
+  <tr><td>实例 (Instance)</td><td>具体数据（"王建国的上级是陈志远"）</td><td>表中的一行</td></tr>
+  <tr><td>子图 (Subgraph)</td><td>从完整图中切出的一块</td><td>JOIN 查询结果</td></tr>
+  <tr><td>社区 (Community)</td><td>紧密连接的节点簇（GraphRAG 核心概念）</td><td>聚类结果</td></tr>
+</table>
+
+<h3>与关系数据库的本质区别</h3>
+<div class="compare">
+  <div class="card">
+    <div class="card-title">关系数据库</div>
+    <p>数据存在<strong>表</strong>里，关系靠 JOIN 临时计算。<br>3 跳 JOIN 性能指数下降。</p>
+  </div>
+  <div class="card">
+    <div class="card-title">图数据库</div>
+    <p>关系<strong>物理存储</strong>为指针。<br>遍历 N 跳 = 跟 N 次指针，O(1) 每跳。<br>天然适合"沿着关系走"的查询。</p>
+  </div>
+</div>
+
+<!-- ============ Section 3 ============ -->
+<h2 id="s3"><span class="section-num">3</span>构建管线：从原始文本到图</h2>
+
+<div class="diagram">
+原始文档 ──→ 文本提取 ──→ 实体/关系抽取 ──→ 图写入 ──→ 后处理
+  (PDF/DOCX)    (转换层)      (LLM / NER)     (Neo4j)    (去重/合并)
+</div>
+
+<h3>Step 1: 实体抽取（NER / LLM）</h3>
+<div class="card">
+  <div class="card-title">传统 NER（命名实体识别）</div>
+  <p>用训练好的模型（BERT-NER、spaCy）标注文本中的人名、地名、组织名。<br>
+  <strong>优点：</strong>快、便宜、确定性<br>
+  <strong>缺点：</strong>只能识别预定义类型，无法抽取关系，无法理解上下文</p>
+</div>
+<div class="card">
+  <div class="card-title">LLM 抽取（你当前的方式）</div>
+  <p>把文本发给大模型，prompt 要求输出 JSON：<code>{"entities":[...], "relations":[...]}</code><br>
+  <strong>优点：</strong>零训练、可抽取任意关系、理解上下文<br>
+  <strong>缺点：</strong>慢、贵、不确定性（同一文本两次抽取结果可能不同）</p>
+</div>
+
+<h3>Step 2: 关系抽取</h3>
+<p>关系 = 两个实体之间的有向边。关键设计决策：</p>
+<ul>
+  <li><strong>关系类型是开放还是封闭？</strong> 封闭（你当前：限定 person/org/project/tech/concept）vs 开放（任意动词短语）</li>
+  <li><strong>关系粒度：</strong>"王建国管理李明辉" vs "王建国是李明辉的上级" — 同一事实，不同表述</li>
+  <li><strong>边属性：</strong>是否记录来源（哪个文档、哪个 chunk 产生的这条边）</li>
+</ul>
+
+<h3>Step 3: 实体对齐（Entity Resolution）</h3>
+<div class="card">
+  <div class="card-title">最难的环节</div>
+  <p>同一实体在不同文档中的不同写法：</p>
+  <table>
+    <tr><th>文档 A</th><th>文档 B</th><th>实际是</th></tr>
+    <tr><td>王建国</td><td>王总</td><td>同一人</td></tr>
+    <tr><td>数据中台</td><td>Data Platform</td><td>同一项目</td></tr>
+    <tr><td>PostgreSQL</td><td>PG</td><td>同一技术</td></tr>
+  </table>
+  <p>如果不做对齐，图中会出现重复节点，关系被割裂。<br>
+  你当前的解决方式：维护任务中 LLM 调用 <code>graph_merge_entities</code> 手动合并。</p>
+</div>
+
+<h3>Step 4: 图写入与后处理</h3>
+<ul>
+  <li><strong>MERGE 语义：</strong>存在则更新，不存在则创建（幂等）</li>
+  <li><strong>溯源：</strong>每条边记录 <code>source_path</code>，文档更新时可精确清除旧边</li>
+  <li><strong>孤儿回收：</strong>文档删除后，无连接的实体节点自动清理</li>
+</ul>
+
+<!-- ============ Section 4 ============ -->
+<h2 id="s4"><span class="section-num">4</span>数据流动：构建期 vs 查询期</h2>
+
+<h3>构建期（离线）</h3>
+<div class="diagram">
+文档入库 ──→ graph_jobs 队列(pending)
+                    │
+            维护任务触发（session_shutdown / 定时）
+                    │
+                    ↓
+         消费队列 ──→ 读文档全文 ──→ LLM 抽取 ──→ 写 Neo4j
+                    │                                    │
+                    ↓                                    ↓
+            status = done                    Entity + MENTIONS + REL
+</div>
+
+<h3>查询期（在线）</h3>
+<div class="diagram">
+用户 Query
+    │
+    ├──→ BM25 检索 ──→ top-K chunks ──┐
+    │                                   │
+    ├──→ 向量检索 ──→ top-K chunks ──┤──→ RRF 融合 ──→ 排序结果
+    │                                   │
+    └──→ 图谱扩展 ─────────────────────┘
+              │
+              ↓
+    取融合结果头部文档的实体
+              │
+              ↓
+    MATCH (Doc)-[:MENTIONS]->(Entity)<-[:MENTIONS]-(NeighborDoc)
+              │
+              ↓
+    邻居文档的 chunk 补充进结果（低权重）
+</div>
+
+<div class="card">
+  <div class="card-title">关键设计约束</div>
+  <ul>
+    <li>图谱是<strong>纯派生索引</strong>：任何时候可以从源文档完全重建</li>
+    <li>图谱不存储原文：只存实体名和关系类型，原文在 chunks 表</li>
+    <li>查询时图谱只做<strong>补充</strong>，不做主路：主路是 BM25 + 向量</li>
+  </ul>
+</div>
+
+<!-- ============ Section 5 ============ -->
+<h2 id="s5"><span class="section-num">5</span>主流架构对比</h2>
+
+<h3>Microsoft GraphRAG（2024）</h3>
+<div class="card">
+  <div class="card-title">核心创新：社区摘要层</div>
+  <div class="diagram">
+Layer 3:  全局摘要（"整个语料库的主题"）
+              ↑ 聚合
+Layer 2:  社区摘要（"数据中台相关的所有信息概括"）
+              ↑ 聚类（Leiden 算法）
+Layer 1:  实体 + 关系（基础图）
+              ↑ 抽取
+Layer 0:  原始文本 chunks
+</div>
+  <p><strong>查询流程：</strong></p>
+  <ul>
+    <li>Local Search：和传统 RAG 类似，从实体出发遍历邻居</li>
+    <li>Global Search：匹配社区摘要，回答"整体讲什么"类问题</li>
+  </ul>
+  <p><strong>代价：</strong>构建时需要对每个社区调用 LLM 生成摘要，成本高（O(社区数) 次 LLM 调用）</p>
+</div>
+
+<h3>LightRAG（2024）</h3>
+<div class="card">
+  <div class="card-title">核心创新：双层检索</div>
+  <table>
+    <tr><th>层级</th><th>检索对象</th><th>适合的问题</th></tr>
+    <tr><td>Low-level</td><td>具体实体 + 直接邻居</td><td>"王建国是谁？做了什么？"</td></tr>
+    <tr><td>High-level</td><td>抽象概念 / 主题关键词</td><td>"数据迁移涉及哪些技术？"</td></tr>
+  </table>
+  <p><strong>与 GraphRAG 区别：</strong>不做社区检测和摘要，而是把实体和关系分别建索引，查询时同时搜两层再融合。更轻量，但无法回答全局概括问题。</p>
+</div>
+
+<h3>传统企业知识图谱（Google KG / Wikidata）</h3>
+<div class="card">
+  <div class="card-title">特点</div>
+  <ul>
+    <li>Schema 严格预定义（不是 LLM 随意抽取）</li>
+    <li>人工审核 + 众包编辑</li>
+    <li>规模巨大（Wikidata: 1亿+ 三元组）</li>
+    <li>查询语言：SPARQL / Cypher</li>
+    <li>不依赖向量检索，纯图遍历</li>
+  </ul>
+  <p><strong>与 RAG 场景的区别：</strong>企业 KG 追求精确和完整；RAG 图谱追求"够用就行"，容忍噪声。</p>
+</div>
+
+<h3>三者对比</h3>
+<table>
+  <tr><th>维度</th><th>GraphRAG</th><th>LightRAG</th><th>你当前</th></tr>
+  <tr><td>实体抽取</td><td>LLM</td><td>LLM</td><td>LLM</td></tr>
+  <tr><td>社区/聚类</td><td>Leiden 算法</td><td>无</td><td>无</td></tr>
+  <tr><td>摘要生成</td><td>每社区一段</td><td>无</td><td>无</td></tr>
+  <tr><td>检索方式</td><td>Local + Global</td><td>Low + High 双路</td><td>邻居扩展（补充）</td></tr>
+  <tr><td>构建成本</td><td>高（N次摘要）</td><td>中</td><td>低（1次抽取/文档）</td></tr>
+  <tr><td>全局问题</td><td>能回答</td><td>不能</td><td>不能</td></tr>
+  <tr><td>实体对齐</td><td>自动（描述相似度）</td><td>自动</td><td>半自动（维护时 LLM）</td></tr>
+</table>
+
+<!-- ============ Section 6 ============ -->
+<h2 id="s6"><span class="section-num">6</span>边界与局限：什么不能做</h2>
+
+<h3>知识图谱不擅长的</h3>
+<table>
+  <tr><th>场景</th><th>为什么不行</th><th>该用什么</th></tr>
+  <tr><td>模糊语义匹配（"那个关于预算的事"）</td><td>图遍历需要精确入口点</td><td>向量检索</td></tr>
+  <tr><td>长文本理解 / 摘要</td><td>图只存三元组，丢失上下文</td><td>LLM 直接读原文</td></tr>
+  <tr><td>时序推理（"先做了什么后做了什么"）</td><td>除非显式建时间边</td><td>时间线索引</td></tr>
+  <tr><td>数值计算（"总预算多少"）</td><td>图不存数值聚合</td><td>结构化查询 / SQL</td></tr>
+  <tr><td>隐含知识（"他显然不高兴"）</td><td>LLM 抽取只能提取显式陈述</td><td>无法索引</td></tr>
+</table>
+
+<h3>构建期的根本挑战</h3>
+<ul>
+  <li><strong>抽取质量上限 = LLM 能力上限。</strong>模型漏抽、错抽、幻觉都会污染图。</li>
+  <li><strong>实体对齐是 NP-hard 问题。</strong>没有完美方案，只有 trade-off（精度 vs 召回）。</li>
+  <li><strong>图会腐烂。</strong>文档更新后如果不清除旧边，图中会积累过时信息。</li>
+  <li><strong>Schema 漂移。</strong>开放式关系抽取会导致关系类型爆炸（"负责""管理""领导""带"都是同一语义）。</li>
+</ul>
+
+<h3>查询期的根本挑战</h3>
+<ul>
+  <li><strong>入口点问题：</strong>图遍历需要起点。如果 query 中的实体没被抽取过（或名字不同），图完全帮不上。</li>
+  <li><strong>深度 vs 精度：</strong>遍历越深，噪声越多。1-2 跳有用，3 跳以上通常全是噪声。</li>
+  <li><strong>与向量结果的融合权重：</strong>图补充的结果该给多少分？太高会引入噪声，太低等于没用。</li>
+</ul>
+
+<!-- ============ Section 7 ============ -->
+<h2 id="s7"><span class="section-num">7</span>与你的系统的映射</h2>
+
+<table>
+  <tr><th>通用概念</th><th>你的实现</th><th>文件</th></tr>
+  <tr><td>图数据库</td><td>Neo4j（Docker 容器）</td><td>graph.ts</td></tr>
+  <tr><td>实体抽取</td><td>doubao-seed-2-0-lite + prompt</td><td>graph-build.ts</td></tr>
+  <tr><td>节点类型</td><td>Doc, Entity, Dir, Month</td><td>graph-build.ts</td></tr>
+  <tr><td>边类型</td><td>MENTIONS, REL, IN_DIR, MODIFIED_IN, DERIVED_FROM</td><td>graph-build.ts</td></tr>
+  <tr><td>实体类型</td><td>person, org, project, tech, concept</td><td>EXTRACT_PROMPT</td></tr>
+  <tr><td>构建触发</td><td>graph_jobs 队列 + 维护任务消费</td><td>graph-build.ts / maintain.ts</td></tr>
+  <tr><td>查询期使用</td><td>hybridSearch 中的 graphNeighbors()</td><td>search.ts</td></tr>
+  <tr><td>实体对齐</td><td>维护时 LLM 调 graph_merge_entities</td><td>maintain.ts</td></tr>
+  <tr><td>孤儿回收</td><td>cleanupOrphanNodes()</td><td>graph-build.ts</td></tr>
+  <tr><td>溯源/重建</td><td>边携带 source_path，可按文档清除重建</td><td>clearDocDerivation()</td></tr>
+</table>
+
+<div class="card">
+  <div class="card-title">你当前的定位</div>
+  <p>你的图谱是一个<strong>轻量级文档级实体索引</strong>，定位是向量检索的补充信号。
+  它不是 GraphRAG（没有社区/摘要），不是 LightRAG（没有双层检索），也不是传统企业 KG（没有严格 schema）。</p>
+  <p>在当前 8 篇文档、主题高度集中的场景下，这个定位是合理的。
+  当文档量增长到 100+ 且主题分散时，可以考虑的演进路径：</p>
+  <ol>
+    <li><strong>短期：</strong>过滤泛化实体（"星辰科技"），要求共享 2+ 实体才扩展</li>
+    <li><strong>中期：</strong>实体链接下沉到 chunk 级（Entity → MENTIONED_IN → Chunk）</li>
+    <li><strong>长期：</strong>引入社区检测（Leiden），为每个社区生成摘要，支持全局问题</li>
+  </ol>
+</div>
+
+</div>
+</body>
+</html>
