@@ -10,5 +10,5 @@ frontend:
 webapp:
   engine_access: inprocess
 hindsight:
-  enabled: false
+  enabled: true
   retain_max_concurrent: 1
