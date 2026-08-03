@@ -1,5 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
+import MDEditor from '@uiw/react-md-editor'
+import {
+  AlertCircle,
+  BookOpen,
+  Bot,
+  LoaderCircle,
+  Menu,
+  Plus,
+  Send,
+  Square,
+  Trash2,
+  UserRound,
+  X,
+} from 'lucide-react'
 import { api, type AgentSession, type AgentSessionDetail, type PiAgentEvent } from '../api/client'
+import './AskPage.css'
 
 interface ChatMessage {
   id: number
@@ -24,29 +39,37 @@ function sessionLabel(session: AgentSession) {
   if (session.name?.trim()) return session.name
   const timestamp = session.modified || session.created
   if (timestamp && Number.isFinite(Date.parse(timestamp))) {
-    return `会话 ${new Intl.DateTimeFormat('zh-CN', {
+    return `对话 ${new Intl.DateTimeFormat('zh-CN', {
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
     }).format(new Date(timestamp))}`
   }
-  return `会话 ${session.id.slice(0, 8)}`
+  return `对话 ${session.id.slice(0, 8)}`
+}
+
+function sessionMeta(session: AgentSession) {
+  if (session.streaming) return '正在回答'
+  if (session.messageCount === 0) return '空对话'
+  return `${session.messageCount} 条记录`
 }
 
 export function AskPage() {
   const [query, setQuery] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [citations, setCitations] = useState<Citation[]>([])
-  const [status, setStatus] = useState('就绪')
+  const [status, setStatus] = useState('正在恢复对话')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [sessionLoading, setSessionLoading] = useState(true)
   const [sessions, setSessions] = useState<AgentSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const sessionRef = useRef<string | undefined>(undefined)
   const controllerRef = useRef<AbortController | undefined>(undefined)
   const nextMessageId = useRef(0)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const restoreMessages = (detail: AgentSessionDetail) => {
     setMessages(
@@ -68,7 +91,7 @@ export function AskPage() {
         if (cancelled) return
         setSessions(sorted)
         if (sorted.length === 0) {
-          setStatus('新会话')
+          setStatus('新对话')
           return
         }
 
@@ -77,7 +100,7 @@ export function AskPage() {
         sessionRef.current = detail.id
         setActiveSessionId(detail.id)
         restoreMessages(detail)
-        setStatus('已恢复历史会话')
+        setStatus('历史对话已恢复')
       } catch (caught) {
         if (cancelled) return
         const message = caught instanceof Error ? caught.message : String(caught)
@@ -94,6 +117,10 @@ export function AskPage() {
       controllerRef.current?.abort()
     }
   }, [])
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: 'end' })
+  }, [messages, loading])
 
   const updateAssistant = (id: number, update: (text: string) => string) => {
     setMessages((current) =>
@@ -197,21 +224,26 @@ export function AskPage() {
     setMessages([])
     setCitations([])
     setError('')
-    setStatus('新会话')
+    setStatus('新对话')
+    setSidebarOpen(false)
   }
 
   const selectConversation = async (sessionId: string) => {
-    if (loading || sessionLoading || sessionId === sessionRef.current) return
+    if (loading || sessionLoading || sessionId === sessionRef.current) {
+      setSidebarOpen(false)
+      return
+    }
     setSessionLoading(true)
     setError('')
     setCitations([])
-    setStatus('正在加载会话')
+    setStatus('正在加载对话')
     try {
       const detail = await api.getAgentSession(sessionId)
       sessionRef.current = detail.id
       setActiveSessionId(detail.id)
       restoreMessages(detail)
-      setStatus('已恢复历史会话')
+      setStatus('历史对话已恢复')
+      setSidebarOpen(false)
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught)
       setError(message)
@@ -246,126 +278,241 @@ export function AskPage() {
     }
   }
 
-  return (
-    <div style={{ flex: 1, display: 'flex', overflow: 'hidden', background: '#f7f8fa' }}>
-      <aside style={{ width: 240, overflow: 'auto', padding: 16, borderRight: '1px solid #e8e8e8', background: '#fff' }}>
-        <button
-          onClick={newConversation}
-          disabled={loading || sessionLoading}
-          style={{ width: '100%', padding: '8px 12px', border: '1px solid #d9d9d9', borderRadius: 6, background: '#fff', marginBottom: 12 }}
-        >
-          新会话
-        </button>
-        <div style={{ color: '#777', fontSize: 12, marginBottom: 8 }}>历史会话</div>
-        {sessionLoading && sessions.length === 0 && (
-          <div style={{ color: '#999', fontSize: 13 }}>加载中...</div>
-        )}
-        {!sessionLoading && sessions.length === 0 && (
-          <div style={{ color: '#999', fontSize: 13 }}>暂无历史会话</div>
-        )}
-        {sessions.map((session) => (
-          <div key={session.id} style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
-            <button
-              onClick={() => void selectConversation(session.id)}
-              disabled={loading || sessionLoading}
-              title={sessionLabel(session)}
-              style={{ flex: 1, minWidth: 0, padding: '8px 10px', border: activeSessionId === session.id ? '1px solid #1677ff' : '1px solid transparent', borderRadius: 6, background: activeSessionId === session.id ? '#eaf3ff' : '#fff', textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-            >
-              {sessionLabel(session)}
-            </button>
-            <button
-              onClick={() => void deleteConversation(session.id)}
-              disabled={loading || sessionLoading}
-              title="删除会话"
-              aria-label={`删除 ${sessionLabel(session)}`}
-              style={{ padding: '4px 6px', border: 0, background: 'transparent', color: '#999' }}
-            >
-              删除
-            </button>
-          </div>
-        ))}
-      </aside>
+  const busy = loading || sessionLoading
+  const statusTone = error ? 'error' : busy ? 'busy' : 'ready'
 
-      <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
-      <div style={{ maxWidth: 900, margin: '0 auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
-          <div>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>知识库 Agent</div>
-            <div style={{ color: '#777', fontSize: 13, marginTop: 4 }}>{status}</div>
-          </div>
-          <div style={{ flex: 1 }} />
+  return (
+    <section className={`ask-shell${sidebarOpen ? ' ask-shell--sidebar-open' : ''}`}>
+      <button
+        type="button"
+        className="ask-sidebar-backdrop"
+        aria-label="关闭对话列表背景"
+        onClick={() => setSidebarOpen(false)}
+      />
+
+      <aside className="ask-sidebar" aria-label="对话列表">
+        <div className="ask-sidebar-head">
+          <div className="ask-sidebar-title">对话</div>
+          <button
+            type="button"
+            className="ask-icon-button ask-sidebar-close"
+            aria-label="关闭对话列表"
+            title="关闭对话列表"
+            onClick={() => setSidebarOpen(false)}
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
         </div>
 
-        <div style={{ minHeight: 360, display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
-          {messages.length === 0 && (
-            <div style={{ padding: 32, textAlign: 'center', color: '#888', background: '#fff', borderRadius: 8 }}>
-              可以查询文件、比较多篇文档，或让 Agent 选择 Fast / Deep 检索。
+        <button
+          type="button"
+          className="ask-new-button"
+          onClick={newConversation}
+          disabled={busy}
+        >
+          <Plus size={17} aria-hidden="true" />
+          <span>新建对话</span>
+        </button>
+
+        <div className="ask-session-heading">最近对话</div>
+        <div className="ask-session-list">
+          {sessionLoading && sessions.length === 0 && (
+            <div className="ask-session-placeholder">
+              <LoaderCircle className="ask-spin" size={16} aria-hidden="true" />
+              <span>正在加载</span>
             </div>
           )}
-          {messages.map((message) => (
+          {!sessionLoading && sessions.length === 0 && (
+            <div className="ask-session-placeholder">暂无对话</div>
+          )}
+          {sessions.map((session) => (
             <div
-              key={message.id}
-              style={{
-                alignSelf: message.role === 'user' ? 'flex-end' : 'stretch',
-                maxWidth: message.role === 'user' ? '75%' : '100%',
-                padding: '12px 16px',
-                borderRadius: 8,
-                background: message.role === 'user' ? '#1677ff' : '#fff',
-                color: message.role === 'user' ? '#fff' : '#222',
-                whiteSpace: 'pre-wrap',
-                border: message.role === 'assistant' ? '1px solid #eee' : 'none',
-              }}
+              key={session.id}
+              className={`ask-session-row${activeSessionId === session.id ? ' is-active' : ''}`}
             >
-              {message.text || (loading && message.role === 'assistant' ? '…' : '')}
+              <button
+                type="button"
+                className="ask-session-select"
+                onClick={() => void selectConversation(session.id)}
+                disabled={busy}
+                title={sessionLabel(session)}
+              >
+                <span className="ask-session-name">{sessionLabel(session)}</span>
+                <span className="ask-session-meta">{sessionMeta(session)}</span>
+              </button>
+              <button
+                type="button"
+                className="ask-session-delete"
+                onClick={() => void deleteConversation(session.id)}
+                disabled={busy}
+                title="删除对话"
+                aria-label={`删除 ${sessionLabel(session)}`}
+              >
+                <Trash2 size={15} aria-hidden="true" />
+              </button>
             </div>
           ))}
         </div>
+      </aside>
 
-        {citations.length > 0 && (
-          <div style={{ padding: 12, background: '#fff', border: '1px solid #eee', borderRadius: 8, marginBottom: 12 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>引用来源</div>
-            {citations.map((citation) => (
-              <div key={citation.docId} style={{ fontSize: 13, marginTop: 4 }}>
-                <a href={`/documents/${encodeURIComponent(citation.docId)}`}>{citation.title}</a>
-                <span style={{ color: '#999', marginLeft: 8 }}>{citation.docId}</span>
+      <main className="ask-main">
+        <header className="ask-header">
+          <button
+            type="button"
+            className="ask-icon-button ask-menu-button"
+            aria-label="打开对话列表"
+            title="打开对话列表"
+            onClick={() => setSidebarOpen(true)}
+          >
+            <Menu size={19} aria-hidden="true" />
+          </button>
+          <div className="ask-agent-mark" aria-hidden="true">
+            <Bot size={20} />
+          </div>
+          <div className="ask-header-copy">
+            <h1>知识库助手</h1>
+            <div className={`ask-status is-${statusTone}`} role="status">
+              <span className="ask-status-dot" />
+              <span>{status}</span>
+            </div>
+          </div>
+        </header>
+
+        <div className="ask-thread" aria-live="polite">
+          <div className="ask-thread-inner">
+            {messages.length === 0 && !sessionLoading && (
+              <div className="ask-empty-state">
+                <div className="ask-empty-icon" aria-hidden="true">
+                  <BookOpen size={26} />
+                </div>
+                <h2>从团队知识中找到答案</h2>
+                <div className="ask-suggestions">
+                  {['总结最近上传的文档', '比较两份方案的差异', '查找已有的项目决策'].map(
+                    (suggestion) => (
+                      <button
+                        type="button"
+                        key={suggestion}
+                        onClick={() => setQuery(suggestion)}
+                      >
+                        {suggestion}
+                      </button>
+                    ),
+                  )}
+                </div>
               </div>
+            )}
+
+            {sessionLoading && messages.length === 0 && (
+              <div className="ask-thread-loading">
+                <LoaderCircle className="ask-spin" size={20} aria-hidden="true" />
+                <span>正在恢复对话</span>
+              </div>
+            )}
+
+            {messages.map((message) => (
+              <article key={message.id} className={`ask-message is-${message.role}`}>
+                <div className="ask-message-avatar" aria-hidden="true">
+                  {message.role === 'assistant' ? <Bot size={18} /> : <UserRound size={17} />}
+                </div>
+                <div className="ask-message-body">
+                  <div className="ask-message-author">
+                    {message.role === 'assistant' ? '知识库助手' : '你'}
+                  </div>
+                  {message.role === 'assistant' ? (
+                    message.text ? (
+                      <div className="ask-markdown" data-color-mode="light">
+                        <MDEditor.Markdown source={message.text} />
+                      </div>
+                    ) : loading ? (
+                      <div className="ask-answer-loading">
+                        <LoaderCircle className="ask-spin" size={17} aria-hidden="true" />
+                        <span>正在组织答案</span>
+                      </div>
+                    ) : null
+                  ) : (
+                    <div className="ask-user-text">{message.text}</div>
+                  )}
+                </div>
+              </article>
             ))}
-          </div>
-        )}
 
-        {error && (
-          <div style={{ color: '#b42318', background: '#fef3f2', padding: 10, borderRadius: 6, marginBottom: 12 }}>
-            {error}
-          </div>
-        )}
+            {citations.length > 0 && (
+              <section className="ask-citations" aria-labelledby="ask-citations-title">
+                <div className="ask-citations-title" id="ask-citations-title">
+                  <BookOpen size={16} aria-hidden="true" />
+                  <span>引用来源</span>
+                </div>
+                <div className="ask-citation-list">
+                  {citations.map((citation) => (
+                    <a
+                      key={citation.docId}
+                      href={`/documents/${encodeURIComponent(citation.docId)}`}
+                      className="ask-citation-link"
+                    >
+                      <span>{citation.title}</span>
+                      <small>{citation.docId}</small>
+                    </a>
+                  ))}
+                </div>
+              </section>
+            )}
 
-        <div style={{ display: 'flex', gap: 8 }}>
-          <textarea
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                void run()
-              }
-            }}
-            disabled={loading || sessionLoading}
-            placeholder="向知识库提问，Enter 发送，Shift+Enter 换行"
-            rows={3}
-            style={{ flex: 1, padding: '10px 12px', borderRadius: 6, border: '1px solid #d9d9d9', resize: 'vertical' }}
-          />
-          {loading ? (
-            <button onClick={() => void stop()} style={{ padding: '6px 18px', borderRadius: 6, border: '1px solid #d92d20', color: '#d92d20', background: '#fff' }}>
-              停止
-            </button>
-          ) : (
-            <button onClick={() => void run()} disabled={!query.trim() || sessionLoading} style={{ padding: '6px 18px', borderRadius: 6, border: 0, color: '#fff', background: '#1677ff' }}>
-              发送
-            </button>
-          )}
+            {error && (
+              <div className="ask-error" role="alert">
+                <AlertCircle size={17} aria-hidden="true" />
+                <span>{error}</span>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
         </div>
-      </div>
-      </div>
-    </div>
+
+        <footer className="ask-composer-zone">
+          <form
+            className="ask-composer"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void run()
+            }}
+          >
+            <textarea
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  void run()
+                }
+              }}
+              disabled={busy}
+              placeholder="向团队知识库提问"
+              rows={1}
+              aria-label="问题"
+            />
+            {loading ? (
+              <button
+                type="button"
+                className="ask-submit-button is-stop"
+                onClick={() => void stop()}
+                title="停止生成"
+                aria-label="停止生成"
+              >
+                <Square size={16} fill="currentColor" aria-hidden="true" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                className="ask-submit-button"
+                disabled={!query.trim() || sessionLoading}
+                title="发送"
+                aria-label="发送"
+              >
+                <Send size={17} aria-hidden="true" />
+              </button>
+            )}
+          </form>
+        </footer>
+      </main>
+    </section>
   )
 }

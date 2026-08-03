@@ -1,6 +1,8 @@
 import { useState, useRef } from 'react'
-import { Link, useNavigate, Outlet } from 'react-router-dom'
+import { NavLink, useNavigate, Outlet } from 'react-router-dom'
+import { BookOpen, LoaderCircle, MessageSquare, Network, Search, Upload } from 'lucide-react'
 import { api } from '../api/client'
+import './Layout.css'
 
 export function Layout() {
   const [uploading, setUploading] = useState(false)
@@ -23,54 +25,45 @@ export function Layout() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      {/* 顶部 */}
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          padding: '12px 24px',
-          borderBottom: '1px solid #e8e8e8',
-          background: '#fff',
-        }}
-      >
-        <Link to="/" style={{ fontSize: 18, fontWeight: 700, textDecoration: 'none', color: '#333' }}>
-          团队知识库
-        </Link>
-        <Link
-          to="/graph"
-          style={{ fontSize: 14, textDecoration: 'none', color: '#666', padding: '4px 8px' }}
-        >
-          知识图谱
-        </Link>
-        <Link to="/search" style={{ fontSize: 14, textDecoration: 'none', color: '#666', padding: '4px 8px' }}>
-          搜索
-        </Link>
-        <Link to="/ask" style={{ fontSize: 14, textDecoration: 'none', color: '#666', padding: '4px 8px' }}>
-          提问
-        </Link>
-        <div style={{ flex: 1 }} />
+    <div className="app-shell">
+      <header className="app-header">
+        <NavLink to="/" className="app-brand">
+          <BookOpen size={20} aria-hidden="true" />
+          <span>团队知识库</span>
+        </NavLink>
+        <nav className="app-nav" aria-label="主导航">
+          <NavLink to="/graph" className={({ isActive }) => `app-nav-link${isActive ? ' is-active' : ''}`}>
+            <Network size={17} aria-hidden="true" />
+            <span>知识图谱</span>
+          </NavLink>
+          <NavLink to="/search" className={({ isActive }) => `app-nav-link${isActive ? ' is-active' : ''}`}>
+            <Search size={17} aria-hidden="true" />
+            <span>搜索</span>
+          </NavLink>
+          <NavLink to="/ask" className={({ isActive }) => `app-nav-link${isActive ? ' is-active' : ''}`}>
+            <MessageSquare size={17} aria-hidden="true" />
+            <span>提问</span>
+          </NavLink>
+        </nav>
+        <div className="app-header-spacer" />
         <button
+          type="button"
+          className="app-upload-button"
           onClick={() => fileRef.current?.click()}
           disabled={uploading}
-          style={{
-            padding: '6px 16px',
-            borderRadius: 6,
-            border: '1px solid #1890ff',
-            background: '#1890ff',
-            color: '#fff',
-            cursor: uploading ? 'wait' : 'pointer',
-            fontSize: 14,
-          }}
+          title={uploading ? '上传中' : '上传文件'}
         >
-          {uploading ? '上传中...' : '上传文件'}
+          {uploading ? (
+            <LoaderCircle className="app-spin" size={17} aria-hidden="true" />
+          ) : (
+            <Upload size={17} aria-hidden="true" />
+          )}
+          <span>{uploading ? '上传中' : '上传文件'}</span>
         </button>
         <input ref={fileRef} type="file" hidden onChange={handleUpload} />
       </header>
 
-      {/* 主体 */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+      <div className="app-content">
         <Outlet />
       </div>
     </div>
