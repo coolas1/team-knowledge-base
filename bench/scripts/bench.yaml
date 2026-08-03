@@ -1,0 +1,42 @@
+# PKM registry for the benchmark harness.
+#
+# Each PKM declares its own entrypoint (agentic CLI), ingest command, and optional
+# environment variables. The orchestrator scripts (run-qa-bench.py,
+# run-file-update-bench.py) read this file to discover what to run and how.
+#
+# Entrypoint contract:
+#   - Accepts a prompt via -p <prompt> (or stdin if entrypoint_stdin: true)
+#   - Has access to the PKM's tools (MCP, filesystem, etc.)
+#   - Outputs the final answer to stdout
+#   - Exits 0 on success
+#
+# Operators swap the agent model by changing `entrypoint`:
+#   gbrain:   claude           (Claude via Claude Code)
+#   weknora:  claude           (Claude via Claude Code)
+#   tkb:      claude           (Claude via Claude Code)
+#
+# To test a different model: change entrypoint to oai-codex, aider, gemini, etc.
+
+pkms:
+  gbrain:
+    description: "gbrain PGLite RAG (baseline)"
+    ingest: "bash bench/scripts/gbrain/run-all.sh"
+    entrypoint: "claude"
+    entrypoint_args: ["--print", "--mcp-config", ".mcp.json"]
+    env: {}
+
+  weknora:
+    description: "WeKnora multimodal RAG stack"
+    ingest: "bash bench/scripts/weknora/run-all.sh"
+    entrypoint: "claude"
+    entrypoint_args: ["--print", "--mcp-config", ".mcp.json"]
+    env:
+      WEKNORA_BASE_URL: "http://172.17.0.1:8080"
+
+  team-knowledge-base:
+    description: "Team KB — FastAPI + Neo4j + pgvector"
+    ingest: "bash bench/scripts/team-knowledge-base/run-all.sh"
+    entrypoint: "claude"
+    entrypoint_args: ["--print", "--mcp-config", ".mcp.json"]
+    env:
+      TKB_BASE_URL: "http://127.0.0.1:8000"

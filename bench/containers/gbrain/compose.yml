@@ -1,0 +1,24 @@
+services:
+  gbrain:
+    build:
+      context: ../..
+      dockerfile: bench/containers/gbrain/Containerfile
+    ports:
+      - "9100:9100"
+    volumes:
+      - ../../data/gbrain:/data/gbrain:rw
+      - ../../bench/raw:/data/raw:ro
+      - ../../bench/eval:/data/eval:ro
+      - ${SCRATCH_DIR:-/tmp/gbrain-scratch}:/data/scratch:rw
+    env_file:
+      - ../.env
+    environment:
+      - EMBEDDING_MODEL_NAME
+      - EMBEDDING_BASE_URL
+      - EMBEDDING_API_KEY
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9100/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

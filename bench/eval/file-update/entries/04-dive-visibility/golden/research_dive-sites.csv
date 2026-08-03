@@ -1,0 +1,13 @@
+site_id,name,island_group,latitude,longitude,typical_depth_m,visibility_m,difficulty,exposure,reef_type
+RYK-01,Yonaguni West,Yonaguni,24.452,122.746,12,28,intermediate,SW,forereef
+RYK-02,Ishigaki South,Ishigaki,24.331,124.156,10,24,intermediate,S,forereef
+RYK-03,Kabira North,Ishigaki,24.498,124.064,8,17,beginner,N,backreef
+RYK-04,Sekisei Lagoon,Ishigaki,24.22,124.09,6,25,beginner,S,lagoon
+RYK-05,Cape Hedo,Okinawa-honto,26.864,128.146,14,15,advanced,NE,forereef
+RYK-06,Sesoko West,Okinawa-honto,26.632,127.864,15,17,advanced,W,forereef
+RYK-07,Maeda Point,Okinawa-honto,26.444,127.742,8,13,beginner,W,forereef
+RYK-08,Onna Village East,Okinawa-honto,26.51,127.912,10,21,intermediate,E,forereef
+RYK-09,Kerama Inner,Kerama,26.198,127.31,7,32,beginner,W,lagoon
+RYK-10,Kerama Outer,Kerama,26.124,127.271,18,34,advanced,SW,forereef
+RYK-11,Amami North,Amami-oshima,28.432,129.624,11,23,intermediate,N,forereef
+RYK-12,Amami South,Amami-oshima,28.166,129.438,9,23,intermediate,S,backreef

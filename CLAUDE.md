@@ -64,3 +64,17 @@ flows through `.env` → `config/settings.py` (pydantic-settings).
 ## Local supplement
 
 @./CLAUDE.local.md
+
+## Benchmark
+
+Benchmark harness lives under `bench/`. The same `docker-compose.yml` mounts
+`bench/raw/` and `bench/eval/` into the webapp container.
+
+- **Bench runner (container):** `docker compose --profile bench up -d`
+- **Ingest corpus:** `bash bench/scripts/team-knowledge-base/run-all.sh`
+  (or `docker compose run bench bash bench/scripts/team-knowledge-base/run-all.sh`)
+- **QA benchmark:** `uv run python bench/scripts/run-qa-bench.py --pkm team-knowledge-base`
+  (or `docker compose run bench uv run python bench/scripts/run-qa-bench.py --pkm team-knowledge-base`)
+- **File-update benchmark:** `uv run python bench/scripts/run-file-update-bench.py --pkm team-knowledge-base`
+- **Health check:** `bash bench/scripts/team-knowledge-base/health.sh`
+- **Reset KB:** `bash bench/scripts/team-knowledge-base/reset.sh`

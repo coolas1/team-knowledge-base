@@ -1,0 +1,32 @@
+# Multi-stage build for gbrain (PGLite hybrid RAG)
+# Stage 1: install deps and build from vendored source
+FROM docker.io/oven/bun:1.3 AS builder
+WORKDIR /build
+COPY vendors/gbrain/package.json vendors/gbrain/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY vendors/gbrain/ ./
+RUN bun build --compile --outfile bin/gbrain src/cli.ts
+
+# Stage 2: minimal runtime
+FROM docker.io/library/debian:12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy compiled gbrain binary
+COPY --from=builder /build/bin/gbrain /usr/local/bin/gbrain
+# Copy WASM assets needed by PGLite and tree-sitter at runtime
+COPY --from=builder /build/node_modules/@electric-sql/pglite /app/node_modules/@electric-sql/pglite
+COPY --from=builder /build/node_modules/tree-sitter-wasms /app/node_modules/tree-sitter-wasms
+# Copy app source for WASM resolution (gbrain resolves assets relative to its package)
+COPY --from=builder /build/package.json /app/package.json
+
+WORKDIR /app
+
+# Entrypoint: map shared env vars into gbrain config, then serve
+COPY bench/containers/gbrain/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV GBRAIN_HOME=/data/gbrain
+EXPOSE 9100
+ENTRYPOINT ["/entrypoint.sh"]

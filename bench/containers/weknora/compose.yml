@@ -1,0 +1,111 @@
+services:
+  app:
+    build:
+      context: ../../vendors/WeKnora
+      dockerfile: docker/Dockerfile.app
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - weknora-files:/data/files
+      - ../../data/weknora:/data/weknora:rw
+      - ../../bench/raw:/data/raw:ro
+      - ../../bench/eval:/data/eval:ro
+      - ${SCRATCH_DIR:-/tmp/weknora-scratch}:/data/scratch:rw
+      - ../../vendors/WeKnora/config/config.yaml:/app/config/config.yaml:ro
+      - ./builtin_models.yaml:/app/config/builtin_models.yaml:ro
+    env_file:
+      - ../.env
+    environment:
+      - GIN_MODE=release
+      - DB_DRIVER=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=weknora
+      - DB_PASSWORD=weknora
+      - DB_NAME=weknora
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - DOCREADER_ADDR=docreader:50051
+      - STORAGE_TYPE=local
+      - LOCAL_STORAGE_BASE_DIR=/data/files
+      - OLLAMA_BASE_URL=${EMBEDDING_BASE_URL:-http://host.containers.internal:11434/v1}
+      - LLM_MODEL_NAME
+      - LLM_BASE_URL
+      - LLM_API_KEY
+      - EMBEDDING_MODEL_NAME
+      - EMBEDDING_BASE_URL
+      - EMBEDDING_API_KEY
+      - RERANK_MODEL_NAME
+      - RERANK_BASE_URL
+      - RERANK_API_KEY
+      - TZ=UTC
+      - WEKNORA_LANGUAGE=en-US
+      - JWT_SECRET=weknora-benchmark-jwt-secret
+      - AUTO_RECOVER_DIRTY=true
+      - DISABLE_REGISTRATION=true
+      - CONCURRENCY_POOL_SIZE=5
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      docreader:
+        condition: service_healthy
+    restart: unless-stopped
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+
+  docreader:
+    build:
+      context: ../../vendors/WeKnora
+      dockerfile: docker/Dockerfile.docreader
+    expose:
+      - "50051"
+    volumes:
+      - docreader-tmp:/tmp/docreader
+    environment:
+      - DOCREADER_IMAGE_OUTPUT_DIR=/tmp/docreader
+      - DOCREADER_PDF_FORCE_SCANNED=false
+      - MAX_FILE_SIZE_MB=50
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+
+  postgres:
+    image: docker.io/paradedb/paradedb:v0.22.2-pg17
+    environment:
+      - POSTGRES_USER=weknora
+      - POSTGRES_PASSWORD=weknora
+      - POSTGRES_DB=weknora
+    volumes:
+      - weknora-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weknora"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 1m
+
+  redis:
+    image: docker.io/library/redis:7.0-alpine
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+volumes:
+  weknora-files:
+  weknora-pgdata:
+  docreader-tmp:

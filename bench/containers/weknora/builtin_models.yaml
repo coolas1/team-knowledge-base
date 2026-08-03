@@ -1,0 +1,31 @@
+builtin_models:
+  - id: builtin-llm-default
+    type: KnowledgeQA
+    source: remote
+    is_default: true
+    name: ${LLM_MODEL_NAME}
+    parameters:
+      base_url: ${LLM_BASE_URL}
+      api_key: ${LLM_API_KEY}
+      provider: ${LLM_PROVIDER:-openai}
+
+  - id: builtin-embedding-default
+    type: Embedding
+    source: remote
+    is_default: true
+    name: ${EMBEDDING_MODEL_NAME}
+    parameters:
+      base_url: ${EMBEDDING_BASE_URL}
+      api_key: ${EMBEDDING_API_KEY}
+      provider: ${EMBEDDING_PROVIDER:-openai}
+      embedding_parameters:
+        dimension: 768
+        truncate_prompt_tokens: 0
+
+  - id: builtin-rerank-default
+    type: Rerank
+    source: remote
+    parameters:
+      base_url: ${RERANKER_BASE_URL}
+      api_key: ${RERANKER_API_KEY}
+      provider: ${RERANK_PROVIDER:-generic}
