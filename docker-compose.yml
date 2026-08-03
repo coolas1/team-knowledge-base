@@ -115,7 +115,6 @@ services:
     restart: unless-stopped
 
   pi-agent:
-    profiles: ["pi-agent"]
     build:
       context: ./src/extensions/pi-agent
       dockerfile: Containerfile
