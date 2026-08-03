@@ -35,4 +35,70 @@ describe('api client', () => {
     mockFetch.mockResolvedValueOnce({ ok: false, statusText: 'boom', json: async () => ({}) })
     await expect(api.getFullGraph()).rejects.toThrow()
   })
+
+  it('creates an agent session through the BFF', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: 's1', messageCount: 0, streaming: false }),
+    })
+
+    await api.createAgentSession()
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/agent/sessions', { method: 'POST' })
+  })
+
+  it('parses SSE events split across arbitrary chunks', async () => {
+    const encoder = new TextEncoder()
+    const chunks = [
+      'event: assistant.delta\ndata: {"type":"assistant.',
+      'delta","delta":"你',
+      '好"}\n\nevent: message.completed\ndata: {"type":"message.completed","sessionId":"s1",',
+      '"answer":"你好","toolCalls":0}\n\n',
+    ]
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+        controller.close()
+      },
+    })
+    mockFetch.mockResolvedValueOnce(new Response(body, { status: 200 }))
+    const events: string[] = []
+    const controller = new AbortController()
+
+    await api.streamAgentMessage('s1', 'hello', (event) => events.push(event.type), controller.signal)
+
+    expect(events).toEqual(['assistant.delta', 'message.completed'])
+    const [, init] = mockFetch.mock.calls[0]
+    expect(init.signal).toBe(controller.signal)
+    expect(init.body).toBe(JSON.stringify({ message: 'hello' }))
+  })
+
+  it('surfaces message.failed SSE events as errors', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            'event: message.failed\ndata: {"type":"message.failed","error":"model unavailable"}\n\n',
+          ),
+        )
+        controller.close()
+      },
+    })
+    mockFetch.mockResolvedValueOnce(new Response(body, { status: 200 }))
+
+    await expect(api.streamAgentMessage('s1', 'hello', () => undefined)).rejects.toThrow(
+      'model unavailable',
+    )
+  })
+
+  it('cancels an active agent session', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ cancelled: true, sessionId: 's1' }),
+    })
+
+    await api.cancelAgentSession('s1')
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/agent/sessions/s1/cancel', { method: 'POST' })
+  })
 })

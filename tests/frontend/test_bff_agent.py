@@ -1,7 +1,9 @@
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from src.frontend.webapp.server import app as app_mod, deps
+from src.frontend.webapp.server import routes_agent
 from src.agent.codex.plugin import build_plugin
 from src.agent.engine_client import InProcessEngineClient
 from config.schema import load_config
@@ -39,6 +41,75 @@ def test_agent_ask(client):
     out = res.json()
     assert out["answer"] == "ANSWER FROM LLM"
     assert out["query"] == "where is Acme?"
+
+
+def _mock_pi(monkeypatch, handler):
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        routes_agent,
+        "_pi_client",
+        lambda: httpx.AsyncClient(transport=transport),
+    )
+
+
+def test_agent_session_proxy(client, monkeypatch):
+    def handler(request):
+        assert request.method == "POST"
+        assert request.url.path == "/v1/sessions"
+        return httpx.Response(201, json={"id": "session-1", "messageCount": 0})
+
+    _mock_pi(monkeypatch, handler)
+    response = client.post("/api/agent/sessions")
+
+    assert response.status_code == 201
+    assert response.json()["id"] == "session-1"
+
+
+def test_agent_message_proxy_streams_sse(client, monkeypatch):
+    stream = (
+        'event: tool.start\ndata: {"type":"tool.start","toolName":"tkb_list_documents"}\n\n'
+        'event: message.completed\ndata: {"type":"message.completed","answer":"23"}\n\n'
+    ).encode()
+
+    def handler(request):
+        assert request.method == "POST"
+        assert request.url.path == "/v1/sessions/session-1/messages"
+        assert request.read() == b'{"message":"count files"}'
+        return httpx.Response(
+            200,
+            stream=httpx.ByteStream(stream),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _mock_pi(monkeypatch, handler)
+    response = client.post(
+        "/api/agent/sessions/session-1/messages",
+        json={"message": "count files"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "tkb_list_documents" in response.text
+    assert "message.completed" in response.text
+
+
+def test_agent_proxy_returns_503_when_runtime_is_unavailable(client, monkeypatch):
+    def handler(request):
+        raise httpx.ConnectError("offline", request=request)
+
+    _mock_pi(monkeypatch, handler)
+    response = client.post("/api/agent/sessions")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Pi Agent 当前不可用"
+
+
+def test_agent_proxy_rejects_invalid_session_id(client):
+    response = client.post(
+        "/api/agent/sessions/bad!id/messages",
+        json={"message": "hello"},
+    )
+    assert response.status_code == 400
 
 
 def test_agent_ingest_summarize(client):

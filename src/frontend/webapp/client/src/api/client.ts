@@ -45,13 +45,77 @@ export interface GraphData {
   links: GraphLink[]
 }
 
+export interface AgentSession {
+  id: string
+  name?: string
+  created?: string
+  modified?: string
+  messageCount: number
+  streaming: boolean
+}
+
+export type PiAgentEvent =
+  | { type: 'message.start'; sessionId: string }
+  | { type: 'assistant.delta'; delta: string }
+  | { type: 'assistant.thinking'; delta: string }
+  | { type: 'tool.start'; toolCallId: string; toolName: string; args: unknown }
+  | { type: 'tool.result'; toolCallId: string; toolName: string; isError: boolean; result: unknown }
+  | { type: 'citation'; docId: string; title: string }
+  | { type: 'limit.reached'; limit: 'tool_calls' | 'time'; maximum: number }
+  | { type: 'message.completed'; sessionId: string; answer: string; toolCalls: number }
+  | { type: 'message.failed'; error: string; code?: string }
+
+async function responseError(res: Response): Promise<Error> {
+  const body = await res.json().catch(() => ({ detail: res.statusText }))
+  return new Error(body.detail || body.error || body.message || res.statusText)
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, options)
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || err.message || res.statusText)
+    throw await responseError(res)
   }
   return res.json()
+}
+
+export async function readSseEvents(
+  response: Response,
+  onEvent: (event: PiAgentEvent) => void,
+): Promise<void> {
+  if (!response.body) throw new Error('浏览器不支持流式响应')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const consume = () => {
+    buffer = buffer.replace(/\r\n/g, '\n')
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary >= 0) {
+      const block = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + 2)
+      const data = block
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
+        .join('\n')
+      if (data) onEvent(JSON.parse(data) as PiAgentEvent)
+      boundary = buffer.indexOf('\n\n')
+    }
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      consume()
+    }
+    buffer += decoder.decode()
+    if (buffer.trim()) buffer += '\n\n'
+    consume()
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 export const api = {
@@ -119,5 +183,47 @@ export const api = {
       '/agent/ask',
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) },
     )
+  },
+
+  createAgentSession() {
+    return request<AgentSession>('/agent/sessions', { method: 'POST' })
+  },
+
+  cancelAgentSession(sessionId: string) {
+    return request<{ cancelled: boolean; sessionId: string }>(
+      `/agent/sessions/${encodeURIComponent(sessionId)}/cancel`,
+      { method: 'POST' },
+    )
+  },
+
+  deleteAgentSession(sessionId: string) {
+    return request<{ deleted: boolean; sessionId: string }>(
+      `/agent/sessions/${encodeURIComponent(sessionId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  async streamAgentMessage(
+    sessionId: string,
+    message: string,
+    onEvent: (event: PiAgentEvent) => void,
+    signal?: AbortSignal,
+  ) {
+    const res = await fetch(
+      `${BASE}/agent/sessions/${encodeURIComponent(sessionId)}/messages`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        body: JSON.stringify({ message }),
+        signal,
+      },
+    )
+    if (!res.ok) throw await responseError(res)
+    let failure: string | undefined
+    await readSseEvents(res, (event) => {
+      onEvent(event)
+      if (event.type === 'message.failed') failure = event.error
+    })
+    if (failure) throw new Error(failure)
   },
 }
