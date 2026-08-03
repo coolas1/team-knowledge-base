@@ -4,22 +4,61 @@ FakeKnowledgeBase implements src.engine.interface.KnowledgeBase with in-memory
 state so engine CLI/MCP adapters, the BFF, and agent skills can be tested with
 no external services.
 """
+
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit, urlunsplit
+
+import pytest
 
 from src.engine.interface import (
     Capabilities,
     DocumentRef,
     GraphData,
-    GraphLink,
-    GraphNode,
     IngestSource,
-    NotSupported,
-    RecallChunk,
     RecallRequest,
     RecallResult,
 )
+
+
+def pytest_collection_modifyitems(items):
+    """Keep live-service tests opt-in even when the full suite is executed."""
+    enabled = os.getenv("RUN_INTEGRATION", "").casefold() in {"1", "true", "yes"}
+    if enabled:
+        return
+    marker = pytest.mark.skip(reason="set RUN_INTEGRATION=1 to run live tests")
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(marker)
+
+
+def _host_service_url(url: str) -> str:
+    """Translate a Compose-only Ollama hostname for host-side pytest."""
+    parsed = urlsplit(url)
+    if parsed.hostname != "ollama":
+        return url
+    port = parsed.port or 11434
+    return urlunsplit(
+        (parsed.scheme or "http", f"localhost:{port}", parsed.path, "", "")
+    )
+
+
+@pytest.fixture
+def integration_host_config(monkeypatch):
+    """Make host-run integration tests use host-reachable service URLs."""
+    from config.settings import settings
+    from src.engine.components.embedder import embedder
+
+    ollama_url = os.getenv("INTEGRATION_OLLAMA_BASE_URL") or _host_service_url(
+        settings.ollama_base_url
+    )
+    llm_url = _host_service_url(settings.llm_base_url)
+    monkeypatch.setattr(settings, "ollama_base_url", ollama_url)
+    monkeypatch.setattr(settings, "llm_base_url", llm_url)
+    monkeypatch.setattr(embedder, "_base_url", ollama_url.rstrip("/"))
+    return {"ollama_base_url": ollama_url, "llm_base_url": llm_url}
 
 
 @dataclass
@@ -69,7 +108,12 @@ class FakeKnowledgeBase:
         status: str | None = None,
     ) -> dict:
         items = list(self.docs.values())
-        return {"total": len(items), "page": page, "page_size": page_size, "items": items}
+        return {
+            "total": len(items),
+            "page": page,
+            "page_size": page_size,
+            "items": items,
+        }
 
     async def get_document(self, doc_id: str) -> dict | None:
         ref = self.docs.get(doc_id)
@@ -77,5 +121,7 @@ class FakeKnowledgeBase:
             return None
         out = ref.__dict__
         raw = self.raw.get(doc_id, b"")
-        out["raw_text"] = raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else ""
+        out["raw_text"] = (
+            raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else ""
+        )
         return out

@@ -1,4 +1,4 @@
-import inspect
+import asyncio
 import uuid
 
 import pytest
@@ -100,23 +100,70 @@ def test_remove_upload_directory_unlinks_symlink_without_following(tmp_path):
 
 
 @pytest.mark.integration
-async def test_ingest_recall_roundtrip():
+@pytest.mark.filterwarnings(
+    "error:Expected a result with a single record, but found multiple.:UserWarning"
+)
+async def test_ingest_recall_roundtrip(integration_host_config, monkeypatch):
     # Requires Postgres + Neo4j + Ollama + LLM configured.
     from pathlib import Path
-    from src.engine.components.store.postgres import init_db
+    from sqlalchemy import func, select
 
+    from config.settings import settings
+    from src.engine.components.store.models import Chunk, Document
+    from src.engine.components.store.postgres import (
+        async_session_factory,
+        engine,
+        init_db,
+    )
+    from src.engine.interface import IngestSource, RecallRequest
+
+    assert settings.llm_provider != "todo", "live test requires a configured LLM"
     await init_db()
     cfg = EngineConfig(impl="graphrag", config_dir=Path("config/engine/graphrag"))
     kb = build(cfg)
-    ref = await kb.ingest(
-        __import__("src.engine.interface", fromlist=["IngestSource"]).IngestSource(
-            name="t.md", data=b"# T\n\nAcme is in Building A."
+    task = None
+    ref = None
+    real_create_task = asyncio.create_task
+
+    def capture_task(coroutine):
+        nonlocal task
+        task = real_create_task(coroutine)
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", capture_task)
+    token = f"IntegrationBeacon{uuid.uuid4().hex}"
+    try:
+        ref = await kb.ingest(
+            IngestSource(
+                name=f"integration-roundtrip-{uuid.uuid4()}.md",
+                data=f"# Integration\n\n{token} is located in Building A.".encode(),
+            )
         )
-    )
-    assert ref.status in ("pending", "indexed")
-    res = await kb.recall(
-        __import__("src.engine.interface", fromlist=["RecallRequest"]).RecallRequest(
-            query="Acme"
-        )
-    )
-    assert hasattr(res, "chunks")
+        assert ref.status == "pending"
+        assert task is not None
+        monkeypatch.setattr(asyncio, "create_task", real_create_task)
+        await asyncio.wait_for(task, timeout=300)
+
+        async with async_session_factory() as session:
+            document = await session.get(Document, uuid.UUID(ref.id))
+            chunk_count = await session.scalar(
+                select(func.count(Chunk.id)).where(Chunk.doc_id == uuid.UUID(ref.id))
+            )
+        assert document is not None
+        assert document.status == "indexed", document.error_msg
+        assert document.error_msg is None
+        assert chunk_count and chunk_count > 0
+
+        result = await kb.recall(RecallRequest(query=token, top_k=20))
+        assert any(chunk.doc_id == ref.id for chunk in result.chunks)
+    finally:
+        try:
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            if ref is not None:
+                await kb.remove(ref.id)
+                assert not (Path("uploads") / ref.id).exists()
+        finally:
+            await kb._neo4j.close()
+            await engine.dispose()

@@ -305,15 +305,25 @@ class Neo4jClient:
             result = await session.run(
                 """
                 MATCH (n {name: $name})
-                OPTIONAL MATCH (n)-[r]-(other)
+                WHERE NOT n:Document
+                WITH n
+                ORDER BY coalesce(n.entity_type, ''), elementId(n)
+                WITH collect(n) AS matches
+                UNWIND matches AS matched
+                OPTIONAL MATCH (matched)-[r]-(other)
+                WITH matches, collect(DISTINCT {
+                    type: type(r),
+                    direction: CASE
+                        WHEN startNode(r) = matched THEN 'OUT'
+                        ELSE 'IN'
+                    END,
+                    other_name: other.name,
+                    other_labels: labels(other),
+                    description: r.description
+                }) AS relations
+                WITH head(matches) AS n, relations
                 RETURN n, labels(n) AS labels,
-                       collect({
-                           type: type(r),
-                           direction: CASE WHEN startNode(r) = n THEN 'OUT' ELSE 'IN' END,
-                           other_name: other.name,
-                           other_labels: labels(other),
-                           description: r.description
-                       }) AS relations
+                       relations
                 """,
                 name=name,
             )

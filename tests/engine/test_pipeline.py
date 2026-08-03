@@ -46,22 +46,57 @@ async def test_secondary_index_hook_failure_is_isolated():
 
 
 @pytest.mark.integration
-async def test_process_file_end_to_end():
+async def test_process_file_end_to_end(integration_host_config):
     # Requires: docker compose up postgres; Neo4j running; Ollama with
     # nomic-embed-text; an LLM configured via .env (LLM_PROVIDER etc.).
     from uuid import uuid4
 
-    from src.engine.components.store.postgres import init_db, async_session_factory
-    from src.engine.components.store.models import Document
+    from sqlalchemy import func, select
 
+    from config.settings import settings
+    from src.engine.components.store.models import Chunk, Document
+    from src.engine.components.store.postgres import (
+        async_session_factory,
+        engine,
+        init_db,
+    )
+    from src.engine.graphrag.backend import GraphRAGBackend
+
+    assert settings.llm_provider != "todo", "live test requires a configured LLM"
     await init_db()
     neo4j = Neo4jClient()
     pipe = Pipeline(neo4j, analyzer=Analyzer())
+    backend = GraphRAGBackend(neo4j, pipe)
     doc_id = uuid4()
-    async with async_session_factory() as session:
-        session.add(
-            Document(id=doc_id, title="t.md", file_type="markdown", status="pending")
-        )
-        await session.commit()
-    await pipe.reindex_document(doc_id, "# T\n\nSome content about Acme.")
-    await neo4j.close()
+    title = f"integration-pipeline-{doc_id}.md"
+    content = f"# Integration pipeline\n\nUnique pipeline fact {doc_id}."
+    try:
+        async with async_session_factory() as session:
+            session.add(
+                Document(
+                    id=doc_id,
+                    title=title,
+                    file_type="markdown",
+                    status="pending",
+                )
+            )
+            await session.commit()
+
+        await pipe.reindex_document(doc_id, content)
+
+        async with async_session_factory() as session:
+            document = await session.get(Document, doc_id)
+            chunk_count = await session.scalar(
+                select(func.count(Chunk.id)).where(Chunk.doc_id == doc_id)
+            )
+        assert document is not None
+        assert document.status == "indexed", document.error_msg
+        assert document.error_msg is None
+        assert document.raw_text == content
+        assert chunk_count and chunk_count > 0
+    finally:
+        try:
+            await backend.remove(str(doc_id))
+        finally:
+            await neo4j.close()
+            await engine.dispose()
