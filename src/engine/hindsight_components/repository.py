@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.engine.components.store.models import Document
 
 from .models import (
+    HindsightGraphOutbox,
     HindsightDocumentState,
     MemoryEntity,
     MemoryLink,
@@ -31,6 +32,14 @@ from .types import (
     RecallCandidate,
     ReflectionContext,
     RetainPlan,
+)
+from .graph_types import (
+    MemoryGraphDocument,
+    MemoryGraphEntity,
+    MemoryGraphLink as MemoryGraphLinkProjection,
+    MemoryGraphMemory,
+    MemoryGraphMention,
+    MemoryGraphProjection,
 )
 from .utils import document_lock_key, lexical_tokens, normalize_entity
 
@@ -62,6 +71,11 @@ class PostgresMemoryRepository:
                             MemoryUnit.document_id == document_id
                         )
                     )
+                )
+                impacted_documents = await self._dependent_graph_documents(
+                    session,
+                    old_ids,
+                    exclude_document_id=document_id,
                 )
                 if old_ids:
                     await session.execute(
@@ -102,6 +116,13 @@ class PostgresMemoryRepository:
                         },
                     )
                 )
+                self._enqueue_graph_event(session, document_id, "replace")
+                for impacted_document_id in sorted(impacted_documents, key=str):
+                    self._enqueue_graph_event(
+                        session,
+                        impacted_document_id,
+                        "replace",
+                    )
 
     async def set_document_state(
         self,
@@ -157,10 +178,16 @@ class PostgresMemoryRepository:
                 await session.execute(
                     select(func.pg_advisory_xact_lock(document_lock_key(uid)))
                 )
+                self._enqueue_graph_event(session, uid, "delete")
                 memory_ids = list(
                     await session.scalars(
                         select(MemoryUnit.id).where(MemoryUnit.document_id == uid)
                     )
+                )
+                impacted_documents = await self._dependent_graph_documents(
+                    session,
+                    memory_ids,
+                    exclude_document_id=uid,
                 )
                 if memory_ids:
                     await session.execute(
@@ -172,6 +199,12 @@ class PostgresMemoryRepository:
                 await session.execute(
                     delete(MemoryUnit).where(MemoryUnit.document_id == uid)
                 )
+                for impacted_document_id in sorted(impacted_documents, key=str):
+                    self._enqueue_graph_event(
+                        session,
+                        impacted_document_id,
+                        "replace",
+                    )
                 await session.execute(
                     delete(HindsightDocumentState).where(
                         HindsightDocumentState.document_id == uid
@@ -184,6 +217,48 @@ class PostgresMemoryRepository:
                         .exists()
                     )
                 )
+
+    async def graph_projection(self, document_id: str) -> MemoryGraphProjection | None:
+        uid = uuid.UUID(document_id)
+        async with self._session_factory() as session:
+            document = await session.get(Document, uid)
+            if document is None:
+                return None
+            memories = list(
+                await session.scalars(
+                    select(MemoryUnit)
+                    .where(MemoryUnit.document_id == uid)
+                    .order_by(
+                        MemoryUnit.chunk_index,
+                        MemoryUnit.memory_index,
+                        MemoryUnit.id,
+                    )
+                )
+            )
+            memory_ids = [memory.id for memory in memories]
+            mention_rows = []
+            links = []
+            if memory_ids:
+                mention_rows = list(
+                    (
+                        await session.execute(
+                            select(MemoryUnitEntity, MemoryEntity)
+                            .join(
+                                MemoryEntity,
+                                MemoryEntity.id == MemoryUnitEntity.entity_id,
+                            )
+                            .where(MemoryUnitEntity.memory_id.in_(memory_ids))
+                        )
+                    ).all()
+                )
+                links = list(
+                    await session.scalars(
+                        select(MemoryLink).where(
+                            MemoryLink.source_memory_id.in_(memory_ids)
+                        )
+                    )
+                )
+        return self._graph_projection(document, memories, mention_rows, links)
 
     async def _insert_memories(self, session: AsyncSession, plan: RetainPlan) -> None:
         for draft in plan.memories:
@@ -237,6 +312,42 @@ class PostgresMemoryRepository:
         await session.flush()
 
     @staticmethod
+    async def _dependent_graph_documents(
+        session: AsyncSession,
+        memory_ids: list[uuid.UUID],
+        *,
+        exclude_document_id: uuid.UUID,
+    ) -> set[uuid.UUID]:
+        if not memory_ids:
+            return set()
+        observation_documents = set(
+            await session.scalars(
+                select(MemoryUnit.document_id)
+                .where(
+                    MemoryUnit.document_id != exclude_document_id,
+                    MemoryUnit.memory_type == "observation",
+                    MemoryUnit.source_memory_ids.overlap(memory_ids),
+                )
+                .distinct()
+            )
+        )
+        inbound_link_documents = set(
+            await session.scalars(
+                select(MemoryUnit.document_id)
+                .join(
+                    MemoryLink,
+                    MemoryLink.source_memory_id == MemoryUnit.id,
+                )
+                .where(
+                    MemoryUnit.document_id != exclude_document_id,
+                    MemoryLink.target_memory_id.in_(memory_ids),
+                )
+                .distinct()
+            )
+        )
+        return observation_documents | inbound_link_documents
+
+    @staticmethod
     def _state_from_row(row: HindsightDocumentState) -> DocumentMemoryState:
         return DocumentMemoryState(
             document_id=str(row.document_id),
@@ -245,6 +356,93 @@ class PostgresMemoryRepository:
             memory_count=row.memory_count,
             link_count=row.link_count,
             updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        )
+
+    @staticmethod
+    def _enqueue_graph_event(
+        session: AsyncSession,
+        document_id: uuid.UUID,
+        operation: str,
+    ) -> HindsightGraphOutbox:
+        if operation not in {"replace", "delete"}:
+            raise ValueError(f"unsupported graph operation: {operation}")
+        event = HindsightGraphOutbox(
+            document_id=document_id,
+            operation=operation,
+        )
+        session.add(event)
+        return event
+
+    @staticmethod
+    def _graph_projection(
+        document: Document,
+        memories: list[MemoryUnit],
+        mention_rows: list[tuple[MemoryUnitEntity, MemoryEntity]],
+        links: list[MemoryLink],
+    ) -> MemoryGraphProjection:
+        entity_rows = {entity.id: entity for _, entity in mention_rows}
+        return MemoryGraphProjection(
+            document=MemoryGraphDocument(
+                id=str(document.id),
+                title=document.title,
+                file_type=document.file_type,
+                overview=document.overview or "",
+            ),
+            memories=tuple(
+                MemoryGraphMemory(
+                    id=str(memory.id),
+                    document_id=str(memory.document_id),
+                    memory_type=memory.memory_type,
+                    text=memory.text,
+                    context=memory.context,
+                    chunk_index=memory.chunk_index,
+                    occurred_start=(
+                        memory.occurred_start.isoformat()
+                        if memory.occurred_start
+                        else None
+                    ),
+                    occurred_end=(
+                        memory.occurred_end.isoformat() if memory.occurred_end else None
+                    ),
+                    confidence=memory.confidence,
+                    source_memory_ids=tuple(
+                        str(item) for item in memory.source_memory_ids
+                    ),
+                    tags=tuple(memory.tags),
+                    metadata=dict(memory.metadata_json or {}),
+                )
+                for memory in memories
+            ),
+            entities=tuple(
+                MemoryGraphEntity(
+                    id=str(entity.id),
+                    canonical_name=entity.canonical_name,
+                    normalized_name=entity.normalized_name,
+                    entity_type=entity.entity_type,
+                    metadata=dict(entity.metadata_json or {}),
+                )
+                for entity in sorted(
+                    entity_rows.values(), key=lambda item: item.normalized_name
+                )
+            ),
+            mentions=tuple(
+                MemoryGraphMention(
+                    memory_id=str(mention.memory_id),
+                    entity_id=str(mention.entity_id),
+                    role=mention.role,
+                )
+                for mention, _ in mention_rows
+            ),
+            links=tuple(
+                MemoryGraphLinkProjection(
+                    source_memory_id=str(link.source_memory_id),
+                    target_memory_id=str(link.target_memory_id),
+                    link_type=link.link_type,
+                    weight=link.weight,
+                    metadata=dict(link.metadata_json or {}),
+                )
+                for link in links
+            ),
         )
 
     async def _insert_links(self, session: AsyncSession, plan: RetainPlan) -> None:

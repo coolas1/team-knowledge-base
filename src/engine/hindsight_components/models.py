@@ -12,10 +12,13 @@ from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     Text,
@@ -211,3 +214,72 @@ class HindsightDocumentState(Base):
     )
 
     __table_args__ = (Index("idx_hindsight_document_state_status", "status"),)
+
+
+class HindsightGraphOutbox(Base):
+    """Durable PostgreSQL event for rebuilding the disposable Neo4j projection.
+
+    ``document_id`` intentionally has no foreign key: delete events must survive
+    deletion of the authoritative Document row.
+    """
+
+    __tablename__ = "hindsight_graph_outbox"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        Identity(),
+        primary_key=True,
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    operation: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    error_msg: Mapped[str | None] = mapped_column(Text)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+        onupdate=_utcnow,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "operation IN ('replace', 'delete')",
+            name="ck_hindsight_graph_outbox_operation",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed')",
+            name="ck_hindsight_graph_outbox_status",
+        ),
+        Index(
+            "idx_hindsight_graph_outbox_ready",
+            "status",
+            "available_at",
+            "id",
+        ),
+        Index("idx_hindsight_graph_outbox_document", "document_id", "id"),
+    )
