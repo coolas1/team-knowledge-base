@@ -49,6 +49,7 @@ def test_load_config_missing_file_uses_defaults(tmp_path: Path):
 
 def test_infra_settings_postgres_dsn():
     s = InfraSettings(
+        _env_file=None,
         postgres_user="u",
         postgres_password="p",
         postgres_host="h",

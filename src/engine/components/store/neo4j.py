@@ -431,6 +431,7 @@ class Neo4jClient:
                 MATCH (a)-[r]->(b)
                 WHERE NOT a:Document AND NOT b:Document
                   AND type(r) <> 'RELATED_TO'
+                  AND a.sources IS NOT NULL AND b.sources IS NOT NULL
                 RETURN a.name AS source, b.name AS target,
                        type(r) AS type, r.description AS description
                 """

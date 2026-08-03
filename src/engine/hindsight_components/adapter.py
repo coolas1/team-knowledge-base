@@ -31,8 +31,8 @@ class DocumentStateReader(Protocol):
 class HindsightKnowledgeBaseAdapter:
     """Keep the original ``KnowledgeBase`` API while adding Hindsight state.
 
-    Search takeover remains in the recall compatibility adapter.  Graph methods
-    deliberately delegate to GraphRAG until the Neo4j memory projection batch.
+    Search takeover remains in the recall compatibility adapter. Graph methods
+    deliberately delegate to GraphRAG so the existing entity graph stays small.
     """
 
     def __init__(
