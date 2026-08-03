@@ -1,0 +1,38 @@
+{
+  "name": "@team-knowledge-base/pi-agent-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi Agent adapter for the Team Knowledge Base MCP engine",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.10",
+    "@types/node": "26.1.1",
+    "typebox": "1.1.38",
+    "typescript": "7.0.2",
+    "vitest": "4.1.9"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
