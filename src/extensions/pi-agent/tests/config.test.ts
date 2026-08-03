@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadTkbAdapterConfig } from "../src/config.js";
+import { loadPiAgentConfig, loadTkbAdapterConfig } from "../src/config.js";
 
 describe("loadTkbAdapterConfig", () => {
   it("uses safe defaults", () => {
@@ -22,5 +22,34 @@ describe("loadTkbAdapterConfig", () => {
     expect(config.connectTimeoutMs).toBe(2500);
     expect(config.deepToolTimeoutMs).toBe(9000);
     expect(config.enableWriteTools).toBe(true);
+  });
+});
+
+describe("loadPiAgentConfig", () => {
+  it("supports a local Ollama runtime without sharing Engine settings", () => {
+    const config = loadPiAgentConfig({
+      PI_AGENT_CWD: "C:/tkb",
+      PI_AGENT_MODEL: "qwen3:14b",
+    });
+    expect(config.provider).toBe("ollama");
+    expect(config.modelApiKey).toBe("ollama");
+    expect(config.maxToolCalls).toBe(12);
+    expect(config.maxRunSeconds).toBe(300);
+    expect(config.sessionDir).toBe("C:/tkb/.pi-agent-data/sessions");
+  });
+
+  it("accepts external OpenAI-compatible model settings", () => {
+    const config = loadPiAgentConfig({
+      PI_AGENT_CWD: "C:/tkb",
+      PI_AGENT_PROVIDER: "deepseek",
+      PI_AGENT_MODEL: "deepseek-chat",
+      PI_AGENT_BASE_URL: "https://api.example/v1",
+      PI_AGENT_API_KEY: "test-key",
+      PI_AGENT_MAX_TOOL_CALLS: "8",
+    });
+    expect(config.provider).toBe("deepseek");
+    expect(config.modelBaseUrl).toBe("https://api.example/v1");
+    expect(config.modelApiKey).toBe("test-key");
+    expect(config.maxToolCalls).toBe(8);
   });
 });
