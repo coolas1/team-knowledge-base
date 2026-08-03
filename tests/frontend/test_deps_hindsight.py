@@ -8,14 +8,17 @@ from tests.conftest import FakeKnowledgeBase
 
 
 @pytest.fixture(autouse=True)
-def reset_deps_state():
+def reset_deps_state(monkeypatch):
     deps._engine_client = None
     deps._plugin = None
     deps._llm = None
+    deps._graph_worker_runtime = None
+    monkeypatch.setattr(deps.settings, "hindsight_graph_worker_enabled", False)
     yield
     deps._engine_client = None
     deps._plugin = None
     deps._llm = None
+    deps._graph_worker_runtime = None
 
 
 async def test_startup_wires_hindsight_for_inprocess(monkeypatch):
@@ -120,3 +123,73 @@ async def test_mcp_access_does_not_build_local_hindsight(monkeypatch):
 
     assert isinstance(deps.get_engine(), McpEngineClient)
     assert captured["query"] is None
+
+
+async def test_startup_and_shutdown_manage_opt_in_graph_worker(monkeypatch):
+    class Runtime:
+        def __init__(self):
+            self.started = 0
+            self.stopped = 0
+
+        async def start(self):
+            self.started += 1
+
+        async def stop(self):
+            self.stopped += 1
+
+    runtime = Runtime()
+
+    async def init_db():
+        pass
+
+    monkeypatch.setattr(
+        deps,
+        "app_config",
+        lambda: AppConfig.model_validate(
+            {
+                "hindsight": {"enabled": True},
+                "webapp": {"engine_access": "inprocess"},
+            }
+        ),
+    )
+    monkeypatch.setattr(deps, "init_db", init_db)
+    monkeypatch.setattr(deps, "build_engine", lambda config: FakeKnowledgeBase())
+    monkeypatch.setattr(deps, "build_plugin", lambda config: object())
+    monkeypatch.setattr("src.agent.llm.build_llm", lambda: None)
+    monkeypatch.setattr(
+        "src.engine.hindsight_components.query.build_query_service",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "src.engine.hindsight_components.hook.build_retain_hook",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(deps, "set_kb", lambda value: None)
+    monkeypatch.setattr(deps, "set_query_service", lambda value: None)
+    monkeypatch.setattr(deps.settings, "hindsight_graph_worker_enabled", True)
+    monkeypatch.setattr(deps.settings, "hindsight_graph_worker_poll_seconds", 2.0)
+    monkeypatch.setattr(deps.settings, "hindsight_graph_worker_lease_seconds", 60)
+    monkeypatch.setattr(deps.settings, "hindsight_graph_worker_max_attempts", 4)
+
+    captured = {}
+
+    def build_runtime(**kwargs):
+        captured.update(kwargs)
+        return runtime
+
+    monkeypatch.setattr(
+        "src.engine.hindsight_components.graph_runtime.build_graph_worker_runtime",
+        build_runtime,
+    )
+
+    await deps.startup()
+    assert runtime.started == 1
+    assert captured == {
+        "poll_seconds": 2.0,
+        "lease_seconds": 60,
+        "max_attempts": 4,
+    }
+
+    await deps.shutdown()
+    assert runtime.stopped == 1
+    assert deps._graph_worker_runtime is None

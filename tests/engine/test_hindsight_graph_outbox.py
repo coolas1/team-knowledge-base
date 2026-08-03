@@ -68,17 +68,20 @@ class FakeOutbox:
     async def claim(self, **kwargs):
         return self.events.pop(0) if self.events else None
 
-    async def complete(self, event_id: int) -> None:
+    async def complete(self, event_id: int, attempt: int) -> bool:
         self.completed.append(event_id)
+        return True
 
     async def fail(
         self,
         event_id: int,
+        attempt: int,
         error: str,
         *,
         retry_delay_seconds: int,
-    ) -> None:
+    ) -> bool:
         self.failed.append((event_id, error, retry_delay_seconds))
+        return True
 
 
 class FakeSource:
@@ -162,18 +165,39 @@ def test_claim_statement_serializes_events_per_document():
     assert "for update skip locked" in sql
 
 
+def test_completion_statement_fences_stale_worker_by_attempt_number():
+    statement = PostgresGraphOutbox._owned_event_statement(7, 3)
+    sql = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+
+    assert "status = 'processing'" in sql
+    assert "attempts = 3" in sql
+    assert "for update" in sql
+
+
 async def test_postgres_outbox_complete_and_fail_update_durable_state():
     row = outbox_row()
+    row.status = "processing"
     factory = FakeSessionFactory(row)
     outbox = PostgresGraphOutbox(factory)
 
-    await outbox.fail(7, "neo4j unavailable", retry_delay_seconds=4)
+    await outbox.fail(
+        7,
+        row.attempts,
+        "neo4j unavailable",
+        retry_delay_seconds=4,
+    )
     assert row.status == "failed"
     assert row.error_msg == "neo4j unavailable"
     assert row.locked_at is None
     retry_at = row.available_at
 
-    await outbox.complete(7)
+    row.status = "processing"
+    await outbox.complete(7, row.attempts)
     assert row.status == "completed"
     assert row.error_msg is None
     assert row.available_at == retry_at

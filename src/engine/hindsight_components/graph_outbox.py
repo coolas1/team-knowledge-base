@@ -43,15 +43,16 @@ class GraphOutbox(Protocol):
         max_attempts: int = 10,
     ) -> GraphOutboxEvent | None: ...
 
-    async def complete(self, event_id: int) -> None: ...
+    async def complete(self, event_id: int, attempt: int) -> bool: ...
 
     async def fail(
         self,
         event_id: int,
+        attempt: int,
         error: str,
         *,
         retry_delay_seconds: int,
-    ) -> None: ...
+    ) -> bool: ...
 
 
 class GraphProjectionSource(Protocol):
@@ -129,37 +130,56 @@ class PostgresGraphOutbox:
             .limit(1)
         )
 
-    async def complete(self, event_id: int) -> None:
+    async def complete(self, event_id: int, attempt: int) -> bool:
         async with self._session_factory() as session:
             async with session.begin():
-                row = await session.get(HindsightGraphOutbox, event_id)
+                row = await session.scalar(
+                    self._owned_event_statement(event_id, attempt)
+                )
                 if row is None:
-                    return
+                    return False
                 row.status = "completed"
                 row.locked_at = None
                 row.error_msg = None
                 row.updated_at = _utcnow()
+                return True
 
     async def fail(
         self,
         event_id: int,
+        attempt: int,
         error: str,
         *,
         retry_delay_seconds: int,
-    ) -> None:
+    ) -> bool:
         if retry_delay_seconds < 0:
             raise ValueError("retry_delay_seconds cannot be negative")
         now = _utcnow()
         async with self._session_factory() as session:
             async with session.begin():
-                row = await session.get(HindsightGraphOutbox, event_id)
+                row = await session.scalar(
+                    self._owned_event_statement(event_id, attempt)
+                )
                 if row is None:
-                    return
+                    return False
                 row.status = "failed"
                 row.locked_at = None
                 row.error_msg = error[:4000]
                 row.available_at = now + timedelta(seconds=retry_delay_seconds)
                 row.updated_at = now
+                return True
+
+    @staticmethod
+    def _owned_event_statement(event_id: int, attempt: int):
+        return (
+            select(HindsightGraphOutbox)
+            .where(
+                HindsightGraphOutbox.id == event_id,
+                HindsightGraphOutbox.status == "processing",
+                HindsightGraphOutbox.attempts == attempt,
+            )
+            .with_for_update()
+        )
 
     @staticmethod
     def _event_from_row(row: HindsightGraphOutbox) -> GraphOutboxEvent:
@@ -212,6 +232,7 @@ class GraphProjectionWorker:
             delay = min(2 ** min(event.attempts, 8), 300)
             await self._outbox.fail(
                 event.id,
+                event.attempts,
                 str(error),
                 retry_delay_seconds=delay,
             )
@@ -223,7 +244,7 @@ class GraphProjectionWorker:
                 error=str(error),
             )
 
-        await self._outbox.complete(event.id)
+        await self._outbox.complete(event.id, event.attempts)
         return GraphProjectionRun(
             event_id=event.id,
             document_id=event.document_id,

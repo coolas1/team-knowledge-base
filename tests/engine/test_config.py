@@ -56,3 +56,16 @@ def test_infra_settings_postgres_dsn():
         postgres_db="d",
     )
     assert s.postgres_dsn == "postgresql+asyncpg://u:p@h:5433/d"
+    assert s.hindsight_graph_worker_enabled is False
+    assert s.hindsight_graph_worker_poll_seconds == 1.0
+    assert s.hindsight_graph_worker_lease_seconds == 300
+    assert s.hindsight_graph_worker_max_attempts == 10
+
+
+def test_graph_worker_settings_must_be_positive():
+    with pytest.raises(ValueError):
+        InfraSettings(hindsight_graph_worker_poll_seconds=0)
+    with pytest.raises(ValueError):
+        InfraSettings(hindsight_graph_worker_lease_seconds=0)
+    with pytest.raises(ValueError):
+        InfraSettings(hindsight_graph_worker_max_attempts=0)

@@ -16,11 +16,13 @@ from src.engine.components.store.postgres import init_db
 from src.engine.config import EngineConfig, build_engine
 from src.engine.mcp import set_kb, set_query_service
 from config.schema import AppConfig, load_config
+from config.settings import settings
 
 _engine_client: EngineClient | None = None
 _plugin: AgentPlugin | None = None
 _llm: LlmClient | None = None
 _app_config: AppConfig | None = None
+_graph_worker_runtime = None
 
 
 def app_config() -> AppConfig:
@@ -31,7 +33,7 @@ def app_config() -> AppConfig:
 
 
 async def startup() -> None:
-    global _engine_client, _plugin
+    global _engine_client, _plugin, _graph_worker_runtime
     cfg = app_config()
     if cfg.webapp.engine_access == "mcp":
         set_query_service(None)
@@ -68,10 +70,32 @@ async def startup() -> None:
     from src.agent.llm import build_llm
 
     _llm = build_llm()
+    if (
+        cfg.webapp.engine_access == "inprocess"
+        and cfg.hindsight.enabled
+        and settings.hindsight_graph_worker_enabled
+    ):
+        from src.engine.hindsight_components.graph_runtime import (
+            build_graph_worker_runtime,
+        )
+
+        runtime = build_graph_worker_runtime(
+            poll_seconds=settings.hindsight_graph_worker_poll_seconds,
+            lease_seconds=settings.hindsight_graph_worker_lease_seconds,
+            max_attempts=settings.hindsight_graph_worker_max_attempts,
+        )
+        await runtime.start()
+        _graph_worker_runtime = runtime
 
 
 async def shutdown() -> None:
-    set_query_service(None)
+    global _graph_worker_runtime
+    try:
+        if _graph_worker_runtime is not None:
+            await _graph_worker_runtime.stop()
+    finally:
+        _graph_worker_runtime = None
+        set_query_service(None)
 
 
 def get_engine() -> EngineClient:

@@ -1,4 +1,6 @@
 """Infra connection settings, loaded from .env via pydantic-settings."""
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +33,13 @@ class InfraSettings(BaseSettings):
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_base_url: str = ""
     reranker_api_key: str = ""
+
+    # Disposable Neo4j projection worker. It remains opt-in so PostgreSQL-only
+    # Hindsight deployments keep their current runtime behaviour.
+    hindsight_graph_worker_enabled: bool = False
+    hindsight_graph_worker_poll_seconds: float = Field(default=1.0, gt=0)
+    hindsight_graph_worker_lease_seconds: int = Field(default=300, ge=1)
+    hindsight_graph_worker_max_attempts: int = Field(default=10, ge=1)
 
     app_host: str = "0.0.0.0"
     app_port: int = 8000
