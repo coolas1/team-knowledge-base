@@ -41,7 +41,13 @@ class EngineClient(Protocol):
     """Uniform client over in-process / MCP transports. Skills call this,
     never engine internals. All methods return JSON-ish dicts."""
 
-    async def recall(self, query: str, top_k: int = 10) -> dict: ...
+    async def recall(
+        self,
+        query: str,
+        top_k: int = 10,
+        mode: Literal["auto", "fast", "deep"] = "auto",
+        needs_answer: bool = False,
+    ) -> dict: ...
     async def query(
         self,
         query: str,

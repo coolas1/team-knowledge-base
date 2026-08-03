@@ -14,7 +14,10 @@ async def test_inprocess_recall_returns_dict():
     kb = FakeKnowledgeBase()
     client = InProcessEngineClient(kb)
     out = await client.recall("acme")
-    assert out == {"chunks": [], "related_entities": [], "related_docs": []}
+    assert out["chunks"] == []
+    assert out["related_entities"] == []
+    assert out["related_docs"] == []
+    assert out["answer"] is None
     assert kb.recall_calls == ["acme"]
 
 
@@ -51,6 +54,39 @@ async def test_inprocess_query_forwards_unified_request():
     assert service.request.top_k == 3
 
 
+async def test_inprocess_recall_uses_hindsight_through_original_method():
+    class FakeQueryService:
+        request = None
+
+        async def query(self, request):
+            self.request = request
+            return KnowledgeQueryResult(
+                strategy_used="reflect",
+                answer="answer",
+                sources=[
+                    KnowledgeSource(
+                        memory_id="m1",
+                        memory_type="world",
+                        doc_id="d1",
+                        title="Doc",
+                        chunk_text="context",
+                    )
+                ],
+            )
+
+    service = FakeQueryService()
+    kb = FakeKnowledgeBase()
+    client = InProcessEngineClient(kb, query_service=service)
+
+    out = await client.recall("分析项目进展", top_k=3, mode="deep", needs_answer=True)
+
+    assert kb.recall_calls == []
+    assert service.request.mode == "deep"
+    assert service.request.needs_answer is True
+    assert out["answer"] == "answer"
+    assert out["chunks"][0]["memory_id"] == "m1"
+
+
 async def test_inprocess_query_requires_service():
     client = InProcessEngineClient(FakeKnowledgeBase())
     with pytest.raises(RuntimeError, match="Hindsight"):
@@ -85,6 +121,30 @@ async def test_mcp_recall_calls_search_tool(monkeypatch):
     out = await client.recall("acme", top_k=7)
     assert out["chunks"] == []
     assert calls == [("search", {"query": "acme", "top_k": 7})]
+
+
+async def test_mcp_recall_forwards_explicit_hindsight_options(monkeypatch):
+    client = McpEngineClient("http://localhost:8000/mcp")
+    calls = []
+
+    async def fake_call(tool, args):
+        calls.append((tool, args))
+        return {"chunks": [], "answer": "answer"}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    await client.recall("acme", top_k=4, mode="deep", needs_answer=True)
+
+    assert calls == [
+        (
+            "search",
+            {
+                "query": "acme",
+                "top_k": 4,
+                "mode": "deep",
+                "needs_answer": True,
+            },
+        )
+    ]
 
 
 async def test_mcp_query_calls_unified_tool(monkeypatch):

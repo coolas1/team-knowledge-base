@@ -100,7 +100,17 @@ class HindsightQueryService:
             title=item.title,
             chunk_text=str(chunk.get("text") or item.source_text or item.text),
             score=item.final_score,
-            metadata=dict(item.metadata),
+            metadata={
+                **dict(item.metadata),
+                "scores": {
+                    "final": item.final_score,
+                    "reranker": item.reranker_score,
+                    "semantic": item.semantic_score,
+                    "keyword": item.keyword_score,
+                    "graph": item.graph_score,
+                    "temporal": item.temporal_score,
+                },
+            },
         )
 
     @staticmethod
@@ -137,7 +147,7 @@ class HindsightQueryService:
                         title=str(metadata.get("title", "")),
                         chunk_text=str(item.get("text", "")),
                         score=float(scores.get("final") or 0.0),
-                        metadata=metadata,
+                        metadata={**metadata, "scores": dict(scores)},
                     )
                 )
         return sources

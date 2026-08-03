@@ -1,18 +1,12 @@
 import json
-from pathlib import Path
-
-import pytest
 
 from src.engine import cli as cli_mod
-from src.engine.config import EngineConfig
-from src.engine.interface import GraphData, GraphNode, IngestSource, RecallRequest, RecallResult
+from src.engine.interface import GraphData, GraphNode
 from tests.conftest import FakeKnowledgeBase
 
 
 def _install_fake(monkeypatch, fake: FakeKnowledgeBase):
-    monkeypatch.setattr(
-        cli_mod, "build_engine", lambda cfg: fake, raising=True
-    )
+    monkeypatch.setattr(cli_mod, "build_engine", lambda cfg: fake, raising=True)
 
 
 def test_cli_ingest_prints_doc_ref(capsys, monkeypatch):
@@ -33,7 +27,10 @@ def test_cli_recall_prints_result(capsys, monkeypatch):
     rc = cli_mod.main(["recall", "--query", "find acme", "--top-k", "5"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert out == {"chunks": [], "related_entities": [], "related_docs": []}
+    assert out["chunks"] == []
+    assert out["related_entities"] == []
+    assert out["related_docs"] == []
+    assert out["answer"] is None
     assert fake.recall_calls == ["find acme"]
 
 

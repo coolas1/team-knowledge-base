@@ -49,6 +49,8 @@ class DocumentRef:
 class RecallRequest:
     query: str
     top_k: int = 20
+    mode: Literal["auto", "fast", "deep"] = "auto"
+    needs_answer: bool = False
 
 
 @dataclass
@@ -58,6 +60,9 @@ class RecallChunk:
     chunk_text: str
     reranker_score: float
     vector_score: float
+    memory_id: str | None = None
+    memory_type: str | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -65,6 +70,11 @@ class RecallResult:
     chunks: list[RecallChunk] = field(default_factory=list)
     related_entities: list[dict] = field(default_factory=list)
     related_docs: list[dict] = field(default_factory=list)
+    answer: str | None = None
+    mode_used: Literal["fast", "deep"] | None = None
+    strategy_used: Literal["recall", "reflect"] | None = None
+    based_on: dict[str, list[dict]] = field(default_factory=dict)
+    trace: dict = field(default_factory=dict)
 
 
 @dataclass

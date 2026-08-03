@@ -15,8 +15,10 @@ from tests.conftest import FakeKnowledgeBase
 def fake_kb():
     kb = FakeKnowledgeBase()
     mcp_mod.set_kb(kb)
+    mcp_mod.set_query_service(None)
     yield kb
     mcp_mod._kb = None
+    mcp_mod._query_service = None
 
 
 async def test_search_tool_returns_chunks(fake_kb):
@@ -28,9 +30,44 @@ async def test_search_tool_returns_chunks(fake_kb):
 
     fake_kb.recall = recall
     res = await mcp_mod.search("acme", top_k=7)
-    assert res == {"chunks": [], "related_entities": [], "related_docs": []}
+    assert res["chunks"] == []
+    assert res["related_entities"] == []
+    assert res["related_docs"] == []
+    assert res["answer"] is None
     assert seen[0].query == "acme"
     assert seen[0].top_k == 7
+
+
+async def test_original_search_tool_uses_hindsight_when_available(fake_kb):
+    class FakeQueryService:
+        request = None
+
+        async def query(self, request):
+            self.request = request
+            return KnowledgeQueryResult(
+                strategy_used="reflect",
+                answer="answer",
+                sources=[
+                    KnowledgeSource(
+                        memory_id="m1",
+                        memory_type="world",
+                        doc_id="d1",
+                        title="Doc",
+                        chunk_text="context",
+                    )
+                ],
+            )
+
+    service = FakeQueryService()
+    mcp_mod.set_query_service(service)
+
+    out = await mcp_mod.search("分析项目进展", top_k=3, mode="deep", needs_answer=True)
+
+    assert fake_kb.recall_calls == []
+    assert service.request.mode == "deep"
+    assert service.request.needs_answer is True
+    assert out["answer"] == "answer"
+    assert out["chunks"][0]["memory_id"] == "m1"
 
 
 async def test_query_knowledge_forwards_unified_request():

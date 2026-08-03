@@ -33,10 +33,29 @@ class InProcessEngineClient:
         self._kb = kb
         self._query_service = query_service
 
-    async def recall(self, query: str, top_k: int = 10) -> dict:
+    async def recall(
+        self,
+        query: str,
+        top_k: int = 10,
+        mode: Literal["auto", "fast", "deep"] = "auto",
+        needs_answer: bool = False,
+    ) -> dict:
         from src.engine.interface import RecallRequest
 
-        res = await self._kb.recall(RecallRequest(query=query, top_k=top_k))
+        request = RecallRequest(
+            query=query,
+            top_k=top_k,
+            mode=mode,
+            needs_answer=needs_answer,
+        )
+        if self._query_service is not None:
+            from src.engine.hindsight_components.compat import HindsightRecallAdapter
+
+            res = await HindsightRecallAdapter(self._query_service).recall(request)
+        else:
+            if mode != "auto" or needs_answer:
+                raise RuntimeError("Hindsight 查询服务未初始化")
+            res = await self._kb.recall(request)
         return _jsonable(res)
 
     async def query(
@@ -109,8 +128,19 @@ class McpEngineClient:
         text = result.content[0].text
         return json.loads(text)
 
-    async def recall(self, query: str, top_k: int = 10) -> dict:
-        return await self._call("search", {"query": query, "top_k": top_k})
+    async def recall(
+        self,
+        query: str,
+        top_k: int = 10,
+        mode: Literal["auto", "fast", "deep"] = "auto",
+        needs_answer: bool = False,
+    ) -> dict:
+        args: dict[str, Any] = {"query": query, "top_k": top_k}
+        if mode != "auto":
+            args["mode"] = mode
+        if needs_answer:
+            args["needs_answer"] = True
+        return await self._call("search", args)
 
     async def query(
         self,

@@ -42,25 +42,39 @@ def _get_query_service() -> KnowledgeQuery:
     return _query_service
 
 
-async def search(query: str, top_k: int = 20) -> dict[str, Any]:
-    """语义检索知识库（向量粗筛 -> Reranker 守门 -> 图谱增强）。"""
+async def search(
+    query: str,
+    top_k: int = 20,
+    mode: Literal["auto", "fast", "deep"] = "auto",
+    needs_answer: bool = False,
+) -> dict[str, Any]:
+    """检索知识库。
+
+    Hindsight 启用时使用其 recall/reflect：简单事实选择 fast，复杂比较、
+    多跳和时间线选择 deep；需要服务端生成答案时设置 needs_answer=true。
+    旧调用只传 query/top_k 仍兼容。Hindsight 未启用时回退到 GraphRAG。
+    """
     from src.engine.interface import RecallRequest
 
-    result = await _get_kb().recall(RecallRequest(query=query, top_k=top_k))
-    return {
-        "chunks": [
-            {
-                "doc_id": c.doc_id,
-                "title": c.title,
-                "chunk_text": c.chunk_text[:1000],
-                "reranker_score": c.reranker_score,
-                "vector_score": c.vector_score,
-            }
-            for c in result.chunks
-        ],
-        "related_entities": result.related_entities,
-        "related_docs": result.related_docs,
-    }
+    request = RecallRequest(
+        query=query,
+        top_k=top_k,
+        mode=mode,
+        needs_answer=needs_answer,
+    )
+    if _query_service is not None:
+        from src.engine.hindsight_components.compat import HindsightRecallAdapter
+
+        result = await HindsightRecallAdapter(_query_service).recall(request)
+    else:
+        if mode != "auto" or needs_answer:
+            raise RuntimeError("Hindsight 查询服务未初始化")
+        result = await _get_kb().recall(request)
+
+    payload = asdict(result)
+    for chunk in payload["chunks"]:
+        chunk["chunk_text"] = chunk["chunk_text"][:1000]
+    return payload
 
 
 async def query_knowledge(

@@ -33,6 +33,8 @@ def test_ingest_source_carries_bytes():
 def test_dataclasses_roundtrip():
     req = RecallRequest(query="q", top_k=5)
     assert req.top_k == 5
+    assert req.mode == "auto"
+    assert req.needs_answer is False
     chunk = RecallChunk(
         doc_id="d", title="t", chunk_text="c", reranker_score=1.0, vector_score=0.5
     )
@@ -42,6 +44,7 @@ def test_dataclasses_roundtrip():
         links=[GraphLink(source="n", target="m", type="R")],
     )
     assert res.chunks[0].doc_id == "d"
+    assert res.answer is None
     assert g.nodes[0].name == "n"
 
 
