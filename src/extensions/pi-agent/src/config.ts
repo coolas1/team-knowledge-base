@@ -83,8 +83,19 @@ export function loadPiAgentConfig(
 ): PiAgentConfig {
   const cwd = env.PI_AGENT_CWD?.trim() || process.cwd();
   const dataDir = env.PI_AGENT_DATA_DIR?.trim() || `${cwd}/.pi-agent-data`;
-  const provider = env.PI_AGENT_PROVIDER?.trim() || "ollama";
+  const sharedProvider = env.LLM_PROVIDER?.trim();
+  const inheritSharedModel =
+    Boolean(sharedProvider) &&
+    !["none", "todo", "disabled"].includes(sharedProvider!.toLowerCase());
+  const provider =
+    env.PI_AGENT_PROVIDER?.trim() ||
+    (inheritSharedModel ? sharedProvider : undefined) ||
+    "ollama";
   const isOllama = provider.toLowerCase() === "ollama";
+  const model =
+    env.PI_AGENT_MODEL?.trim() ||
+    (inheritSharedModel ? env.LLM_MODEL?.trim() : undefined) ||
+    "qwen3:14b";
   return {
     host: env.PI_AGENT_HOST?.trim() || "127.0.0.1",
     port: positiveInteger(env.PI_AGENT_PORT, 8010),
@@ -92,16 +103,21 @@ export function loadPiAgentConfig(
     sessionDir: env.PI_AGENT_SESSION_DIR?.trim() || `${dataDir}/sessions`,
     cwd,
     provider,
-    model: env.PI_AGENT_MODEL?.trim() || "qwen3:14b",
-    modelName: env.PI_AGENT_MODEL_NAME?.trim() || env.PI_AGENT_MODEL?.trim() || "Qwen3 14B",
+    model,
+    modelName: env.PI_AGENT_MODEL_NAME?.trim() || model,
     modelApi: enumValue(
       env.PI_AGENT_API,
       ["openai-completions", "openai-responses", "anthropic-messages"] as const,
       "openai-completions",
     ),
     modelBaseUrl:
-      env.PI_AGENT_BASE_URL?.trim() || "http://localhost:11434/v1",
-    modelApiKey: env.PI_AGENT_API_KEY?.trim() || (isOllama ? "ollama" : ""),
+      env.PI_AGENT_BASE_URL?.trim() ||
+      (inheritSharedModel ? env.LLM_BASE_URL?.trim() : undefined) ||
+      "http://localhost:11434/v1",
+    modelApiKey:
+      env.PI_AGENT_API_KEY?.trim() ||
+      (inheritSharedModel ? env.LLM_API_KEY?.trim() : undefined) ||
+      (isOllama ? "ollama" : ""),
     modelReasoning: enabled(env.PI_AGENT_REASONING, true),
     thinkingLevel: enumValue(
       env.PI_AGENT_THINKING_LEVEL,

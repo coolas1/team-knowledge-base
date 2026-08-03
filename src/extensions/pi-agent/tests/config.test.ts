@@ -52,4 +52,31 @@ describe("loadPiAgentConfig", () => {
     expect(config.modelApiKey).toBe("test-key");
     expect(config.maxToolCalls).toBe(8);
   });
+
+  it("inherits the configured shared LLM when Pi has no model override", () => {
+    const config = loadPiAgentConfig({
+      LLM_PROVIDER: "custom",
+      LLM_MODEL: "configured-model",
+      LLM_BASE_URL: "https://llm.example/v1",
+      LLM_API_KEY: "shared-secret",
+    });
+
+    expect(config.provider).toBe("custom");
+    expect(config.model).toBe("configured-model");
+    expect(config.modelName).toBe("configured-model");
+    expect(config.modelBaseUrl).toBe("https://llm.example/v1");
+    expect(config.modelApiKey).toBe("shared-secret");
+  });
+
+  it("does not inherit a disabled shared LLM", () => {
+    const config = loadPiAgentConfig({
+      LLM_PROVIDER: "todo",
+      LLM_MODEL: "placeholder",
+      LLM_BASE_URL: "https://example.invalid/v1",
+    });
+
+    expect(config.provider).toBe("ollama");
+    expect(config.model).toBe("qwen3:14b");
+    expect(config.modelBaseUrl).toBe("http://localhost:11434/v1");
+  });
 });

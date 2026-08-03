@@ -61,7 +61,10 @@ named `piagentdata` volume.
 
 ## Model configuration
 
-Local Ollama is the default:
+Explicit `PI_AGENT_*` model settings take priority. If they are omitted, the
+runtime inherits the existing `LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL`, and
+`LLM_API_KEY` settings. A disabled shared provider (`todo`, `none`, or
+`disabled`) falls back to local Ollama:
 
 | Variable | Default |
 | --- | --- |

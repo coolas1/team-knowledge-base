@@ -135,12 +135,18 @@ services:
       PI_AGENT_CWD: /app
       PI_AGENT_DATA_DIR: /app/data
       PI_AGENT_SESSION_DIR: /app/data/sessions
-      PI_AGENT_PROVIDER: ${PI_AGENT_PROVIDER:-ollama}
-      PI_AGENT_MODEL: ${PI_AGENT_MODEL:-qwen3:14b}
-      PI_AGENT_MODEL_NAME: ${PI_AGENT_MODEL_NAME:-Qwen3 14B}
+      # Explicit PI_AGENT_* values win. When omitted, the runtime inherits the
+      # already configured LLM_* API; disabled placeholders fall back to Ollama.
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      PI_AGENT_PROVIDER: ${PI_AGENT_PROVIDER:-}
+      PI_AGENT_MODEL: ${PI_AGENT_MODEL:-}
+      PI_AGENT_MODEL_NAME: ${PI_AGENT_MODEL_NAME:-}
       PI_AGENT_API: ${PI_AGENT_API:-openai-completions}
-      PI_AGENT_BASE_URL: ${PI_AGENT_BASE_URL:-http://ollama:11434/v1}
-      PI_AGENT_API_KEY: ${PI_AGENT_API_KEY:-ollama}
+      PI_AGENT_BASE_URL: ${PI_AGENT_BASE_URL:-}
+      PI_AGENT_API_KEY: ${PI_AGENT_API_KEY:-}
       PI_AGENT_REASONING: ${PI_AGENT_REASONING:-true}
       PI_AGENT_THINKING_LEVEL: ${PI_AGENT_THINKING_LEVEL:-medium}
       PI_AGENT_CONTEXT_WINDOW: ${PI_AGENT_CONTEXT_WINDOW:-32768}
