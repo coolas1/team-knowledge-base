@@ -105,7 +105,8 @@ When deployed beside the current Compose services, use
 - `GET /health`
 - `POST /v1/sessions`
 - `GET /v1/sessions`
-- `GET /v1/sessions/:id`
+- `GET /v1/sessions/:id` returns the session summary plus filtered
+  `user`/`assistant` text messages
 - `DELETE /v1/sessions/:id`
 - `POST /v1/sessions/:id/cancel`
 - `POST /v1/sessions/:id/messages` with `{ "message": "..." }`

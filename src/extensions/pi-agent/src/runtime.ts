@@ -65,6 +65,15 @@ export interface RuntimeSessionInfo {
   streaming: boolean;
 }
 
+export interface RuntimeConversationMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
+export interface RuntimeSessionDetail extends RuntimeSessionInfo {
+  messages: RuntimeConversationMessage[];
+}
+
 export interface RuntimeHealth {
   status: "ok" | "degraded";
   model: { provider: string; id: string; baseUrl: string };
@@ -77,7 +86,7 @@ export interface AgentRuntimeApi {
   health(): Promise<RuntimeHealth>;
   createSession(): Promise<RuntimeSessionInfo>;
   listSessions(): Promise<RuntimeSessionInfo[]>;
-  getSession(id: string): Promise<RuntimeSessionInfo>;
+  getSession(id: string): Promise<RuntimeSessionDetail>;
   streamMessage(
     id: string,
     message: string,
@@ -130,6 +139,21 @@ function textFromMessage(message: unknown): string {
     )
     .map((part) => part.text)
     .join("\n");
+}
+
+export function conversationMessagesFrom(
+  messages: readonly unknown[],
+): RuntimeConversationMessage[] {
+  const visible: RuntimeConversationMessage[] = [];
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const role = (message as { role?: unknown }).role;
+    if (role !== "user" && role !== "assistant") continue;
+    const text = textFromMessage(message);
+    if (!text.trim()) continue;
+    visible.push({ role, text });
+  }
+  return visible;
 }
 
 export function extractCitations(value: unknown): Array<{ docId: string; title: string }> {
@@ -234,8 +258,12 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     }));
   }
 
-  async getSession(id: string): Promise<RuntimeSessionInfo> {
-    return this.describe(await this.loadSession(id));
+  async getSession(id: string): Promise<RuntimeSessionDetail> {
+    const managed = await this.loadSession(id);
+    return {
+      ...this.describe(managed),
+      messages: conversationMessagesFrom(managed.session.messages),
+    };
   }
 
   async streamMessage(
