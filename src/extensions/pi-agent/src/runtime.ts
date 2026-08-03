@@ -40,7 +40,13 @@ export type PiRuntimeEvent =
   | { type: "assistant.delta"; delta: string }
   | { type: "assistant.thinking"; delta: string }
   | { type: "tool.start"; toolCallId: string; toolName: string; args: unknown }
-  | { type: "tool.result"; toolCallId: string; toolName: string; isError: boolean; result: unknown }
+  | {
+      type: "tool.result";
+      toolCallId: string;
+      toolName: string;
+      isError: boolean;
+      result?: unknown;
+    }
   | { type: "citation"; docId: string; title: string }
   | { type: "limit.reached"; limit: "tool_calls" | "time"; maximum: number }
   | {
@@ -401,7 +407,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       const update = event.assistantMessageEvent;
       if (update.type === "text_delta") {
         await emit({ type: "assistant.delta", delta: update.delta });
-      } else if (update.type === "thinking_delta") {
+      } else if (update.type === "thinking_delta" && this.config.exposeThinking) {
         await emit({ type: "assistant.thinking", delta: update.delta });
       }
       return;
@@ -416,13 +422,14 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       return;
     }
     if (event.type === "tool_execution_end") {
-      await emit({
+      const toolResult: Extract<PiRuntimeEvent, { type: "tool.result" }> = {
         type: "tool.result",
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         isError: event.isError,
-        result: safeResult(event.result),
-      });
+      };
+      if (this.config.exposeToolResults) toolResult.result = safeResult(event.result);
+      await emit(toolResult);
       for (const citation of extractCitations(event.result)) {
         if (citations.has(citation.docId)) continue;
         citations.add(citation.docId);

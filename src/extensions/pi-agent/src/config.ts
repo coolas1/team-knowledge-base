@@ -37,6 +37,8 @@ export interface PiAgentConfig {
   modelApiKey: string;
   modelReasoning: boolean;
   thinkingLevel: PiThinkingLevel;
+  exposeThinking: boolean;
+  exposeToolResults: boolean;
   contextWindow: number;
   maxOutputTokens: number;
   maxToolCalls: number;
@@ -124,6 +126,8 @@ export function loadPiAgentConfig(
       ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const,
       "medium",
     ),
+    exposeThinking: enabled(env.PI_AGENT_EXPOSE_THINKING),
+    exposeToolResults: enabled(env.PI_AGENT_EXPOSE_TOOL_RESULTS),
     contextWindow: positiveInteger(env.PI_AGENT_CONTEXT_WINDOW, 32_768),
     maxOutputTokens: positiveInteger(env.PI_AGENT_MAX_OUTPUT_TOKENS, 8_192),
     maxToolCalls: positiveInteger(env.PI_AGENT_MAX_TOOL_CALLS, 12),

@@ -50,6 +50,7 @@ COPY config/ ./config/
 # final image (only dist/ is).
 RUN cd src/frontend/webapp/client \
  && npm ci \
+ && npm run security \
  && npm run build \
  && rm -rf node_modules
 

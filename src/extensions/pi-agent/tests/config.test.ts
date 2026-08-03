@@ -36,6 +36,18 @@ describe("loadPiAgentConfig", () => {
     expect(config.maxToolCalls).toBe(12);
     expect(config.maxRunSeconds).toBe(300);
     expect(config.sessionDir).toBe("C:/tkb/.pi-agent-data/sessions");
+    expect(config.exposeThinking).toBe(false);
+    expect(config.exposeToolResults).toBe(false);
+  });
+
+  it("only exposes sensitive streaming details when explicitly enabled", () => {
+    const config = loadPiAgentConfig({
+      PI_AGENT_EXPOSE_THINKING: "true",
+      PI_AGENT_EXPOSE_TOOL_RESULTS: "yes",
+    });
+
+    expect(config.exposeThinking).toBe(true);
+    expect(config.exposeToolResults).toBe(true);
   });
 
   it("accepts external OpenAI-compatible model settings", () => {

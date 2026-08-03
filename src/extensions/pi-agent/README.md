@@ -56,8 +56,9 @@ Stop only the optional Agent with:
 docker compose --profile pi-agent stop pi-agent
 ```
 
-Its API is published on port `8010` by default and sessions are stored in the
-named `piagentdata` volume.
+Its API is published on `127.0.0.1:8010` by default and sessions are stored in
+the named `piagentdata` volume. Other Compose services continue to reach it by
+the internal service name `pi-agent:8010`.
 
 ## Model configuration
 
@@ -89,6 +90,8 @@ the Pi model API adapter when required by a compatible provider.
 | `PI_AGENT_MAX_TOOL_CALLS` | `12` | Hard tool-call limit per run |
 | `PI_AGENT_MAX_RUN_SECONDS` | `300` | Hard execution-time limit |
 | `PI_AGENT_MAX_REQUEST_BYTES` | `1048576` | Maximum JSON request size |
+| `PI_AGENT_EXPOSE_THINKING` | `false` | Include model reasoning deltas in SSE (local debugging only) |
+| `PI_AGENT_EXPOSE_TOOL_RESULTS` | `false` | Include raw tool payloads in SSE (local debugging only) |
 | `TKB_CONTRACT_STRICT` | `true` | Fail startup on MCP contract drift |
 | `TKB_ENABLE_LEGACY_SEARCH` | `false` | Enable legacy `tkb_search` |
 | `TKB_ENABLE_WRITE_TOOLS` | `false` | Enable upload and remove tools |
@@ -107,9 +110,16 @@ When deployed beside the current Compose services, use
 - `POST /v1/sessions/:id/cancel`
 - `POST /v1/sessions/:id/messages` with `{ "message": "..." }`
 
-The message endpoint streams typed SSE events for assistant deltas, tool calls,
-citations, limits, completion, and failures. Disconnecting the client cancels
-the active run.
+The message endpoint streams typed SSE events for assistant deltas, tool
+status, citations, limits, completion, and failures. Model reasoning and raw
+tool payloads are suppressed by default; citations are still derived on the
+server. Disconnecting the client cancels the active run.
+
+The Webapp image also runs a production dependency security gate. Its single
+tracked exception is React Router's RSC-only `GHSA-qwww-vcr4-c8h2`: this Vite
+SPA does not use RSC, SSR, or Server Actions, and no unaffected React Router
+release is currently published. Any other high or critical advisory blocks the
+image build.
 
 At startup the runtime validates all ten current Engine MCP tools. Only the
 curated subset is exposed to the model unless an opt-in flag is set.
