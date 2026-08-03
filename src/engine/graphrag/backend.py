@@ -36,6 +36,18 @@ from src.engine.interface import (
 UPLOAD_DIR = Path("uploads")
 
 
+def _remove_upload_directory(
+    document_id: uuid.UUID,
+    upload_dir: Path = UPLOAD_DIR,
+) -> None:
+    """Remove only the UUID-scoped upload directory, never a stored path."""
+    doc_dir = upload_dir / str(document_id)
+    if doc_dir.is_symlink():
+        doc_dir.unlink()
+    elif doc_dir.is_dir():
+        shutil.rmtree(doc_dir)
+
+
 def _to_ref(doc: Document, chunk_count: int = 0, overview: str | None = None) -> DocumentRef:
     return DocumentRef(
         id=str(doc.id),
@@ -111,10 +123,7 @@ class GraphRAGBackend:
             if not doc:
                 return
             await self._pipeline.before_remove(doc_id)
-            if doc.file_path:
-                doc_dir = Path(doc.file_path).parent
-                if doc_dir.exists():
-                    shutil.rmtree(doc_dir)
+            _remove_upload_directory(uid)
             await session.delete(doc)
             await session.commit()
         await self._neo4j.delete_document_graph(doc_id)

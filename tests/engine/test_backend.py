@@ -1,9 +1,14 @@
 import inspect
+import uuid
 
 import pytest
 
 from src.engine.config import EngineConfig
-from src.engine.graphrag.backend import GraphRAGBackend, build
+from src.engine.graphrag.backend import (
+    GraphRAGBackend,
+    _remove_upload_directory,
+    build,
+)
 
 
 def test_build_returns_graphrag_backend():
@@ -51,6 +56,47 @@ def test_backend_implements_protocol_methods():
         "get_document",
     ]:
         assert hasattr(GraphRAGBackend, name), f"missing {name}"
+
+
+def test_remove_upload_directory_only_deletes_uuid_scope(tmp_path):
+    document_id = uuid.uuid4()
+    upload_dir = tmp_path / "uploads"
+    document_dir = upload_dir / str(document_id)
+    document_dir.mkdir(parents=True)
+    (document_dir / "t.md").write_text("test", encoding="utf-8")
+    sibling = upload_dir / "keep"
+    sibling.mkdir()
+
+    _remove_upload_directory(document_id, upload_dir)
+
+    assert not document_dir.exists()
+    assert sibling.exists()
+    assert upload_dir.exists()
+
+
+def test_remove_upload_directory_ignores_missing_directory(tmp_path):
+    _remove_upload_directory(uuid.uuid4(), tmp_path / "uploads")
+
+    assert tmp_path.exists()
+
+
+def test_remove_upload_directory_unlinks_symlink_without_following(tmp_path):
+    document_id = uuid.uuid4()
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    (protected / "keep.txt").write_text("keep", encoding="utf-8")
+    link = upload_dir / str(document_id)
+    try:
+        link.symlink_to(protected, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    _remove_upload_directory(document_id, upload_dir)
+
+    assert not link.exists()
+    assert (protected / "keep.txt").exists()
 
 
 @pytest.mark.integration
