@@ -160,6 +160,26 @@ async def test_upload_document(fake_kb):
     assert list(fake_kb.raw.values())[0] == b"hello world"
 
 
+async def test_upload_document_includes_memory_state_when_adapter_provides_it(
+    fake_kb,
+):
+    original_ingest = fake_kb.ingest
+
+    async def ingest(source):
+        ref = await original_ingest(source)
+        ref.memory_status = "pending"
+        ref.memory_count = 0
+        ref.memory_link_count = 0
+        return ref
+
+    fake_kb.ingest = ingest
+    result = await mcp_mod.upload_document("week.md", "content")
+
+    assert result["memory_status"] == "pending"
+    assert result["memory_count"] == 0
+    assert result["memory_link_count"] == 0
+
+
 async def test_list_documents_tool(fake_kb):
     res = await mcp_mod.list_documents()
     assert {"total", "items"} <= set(res)

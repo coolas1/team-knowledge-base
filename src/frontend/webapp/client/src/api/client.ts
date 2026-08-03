@@ -10,6 +10,10 @@ export interface Document {
   content_hash?: string
   status: string
   error_msg?: string | null
+  memory_status?: string | null
+  memory_error_msg?: string | null
+  memory_count?: number
+  memory_link_count?: number
   chunk_count?: number
   created_at?: string
   updated_at?: string

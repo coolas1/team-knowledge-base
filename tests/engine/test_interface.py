@@ -30,6 +30,17 @@ def test_ingest_source_carries_bytes():
     assert s.path is None
 
 
+def test_document_ref_memory_fields_are_backwards_compatible_defaults():
+    from src.engine.interface import DocumentRef
+
+    ref = DocumentRef(id="d1", title="week.md", file_type="markdown", status="pending")
+
+    assert ref.memory_status is None
+    assert ref.memory_error_msg is None
+    assert ref.memory_count == 0
+    assert ref.memory_link_count == 0
+
+
 def test_dataclasses_roundtrip():
     req = RecallRequest(query="q", top_k=5)
     assert req.top_k == 5

@@ -2,6 +2,7 @@ import pytest
 
 from config.schema import AppConfig
 from src.agent.engine_client import InProcessEngineClient, McpEngineClient
+from src.engine.hindsight_components.adapter import HindsightKnowledgeBaseAdapter
 from src.frontend.webapp.server import deps
 from tests.conftest import FakeKnowledgeBase
 
@@ -62,6 +63,7 @@ async def test_startup_wires_hindsight_for_inprocess(monkeypatch):
     await deps.startup()
 
     assert isinstance(deps.get_engine(), InProcessEngineClient)
+    assert isinstance(deps.get_engine()._kb, HindsightKnowledgeBaseAdapter)
     assert deps.get_engine()._query_service is query_service
     assert captured["engine_config"].index_hook is retain_hook
     assert captured["max_concurrent"] == 3

@@ -25,6 +25,7 @@ from .models import (
     MentalModel as MentalModelRow,
 )
 from .types import (
+    DocumentMemoryState,
     MemoryProfile,
     MentalModel,
     RecallCandidate,
@@ -128,6 +129,27 @@ class PostgresMemoryRepository:
             )
             await session.commit()
 
+    async def document_state(self, document_id: str) -> DocumentMemoryState | None:
+        async with self._session_factory() as session:
+            row = await session.get(HindsightDocumentState, uuid.UUID(document_id))
+        return self._state_from_row(row) if row is not None else None
+
+    async def document_states(
+        self, document_ids: list[str]
+    ) -> dict[str, DocumentMemoryState]:
+        if not document_ids:
+            return {}
+        ids = [uuid.UUID(document_id) for document_id in document_ids]
+        async with self._session_factory() as session:
+            rows = list(
+                await session.scalars(
+                    select(HindsightDocumentState).where(
+                        HindsightDocumentState.document_id.in_(ids)
+                    )
+                )
+            )
+        return {str(row.document_id): self._state_from_row(row) for row in rows}
+
     async def delete_document(self, document_id: str) -> None:
         uid = uuid.UUID(document_id)
         async with self._session_factory() as session:
@@ -213,6 +235,17 @@ class PostgresMemoryRepository:
                     .on_conflict_do_nothing()
                 )
         await session.flush()
+
+    @staticmethod
+    def _state_from_row(row: HindsightDocumentState) -> DocumentMemoryState:
+        return DocumentMemoryState(
+            document_id=str(row.document_id),
+            status=row.status,
+            error_msg=row.error_msg,
+            memory_count=row.memory_count,
+            link_count=row.link_count,
+            updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        )
 
     async def _insert_links(self, session: AsyncSession, plan: RetainPlan) -> None:
         planned_ids = {uuid.UUID(memory.id) for memory in plan.memories}

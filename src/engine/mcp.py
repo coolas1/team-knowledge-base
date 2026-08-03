@@ -179,12 +179,22 @@ async def upload_document(file_name: str, content: str) -> dict[str, Any]:
     ref = await _get_kb().ingest(
         IngestSource(name=file_name, data=content.encode("utf-8"))
     )
-    return {
+    result = {
         "id": ref.id,
         "title": ref.title,
         "file_type": ref.file_type,
         "status": ref.status,
     }
+    if ref.memory_status is not None:
+        result.update(
+            {
+                "memory_status": ref.memory_status,
+                "memory_error_msg": ref.memory_error_msg,
+                "memory_count": ref.memory_count,
+                "memory_link_count": ref.memory_link_count,
+            }
+        )
+    return result
 
 
 async def list_documents(

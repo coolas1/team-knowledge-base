@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
@@ -62,3 +63,25 @@ def test_normalization_tokens_and_advisory_lock_are_stable() -> None:
     assert lexical_tokens("知识库")
     assert document_lock_key(document_id) == document_lock_key(document_id)
     assert -(1 << 63) <= document_lock_key(document_id) < (1 << 63)
+
+
+def test_document_state_mapping_preserves_counts_and_error() -> None:
+    document_id = uuid.uuid4()
+    updated_at = datetime.now(timezone.utc)
+    state = PostgresMemoryRepository._state_from_row(
+        SimpleNamespace(
+            document_id=document_id,
+            status="failed",
+            error_msg="LLM unavailable",
+            memory_count=12,
+            link_count=21,
+            updated_at=updated_at,
+        )
+    )
+
+    assert state.document_id == str(document_id)
+    assert state.status == "failed"
+    assert state.error_msg == "LLM unavailable"
+    assert state.memory_count == 12
+    assert state.link_count == 21
+    assert state.updated_at == updated_at.isoformat()

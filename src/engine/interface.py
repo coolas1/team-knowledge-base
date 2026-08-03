@@ -43,6 +43,10 @@ class DocumentRef:
     status: str
     overview: str = ""
     error_msg: str | None = None
+    memory_status: str | None = None
+    memory_error_msg: str | None = None
+    memory_count: int = 0
+    memory_link_count: int = 0
 
 
 @dataclass

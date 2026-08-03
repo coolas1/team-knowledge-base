@@ -7,6 +7,16 @@ from datetime import datetime
 from typing import Any
 
 
+@dataclass(frozen=True, slots=True)
+class DocumentMemoryState:
+    document_id: str
+    status: str
+    error_msg: str | None = None
+    memory_count: int = 0
+    link_count: int = 0
+    updated_at: str | None = None
+
+
 @dataclass(slots=True)
 class ExtractedFact:
     text: str

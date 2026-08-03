@@ -41,6 +41,9 @@ async def startup() -> None:
         query_service = None
         index_hook = None
         if cfg.hindsight.enabled:
+            from src.engine.hindsight_components.adapter import (
+                build_knowledge_base_adapter,
+            )
             from src.engine.hindsight_components.hook import build_retain_hook
             from src.engine.hindsight_components.query import build_query_service
 
@@ -55,6 +58,8 @@ async def startup() -> None:
                 index_hook=index_hook,
             )
         )
+        if cfg.hindsight.enabled:
+            kb = build_knowledge_base_adapter(kb)
         set_kb(kb)
         set_query_service(query_service)
         _engine_client = InProcessEngineClient(kb, query_service=query_service)
