@@ -54,6 +54,19 @@ export interface AgentSession {
   streaming: boolean
 }
 
+export interface AgentConversationMessage {
+  role: 'user' | 'assistant'
+  text: string
+}
+
+export interface AgentSessionDetail extends AgentSession {
+  messages: AgentConversationMessage[]
+}
+
+export interface AgentSessionList {
+  items: AgentSession[]
+}
+
 export type PiAgentEvent =
   | { type: 'message.start'; sessionId: string }
   | { type: 'assistant.delta'; delta: string }
@@ -187,6 +200,16 @@ export const api = {
 
   createAgentSession() {
     return request<AgentSession>('/agent/sessions', { method: 'POST' })
+  },
+
+  listAgentSessions() {
+    return request<AgentSessionList>('/agent/sessions')
+  },
+
+  getAgentSession(sessionId: string) {
+    return request<AgentSessionDetail>(
+      `/agent/sessions/${encodeURIComponent(sessionId)}`,
+    )
   },
 
   cancelAgentSession(sessionId: string) {

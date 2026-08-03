@@ -47,6 +47,31 @@ describe('api client', () => {
     expect(mockFetch).toHaveBeenCalledWith('/api/agent/sessions', { method: 'POST' })
   })
 
+  it('lists sessions and loads a session detail through the BFF', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ items: [{ id: 's1', messageCount: 2, streaming: false }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 's1',
+          messageCount: 2,
+          streaming: false,
+          messages: [{ role: 'user', text: 'hello' }],
+        }),
+      })
+
+    const sessions = await api.listAgentSessions()
+    const detail = await api.getAgentSession('session/1')
+
+    expect(sessions.items[0].id).toBe('s1')
+    expect(detail.messages).toEqual([{ role: 'user', text: 'hello' }])
+    expect(mockFetch).toHaveBeenNthCalledWith(1, '/api/agent/sessions', undefined)
+    expect(mockFetch).toHaveBeenNthCalledWith(2, '/api/agent/sessions/session%2F1', undefined)
+  })
+
   it('parses SSE events split across arbitrary chunks', async () => {
     const encoder = new TextEncoder()
     const chunks = [
