@@ -1,59 +1,55 @@
 # TKB 快速启动
 
-## 1. 首次启动
+当前 `.env` 与 `docker-compose.yml` 已配置完整，可以直接启动。当前配置使用
+外部 LLM API，Embedding 使用 Compose 内的 Ollama，Pi Agent 默认随服务启动。
 
-从工作区根目录进入项目：
+## 1. 启动服务
+
+需要 Docker Compose v2 和可用的 NVIDIA GPU 运行环境。进入项目目录：
 
 ```powershell
 cd .\projects\team-knowledge-base
+```
+
+当前仓库已经有 `.env`，不要用模板覆盖。仅在新环境没有 `.env` 时执行：
+
+```powershell
 Copy-Item .env.example .env
 ```
 
-按需修改 `.env`，默认启动完整服务（包含 Pi Agent）：
+新环境还需要编辑 `.env`，填写真实的数据库密码和 LLM 配置。启动完整服务：
 
 ```powershell
-docker compose -f .\docker-compose.yml up -d --build
+docker compose up -d --build
 ```
 
-服务入口：
-
-- Web：`http://localhost:8000`
-- API 文档：`http://localhost:8000/docs`
-- MCP：`http://localhost:8000/mcp/`
-- Neo4j Browser：`http://localhost:7474`
-- Pi Agent：`http://127.0.0.1:8010`
-
-如临时不需要 Pi Agent，可在启动后停止它：
+查看服务状态：
 
 ```powershell
-docker compose -f .\docker-compose.yml stop pi-agent
+docker compose ps
 ```
 
-Pi Agent 只对本机开放，默认继承 `.env` 中的 `LLM_*` 模型配置。
+PostgreSQL、Neo4j 和 Pi Agent 变为 `healthy` 后，打开：
 
-## 2. 使用本地 Ollama 模型
-
-在 `.env` 中配置：
-
-```dotenv
-LLM_PROVIDER=ollama
-LLM_MODEL=qwen3:14b
-LLM_BASE_URL=http://ollama:11434/v1
-LLM_API_KEY=ollama
+```text
+http://localhost:8000
 ```
 
-首次使用时安装模型：
+## 2. 首次准备 Ollama 模型
+
+文档入库依赖本地 Embedding 模型。新机器首次使用时执行：
 
 ```powershell
-docker exec team-kb-ollama ollama pull qwen3:14b
-docker exec team-kb-ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull nomic-embed-text
 ```
 
-其中 `qwen3:14b` 用于大模型生成，`nomic-embed-text` 用于本地 Embedding。
+当前机器已经安装该模型，无需重复下载。
 
-## 3. 使用外部大模型 API
+## 3. 模型配置
 
-标准 OpenAI-compatible API 在 `.env` 中配置：
+### 使用外部 API
+
+当前 `.env` 使用 OpenAI-compatible API：
 
 ```dotenv
 LLM_PROVIDER=custom
@@ -62,59 +58,64 @@ LLM_BASE_URL=https://供应商地址/v1
 LLM_API_KEY=真实API密钥
 ```
 
-Pi Agent 默认继承上述 `LLM_*` 配置，无需重复填写 `PI_AGENT_PROVIDER`、
-`PI_AGENT_MODEL`、`PI_AGENT_BASE_URL` 和 `PI_AGENT_API_KEY`。外部 API 负责
-Chat、分析和 Hindsight reflect；Embedding 仍使用本地 `nomic-embed-text`。
+`LLM_BASE_URL` 填 API 根地址，不要包含 `/chat/completions`。Pi Agent 默认
+继承 `LLM_*`，不需要重复配置 `PI_AGENT_*`。
 
-注意：
+使用外部 API 进行文档分析、deep recall 或 reflect 时，相关知识片段可能
+发送给外部供应商。不要提交包含真实 API Key 的 `.env`。
 
-- `LLM_BASE_URL` 填 API 根地址，不要包含 `/chat/completions`。
-- API 需要兼容 OpenAI `/chat/completions` 和 JSON Object 响应模式。
-- 不要把真实 API Key 写入 `.env.example` 或提交到 Git。
-- 使用外部 API 执行 deep recall、reflect 或 retain 时，相关知识片段可能发送给外部供应商。
-- Pi Agent 默认不会向浏览器输出模型思考过程和 MCP 原始结果。
+### 使用本地 Ollama
 
-## 4. 让配置生效
-
-只修改 `.env` 时无需重新构建镜像：
+先安装生成模型：
 
 ```powershell
-docker compose -f .\docker-compose.yml up -d --force-recreate webapp pi-agent
+docker compose exec ollama ollama pull qwen3:14b
 ```
 
-修改代码后使用：
+然后修改 `.env`：
+
+```dotenv
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen3:14b
+LLM_BASE_URL=http://ollama:11434/v1
+LLM_API_KEY=ollama
+```
+
+## 4. 常用入口
+
+- Web UI：`http://localhost:8000`
+- 知识库问答：`http://localhost:8000/ask`
+- API 文档：`http://localhost:8000/docs`
+- MCP：`http://localhost:8000/mcp/`
+- Neo4j Browser：`http://localhost:7474`
+
+Compose 使用 `8000` 作为正式入口。`5173` 仅用于 Vite 前端开发，并将
+`/api` 请求代理到 `8000`。
+
+## 5. 让修改生效
+
+只修改 `.env`：
 
 ```powershell
-docker compose -f .\docker-compose.yml up -d --build webapp pi-agent
+docker compose up -d --force-recreate webapp pi-agent
 ```
 
-## 5. API 与 MCP
+修改 WebApp 或 Pi Agent 代码：
 
-REST 查询接口：
-
-```text
-POST http://localhost:8000/api/query
+```powershell
+docker compose up -d --build webapp pi-agent
 ```
-
-可以直接在 `http://localhost:8000/docs` 中测试。
-
-Cherry Studio 等客户端使用 MCP 地址：
-
-```text
-http://localhost:8000/mcp/
-```
-
-常用 MCP 工具：
-
-- `list_documents`：查看知识库文件。
-- `search_knowledge_fast`：简单事实、定义和明确关键词。
-- `search_knowledge_deep`：跨文档比较、多跳关系和综合分析。
-- `query_knowledge`：手动指定 recall/reflect 和 fast/deep。
 
 ## 6. 停止服务
 
 ```powershell
-docker compose -f .\docker-compose.yml down
+docker compose down
 ```
 
-不要添加 `-v`，否则会删除数据库和模型数据卷。
+不要添加 `-v`，否则会删除数据库、Ollama 模型和 Pi Agent 历史会话。
+
+如启动失败，可查看主要服务日志：
+
+```powershell
+docker compose logs --tail=100 webapp pi-agent
+```
