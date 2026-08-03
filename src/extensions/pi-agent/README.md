@@ -27,13 +27,37 @@ Reflect before Recall for reflective research, and cite retrieved sources.
 Requires Node.js 22.19 or newer and a running TKB Engine MCP service.
 
 ```bash
-npm install
+npm ci
 npm run check
 npm start
 ```
 
 The default address is `http://127.0.0.1:8010`. `npm run smoke` performs a real
 model-and-MCP query after the package has been built.
+
+`npm ci` is required while Pi `0.83.0` carries a vulnerable transitive lock.
+The install hook removes only the verified vulnerable nested copy and makes Pi
+resolve the pinned safe fallback. `npm run security` checks the lockfile, actual
+installed files, runtime module resolution, and the npm production audit. The
+container build runs this gate in both build and runtime stages.
+
+## Compose deployment
+
+The root `docker-compose.yml` contains the optional `pi-agent` profile. A normal
+Compose start does not run the Agent. Enable it explicitly with the same file:
+
+```bash
+docker compose --profile pi-agent up -d --build pi-agent
+```
+
+Stop only the optional Agent with:
+
+```bash
+docker compose --profile pi-agent stop pi-agent
+```
+
+Its API is published on port `8010` by default and sessions are stored in the
+named `piagentdata` volume.
 
 ## Model configuration
 

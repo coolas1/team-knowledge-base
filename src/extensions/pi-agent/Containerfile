@@ -1,0 +1,39 @@
+FROM node:24-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7 AS build
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY scripts ./scripts
+RUN npm ci && npm run security
+
+COPY tsconfig.json tsconfig.build.json ./
+COPY src ./src
+COPY skills ./skills
+RUN npm run build
+
+FROM node:24-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7 AS runtime
+
+ENV NODE_ENV=production \
+    PI_AGENT_HOST=0.0.0.0 \
+    PI_AGENT_PORT=8010 \
+    PI_AGENT_DATA_DIR=/app/data \
+    PI_AGENT_SESSION_DIR=/app/data/sessions
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY scripts ./scripts
+RUN npm ci --omit=dev && npm run security \
+    && mkdir -p /app/data/sessions \
+    && chown -R node:node /app
+
+COPY --from=build --chown=node:node /app/dist ./dist
+COPY --from=build --chown=node:node /app/skills ./skills
+
+USER node
+EXPOSE 8010
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:8010/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+
+CMD ["node", "dist/server.js"]

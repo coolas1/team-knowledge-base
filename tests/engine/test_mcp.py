@@ -1,4 +1,5 @@
 import pytest
+from mcp.server.transport_security import TransportSecurityMiddleware
 
 from src.engine import mcp as mcp_mod
 from src.engine.interface import (
@@ -9,6 +10,17 @@ from src.engine.interface import (
     RecallResult,
 )
 from tests.conftest import FakeKnowledgeBase
+
+
+def test_mcp_transport_allows_compose_hosts_and_rejects_unknown_hosts():
+    settings = mcp_mod.mcp.settings.transport_security
+    assert settings is not None
+    assert settings.enable_dns_rebinding_protection is True
+
+    security = TransportSecurityMiddleware(settings)
+    assert security._validate_host("webapp:8000") is True
+    assert security._validate_host("team-kb-webapp:8000") is True
+    assert security._validate_host("attacker.example:8000") is False
 
 
 @pytest.fixture

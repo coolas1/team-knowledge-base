@@ -7,6 +7,8 @@
 # All credentials/ports are sourced from .env, which compose loads
 # automatically for variable substitution (and the app loads via pydantic-settings).
 
+name: team-kb
+
 services:
   postgres:
     image: docker.io/pgvector/pgvector:pg16
@@ -110,7 +112,51 @@ services:
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
     restart: unless-stopped
 
+  pi-agent:
+    profiles: ["pi-agent"]
+    build:
+      context: ./src/extensions/pi-agent
+      dockerfile: Containerfile
+    image: team-kb-pi-agent:latest
+    container_name: team-kb-pi-agent
+    depends_on:
+      webapp:
+        condition: service_started
+    environment:
+      # Pi is disabled by default through the profile above. Inside Compose it
+      # reaches the existing Engine MCP endpoint and Ollama by service name.
+      TKB_MCP_URL: http://webapp:8000/mcp/
+      TKB_CONTRACT_STRICT: ${TKB_CONTRACT_STRICT:-true}
+      TKB_CONNECT_TIMEOUT_MS: ${TKB_CONNECT_TIMEOUT_MS:-10000}
+      TKB_TOOL_TIMEOUT_MS: ${TKB_TOOL_TIMEOUT_MS:-60000}
+      TKB_DEEP_TOOL_TIMEOUT_MS: ${TKB_DEEP_TOOL_TIMEOUT_MS:-300000}
+      PI_AGENT_HOST: 0.0.0.0
+      PI_AGENT_PORT: "8010"
+      PI_AGENT_CWD: /app
+      PI_AGENT_DATA_DIR: /app/data
+      PI_AGENT_SESSION_DIR: /app/data/sessions
+      PI_AGENT_PROVIDER: ${PI_AGENT_PROVIDER:-ollama}
+      PI_AGENT_MODEL: ${PI_AGENT_MODEL:-qwen3:14b}
+      PI_AGENT_MODEL_NAME: ${PI_AGENT_MODEL_NAME:-Qwen3 14B}
+      PI_AGENT_API: ${PI_AGENT_API:-openai-completions}
+      PI_AGENT_BASE_URL: ${PI_AGENT_BASE_URL:-http://ollama:11434/v1}
+      PI_AGENT_API_KEY: ${PI_AGENT_API_KEY:-ollama}
+      PI_AGENT_REASONING: ${PI_AGENT_REASONING:-true}
+      PI_AGENT_THINKING_LEVEL: ${PI_AGENT_THINKING_LEVEL:-medium}
+      PI_AGENT_CONTEXT_WINDOW: ${PI_AGENT_CONTEXT_WINDOW:-32768}
+      PI_AGENT_MAX_OUTPUT_TOKENS: ${PI_AGENT_MAX_OUTPUT_TOKENS:-8192}
+      PI_AGENT_MAX_TOOL_CALLS: ${PI_AGENT_MAX_TOOL_CALLS:-12}
+      PI_AGENT_MAX_RUN_SECONDS: ${PI_AGENT_MAX_RUN_SECONDS:-300}
+      PI_AGENT_MAX_LOADED_SESSIONS: ${PI_AGENT_MAX_LOADED_SESSIONS:-50}
+      PI_AGENT_MAX_REQUEST_BYTES: ${PI_AGENT_MAX_REQUEST_BYTES:-1048576}
+    ports:
+      - "${PI_AGENT_PORT:-8010}:8010"
+    volumes:
+      - piagentdata:/app/data
+    restart: unless-stopped
+
 volumes:
   pgdata:
   neo4jdata:
   ollamadata:
+  piagentdata:

@@ -8,12 +8,28 @@ from dataclasses import asdict
 from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from src.engine.interface import KnowledgeBase, KnowledgeQuery, KnowledgeQueryRequest
 
 mcp = FastMCP(
     "Team Knowledge Base",
     streamable_http_path="/",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[
+            "127.0.0.1:*",
+            "localhost:*",
+            "[::1]:*",
+            "webapp:8000",
+            "team-kb-webapp:8000",
+        ],
+        allowed_origins=[
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "http://[::1]:*",
+        ],
+    ),
 )
 
 _kb: KnowledgeBase | None = None
