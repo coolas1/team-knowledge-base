@@ -1,4 +1,9 @@
-from src.engine.components.store.neo4j import Neo4jClient
+from src.engine.components.store.neo4j import (
+    EntityData,
+    EntitySource,
+    Neo4jClient,
+    RelationData,
+)
 
 
 class Result:
@@ -77,3 +82,49 @@ async def test_entity_details_collapses_duplicate_names_deterministically():
     assert "ORDER BY coalesce(n.entity_type, ''), elementId(n)" in query
     assert "WITH collect(n) AS matches" in query
     assert "WITH head(matches) AS n, relations" in query
+
+
+class UpsertResult:
+    async def single(self):
+        return None
+
+
+class UpsertSession(Session):
+    async def run(self, query, **parameters):
+        self.queries.append(query)
+        return UpsertResult()
+
+
+class UpsertDriver:
+    def __init__(self):
+        self.value = UpsertSession()
+
+    def session(self):
+        return self.value
+
+
+async def test_upsert_entity_quotes_labels_with_spaces_and_backticks():
+    client = Neo4jClient.__new__(Neo4jClient)
+    client._driver = UpsertDriver()
+
+    await client.upsert_entity(
+        EntityData(name="Prompt", entity_type="Test `Question`"),
+        EntitySource(doc_id="doc-1", chunk_index=0, doc_title="test.md"),
+    )
+
+    query = client._driver.value.queries[0]
+    assert "MERGE (e:`Test ``Question``` {name: $name})" in query
+
+
+async def test_upsert_relation_quotes_types_with_spaces():
+    client = Neo4jClient.__new__(Neo4jClient)
+    client._driver = UpsertDriver()
+
+    await client.upsert_relation(
+        RelationData(
+            from_name="Prompt", to_name="Answer", relation_type="ANSWERS WITH"
+        ),
+        EntitySource(doc_id="doc-1", chunk_index=0, doc_title="test.md"),
+    )
+
+    assert all("[r:`ANSWERS WITH`]" in query for query in client._driver.value.queries)
