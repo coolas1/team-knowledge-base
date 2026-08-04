@@ -12,6 +12,9 @@ export const piRoot = join(
 export const nestedBraceRoot = join(piRoot, "node_modules", "brace-expansion");
 export const safeBraceRoot = join(packageRoot, "node_modules", "brace-expansion");
 export const minimumSafeVersion = "5.0.8";
+export const nestedUndiciRoot = join(piRoot, "node_modules", "undici");
+export const safeUndiciRoot = join(packageRoot, "node_modules", "undici");
+export const minimumSafeUndiciVersion = "8.9.0";
 
 export function readPackage(directory) {
   return JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
@@ -35,6 +38,18 @@ export function assertBracePackage(directory, label) {
   }
   if (compareVersions(String(pkg.version), minimumSafeVersion) < 0) {
     throw new Error(`${label} is vulnerable: brace-expansion ${String(pkg.version)}`);
+  }
+  return String(pkg.version);
+}
+
+export function assertUndiciPackage(directory, label) {
+  if (!existsSync(directory)) throw new Error(`${label} is missing: ${directory}`);
+  const pkg = readPackage(directory);
+  if (pkg.name !== "undici") {
+    throw new Error(`${label} has unexpected package name: ${String(pkg.name)}`);
+  }
+  if (compareVersions(String(pkg.version), minimumSafeUndiciVersion) < 0) {
+    throw new Error(`${label} is vulnerable: undici ${String(pkg.version)}`);
   }
   return String(pkg.version);
 }
