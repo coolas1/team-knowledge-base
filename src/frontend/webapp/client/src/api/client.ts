@@ -68,7 +68,7 @@ export interface AgentSessionList {
 }
 
 export type PiAgentEvent =
-  | { type: 'message.start'; sessionId: string }
+  | { type: 'message.start'; sessionId: string; name?: string }
   | { type: 'assistant.delta'; delta: string }
   | { type: 'assistant.thinking'; delta: string }
   | { type: 'tool.start'; toolCallId: string; toolName: string; args: unknown }

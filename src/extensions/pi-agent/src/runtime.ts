@@ -36,7 +36,7 @@ const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent
 - 工具返回错误或达到调用限制时，停止探索并依据已经获得的证据作答。`;
 
 export type PiRuntimeEvent =
-  | { type: "message.start"; sessionId: string }
+  | { type: "message.start"; sessionId: string; name?: string }
   | { type: "assistant.delta"; delta: string }
   | { type: "assistant.thinking"; delta: string }
   | { type: "tool.start"; toolCallId: string; toolName: string; args: unknown }
@@ -139,6 +139,21 @@ function textFromMessage(message: unknown): string {
     )
     .map((part) => part.text)
     .join("\n");
+}
+
+export function sessionTitleFrom(message: string): string | undefined {
+  const compact = message
+    .replace(/^\s*(?:[#>*-]+\s*|\d+[.、)）]\s*)/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(?:请问|请你|请|麻烦你|麻烦|能否|可以|可否)?(?:帮我|帮忙)?(?:一下)?[，,:：\s]*/, "")
+    .replace(/[。！？?!]+$/, "")
+    .trim();
+  if (!compact) return undefined;
+  const characters = Array.from(compact);
+  return characters.length > 24
+    ? `${characters.slice(0, 24).join("")}…`
+    : compact;
 }
 
 export function conversationMessagesFrom(
@@ -250,7 +265,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     const infos = await SessionManager.list(this.config.cwd, this.config.sessionDir);
     return infos.map((info) => ({
       id: info.id,
-      name: info.name,
+      name: info.name ?? sessionTitleFrom(info.firstMessage),
       created: info.created.toISOString(),
       modified: info.modified.toISOString(),
       messageCount: info.messageCount,
@@ -281,7 +296,18 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     managed.budget.reset();
     managed.active = {};
     const citations = new Set<string>();
-    await emit({ type: "message.start", sessionId: id });
+    if (!managed.session.sessionName) {
+      const firstUserMessage = conversationMessagesFrom(managed.session.messages).find(
+        (candidate) => candidate.role === "user",
+      )?.text;
+      const name = sessionTitleFrom(firstUserMessage ?? message);
+      if (name) managed.session.setSessionName(name);
+    }
+    await emit({
+      type: "message.start",
+      sessionId: id,
+      name: managed.session.sessionName,
+    });
     const unsubscribe = managed.session.subscribe((event) => {
       void this.forwardEvent(event, emit, citations, managed);
     });
@@ -407,9 +433,12 @@ export class PiAgentRuntime implements AgentRuntimeApi {
   }
 
   private describe(managed: ManagedSession): RuntimeSessionInfo {
+    const firstUserMessage = conversationMessagesFrom(managed.session.messages).find(
+      (candidate) => candidate.role === "user",
+    )?.text;
     return {
       id: managed.session.sessionId,
-      name: managed.session.sessionName,
+      name: managed.session.sessionName ?? sessionTitleFrom(firstUserMessage ?? ""),
       messageCount: managed.session.messages.length,
       streaming: managed.session.isStreaming,
     };

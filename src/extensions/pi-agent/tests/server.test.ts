@@ -41,7 +41,7 @@ function fakeRuntime(): AgentRuntimeApi {
     listSessions: vi.fn(async () => [session]),
     getSession: vi.fn(async () => sessionDetail),
     streamMessage: vi.fn(async (_id, _message, emit) => {
-      await emit({ type: "message.start", sessionId: "s1" });
+      await emit({ type: "message.start", sessionId: "s1", name: "知识库文件数量" });
       await emit({ type: "assistant.delta", delta: "hello" });
       await emit({ type: "message.completed", sessionId: "s1", answer: "hello", toolCalls: 0 });
     }),
@@ -97,6 +97,7 @@ describe("Pi Agent HTTP service", () => {
     const body = await response.text();
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(body).toContain("event: assistant.delta");
+    expect(body).toContain('"name":"知识库文件数量"');
     expect(body).toContain('"delta":"hello"');
     expect(runtime.streamMessage).toHaveBeenCalledWith(
       "s1",
