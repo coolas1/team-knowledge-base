@@ -31,6 +31,21 @@ describe('api client', () => {
     expect(init?.body).toBe(JSON.stringify({ query: 'acme', top_k: 7 }))
   })
 
+  it('edits document content with PUT', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: 'doc-1', status: 'pending' }),
+    })
+
+    await api.editContent('doc-1', '# Updated')
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/documents/doc-1/content', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '# Updated' }),
+    })
+  })
+
   it('throws on non-ok response', async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, statusText: 'boom', json: async () => ({}) })
     await expect(api.getFullGraph()).rejects.toThrow()

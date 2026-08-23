@@ -213,6 +213,11 @@ async def upload_document(file_name: str, content: str) -> dict[str, Any]:
     return result
 
 
+async def edit_document_content(doc_id: str, content: str) -> dict[str, Any]:
+    """保存文档正文并在后台重建索引。"""
+    return asdict(await _get_kb().edit_content(doc_id, content))
+
+
 async def list_documents(
     page: int = 1,
     page_size: int = 20,
@@ -262,6 +267,7 @@ mcp.tool()(search_knowledge_deep)
 mcp.tool()(get_document)
 mcp.tool()(query_graph)
 mcp.tool()(upload_document)
+mcp.tool()(edit_document_content)
 mcp.tool()(list_documents)
 mcp.tool()(remove_document)
 mcp.tool()(get_full_graph)

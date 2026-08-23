@@ -1,9 +1,11 @@
 import asyncio
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
 from src.engine.config import EngineConfig
+from src.engine.graphrag import backend as backend_mod
 from src.engine.graphrag.backend import (
     GraphRAGBackend,
     _remove_upload_directory,
@@ -47,6 +49,7 @@ def test_build_injects_optional_index_hook():
 def test_backend_implements_protocol_methods():
     for name in [
         "ingest",
+        "edit_content",
         "reingest",
         "remove",
         "recall",
@@ -56,6 +59,56 @@ def test_backend_implements_protocol_methods():
         "get_document",
     ]:
         assert hasattr(GraphRAGBackend, name), f"missing {name}"
+
+
+async def test_edit_content_persists_text_and_schedules_reindex(monkeypatch):
+    document_id = uuid.uuid4()
+    document = SimpleNamespace(
+        id=document_id,
+        title="week.md",
+        file_type="markdown",
+        status="indexed",
+        overview="old overview",
+        error_msg="old error",
+    )
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _model, uid):
+            return document if uid == document_id else None
+
+        async def execute(self, _statement):
+            document.raw_text = "updated"
+            document.status = "pending"
+            document.error_msg = None
+
+        async def commit(self):
+            return None
+
+        async def refresh(self, _document):
+            return None
+
+    calls = []
+
+    class FakePipeline:
+        async def reindex_document(self, uid, content):
+            calls.append((uid, content))
+
+    monkeypatch.setattr(backend_mod, "async_session_factory", FakeSession)
+    backend = GraphRAGBackend(SimpleNamespace(), FakePipeline())
+
+    result = await backend.edit_content(str(document_id), "updated")
+    await asyncio.sleep(0)
+
+    assert result.status == "pending"
+    assert document.raw_text == "updated"
+    assert document.error_msg is None
+    assert calls == [(document_id, "updated")]
 
 
 def test_remove_upload_directory_only_deletes_uuid_scope(tmp_path):

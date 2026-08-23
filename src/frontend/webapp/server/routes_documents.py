@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 
 from src.agent.interface import EngineClient
 from src.frontend.webapp.server import deps
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+class EditContentRequest(BaseModel):
+    content: str
 
 
 @router.get("")
@@ -37,6 +42,18 @@ async def upload_document(
         raise HTTPException(400, "文件名不能为空")
     data = await file.read()
     return await engine.ingest(file.filename, data)
+
+
+@router.put("/{doc_id}/content")
+async def edit_document_content(
+    doc_id: str,
+    body: EditContentRequest,
+    engine: EngineClient = Depends(deps.get_engine),
+):
+    try:
+        return await engine.edit_content(doc_id, body.content)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.delete("/{doc_id}")

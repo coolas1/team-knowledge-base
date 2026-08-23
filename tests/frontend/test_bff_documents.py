@@ -40,6 +40,29 @@ def test_upload_document(client):
     assert list(kb.raw.values())[0] == b"# T\n\nAcme"
 
 
+def test_edit_document_content(client):
+    c, kb = client
+    uploaded = c.post(
+        "/api/documents/upload",
+        files={"file": ("r.md", b"old", "text/markdown")},
+    ).json()
+
+    res = c.put(
+        f"/api/documents/{uploaded['id']}/content",
+        json={"content": "# Updated\n\nNew content"},
+    )
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "pending"
+    assert kb.raw[uploaded["id"]] == b"# Updated\n\nNew content"
+
+
+def test_edit_document_content_not_found(client):
+    c, _ = client
+    res = c.put("/api/documents/missing/content", json={"content": "new"})
+    assert res.status_code == 404
+
+
 def test_delete_document(client):
     c, _ = client
     res = c.delete("/api/documents/abc")

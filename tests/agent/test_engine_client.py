@@ -4,6 +4,7 @@ from src.agent.engine_client import InProcessEngineClient, McpEngineClient
 from src.engine.interface import (
     GraphData,
     GraphNode,
+    IngestSource,
     KnowledgeQueryResult,
     KnowledgeSource,
 )
@@ -101,6 +102,17 @@ async def test_inprocess_ingest_returns_dict():
     assert out["status"] == "indexed"
 
 
+async def test_inprocess_edit_content_returns_pending_document():
+    kb = FakeKnowledgeBase()
+    ref = await kb.ingest(IngestSource(name="x.md", data=b"old"))
+    client = InProcessEngineClient(kb)
+
+    out = await client.edit_content(ref.id, "new")
+
+    assert out["status"] == "pending"
+    assert kb.raw[ref.id] == b"new"
+
+
 async def test_inprocess_get_graph_returns_dict():
     kb = FakeKnowledgeBase()
     kb.graph = GraphData(nodes=[GraphNode(name="n", type="T")])
@@ -190,6 +202,19 @@ async def test_mcp_ingest_calls_upload_document(monkeypatch):
     monkeypatch.setattr(client, "_call", fake_call)
     out = await client.ingest("x.md", b"hello")
     assert out["title"] == "x.md"
+
+
+async def test_mcp_edit_content_calls_tool(monkeypatch):
+    client = McpEngineClient("http://localhost:8000/mcp")
+
+    async def fake_call(tool, args):
+        assert tool == "edit_document_content"
+        assert args == {"doc_id": "abc", "content": "new"}
+        return {"id": "abc", "status": "pending"}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    out = await client.edit_content("abc", "new")
+    assert out["status"] == "pending"
 
 
 async def test_mcp_get_graph_calls_query_graph(monkeypatch):

@@ -100,6 +100,24 @@ class GraphRAGBackend:
         )
         return ref
 
+    async def edit_content(self, doc_id: str, content: str) -> DocumentRef:
+        uid = uuid.UUID(doc_id)
+        async with async_session_factory() as session:
+            doc = await session.get(Document, uid)
+            if not doc:
+                raise ValueError(f"文档不存在: {doc_id}")
+            await session.execute(
+                update(Document)
+                .where(Document.id == uid)
+                .values(raw_text=content, status="pending", error_msg=None)
+            )
+            await session.commit()
+            await session.refresh(doc)
+            ref = _to_ref(doc)
+
+        asyncio.create_task(self._pipeline.reindex_document(uid, content))
+        return ref
+
     async def reingest(self, doc_id: str) -> DocumentRef:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:

@@ -86,6 +86,13 @@ class FakeKnowledgeBase:
         self.docs[doc_id].status = "indexed"
         return self.docs[doc_id]
 
+    async def edit_content(self, doc_id: str, content: str) -> DocumentRef:
+        if doc_id not in self.docs:
+            raise ValueError(f"文档不存在: {doc_id}")
+        self.raw[doc_id] = content.encode()
+        self.docs[doc_id].status = "pending"
+        return self.docs[doc_id]
+
     async def remove(self, doc_id: str) -> None:
         self.docs.pop(doc_id, None)
         self.raw.pop(doc_id, None)

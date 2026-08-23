@@ -126,6 +126,28 @@ async def test_reingest_returns_latest_memory_state():
     assert reader.single_calls == [ref.id]
 
 
+async def test_edit_content_marks_existing_memory_pending():
+    kb = FakeKnowledgeBase()
+    ref = await kb.ingest(IngestSource(name="week.md", data=b"old"))
+    reader = FakeStateReader(
+        {
+            ref.id: DocumentMemoryState(
+                document_id=ref.id,
+                status="indexed",
+                memory_count=8,
+            )
+        }
+    )
+    adapter = HindsightKnowledgeBaseAdapter(kb, reader)
+
+    result = await adapter.edit_content(ref.id, "new")
+
+    assert result.status == "pending"
+    assert result.memory_status == "pending"
+    assert kb.raw[ref.id] == b"new"
+    assert reader.single_calls == [ref.id]
+
+
 async def test_remove_keeps_original_document_lifecycle():
     kb = FakeKnowledgeBase()
     ref = await kb.ingest(IngestSource(name="remove.md", data=b"content"))

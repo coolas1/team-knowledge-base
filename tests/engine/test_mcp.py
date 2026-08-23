@@ -5,6 +5,7 @@ from src.engine import mcp as mcp_mod
 from src.engine.interface import (
     GraphData,
     GraphNode,
+    IngestSource,
     KnowledgeQueryResult,
     KnowledgeSource,
     RecallResult,
@@ -190,6 +191,15 @@ async def test_upload_document_includes_memory_state_when_adapter_provides_it(
     assert result["memory_status"] == "pending"
     assert result["memory_count"] == 0
     assert result["memory_link_count"] == 0
+
+
+async def test_edit_document_content(fake_kb):
+    uploaded = await fake_kb.ingest(IngestSource(name="week.md", data=b"old"))
+
+    result = await mcp_mod.edit_document_content(uploaded.id, "new")
+
+    assert result["status"] == "pending"
+    assert fake_kb.raw[uploaded.id] == b"new"
 
 
 async def test_list_documents_tool(fake_kb):
