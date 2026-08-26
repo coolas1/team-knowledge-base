@@ -40,6 +40,77 @@ def test_upload_document(client):
     assert list(kb.raw.values())[0] == b"# T\n\nAcme"
 
 
+def test_upload_rejects_unsupported_file_with_guidance(client):
+    c, _ = client
+    res = c.post(
+        "/api/documents/upload",
+        files={"file": ("archive.zip", b"content", "application/zip")},
+    )
+
+    assert res.status_code == 400
+    assert res.json()["detail"]["code"] == "unsupported_file_type"
+    assert ".pdf" in res.json()["detail"]["suggestion"]
+    assert res.json()["detail"]["retryable"] is False
+
+
+def test_upload_rejects_empty_file_with_guidance(client):
+    c, _ = client
+    res = c.post(
+        "/api/documents/upload",
+        files={"file": ("empty.md", b"", "text/markdown")},
+    )
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == {
+        "code": "empty_file",
+        "message": "文件内容为空",
+        "suggestion": "请确认文件包含内容，保存后重新选择该文件。",
+        "retryable": False,
+    }
+
+
+def test_upload_service_failure_is_retryable(client, monkeypatch):
+    c, _ = client
+
+    async def fail_ingest(_name, _data):
+        raise RuntimeError("database unavailable")
+
+    engine = app_mod.app.dependency_overrides[deps.get_engine]()
+    monkeypatch.setattr(engine, "ingest", fail_ingest)
+
+    res = c.post(
+        "/api/documents/upload",
+        files={"file": ("retry.md", b"content", "text/markdown")},
+    )
+
+    assert res.status_code == 503
+    assert res.json()["detail"]["code"] == "upload_service_unavailable"
+    assert res.json()["detail"]["retryable"] is True
+
+
+def test_retry_failed_document(client):
+    c, kb = client
+    uploaded = c.post(
+        "/api/documents/upload",
+        files={"file": ("retry.md", b"content", "text/markdown")},
+    ).json()
+    kb.docs[uploaded["id"]].status = "failed"
+
+    res = c.post(f"/api/documents/{uploaded['id']}/retry")
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "pending"
+
+
+def test_retry_missing_document_has_upload_guidance(client):
+    c, _ = client
+    res = c.post("/api/documents/missing/retry")
+
+    assert res.status_code == 400
+    assert res.json()["detail"]["code"] == "document_not_retryable"
+    assert "重新选择原文件" in res.json()["detail"]["suggestion"]
+
+
 def test_edit_document_content(client):
     c, kb = client
     uploaded = c.post(

@@ -111,6 +111,69 @@ async def test_edit_content_persists_text_and_schedules_reindex(monkeypatch):
     assert calls == [(document_id, "updated")]
 
 
+@pytest.mark.parametrize("has_raw_text", [True, False])
+async def test_reingest_schedules_the_available_retry_path(
+    monkeypatch, tmp_path, has_raw_text
+):
+    document_id = uuid.uuid4()
+    source_path = tmp_path / "week.md"
+    source_path.write_text("source content", encoding="utf-8")
+    document = SimpleNamespace(
+        id=document_id,
+        title="week.md",
+        file_type="markdown",
+        raw_text="indexed content" if has_raw_text else "",
+        file_path=str(source_path),
+        status="failed",
+        overview="",
+        error_msg="processing failed",
+    )
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _model, uid):
+            return document if uid == document_id else None
+
+        async def execute(self, _statement):
+            document.status = "pending"
+            document.error_msg = None
+
+        async def commit(self):
+            return None
+
+        async def refresh(self, _document):
+            return None
+
+    calls = []
+
+    class FakePipeline:
+        async def reindex_document(self, uid, content):
+            calls.append(("reindex", uid, content))
+
+        async def process_file(self, uid, file_path, title, file_type):
+            calls.append(("extract", uid, file_path, title, file_type))
+
+    monkeypatch.setattr(backend_mod, "async_session_factory", FakeSession)
+    backend = GraphRAGBackend(SimpleNamespace(), FakePipeline())
+
+    result = await backend.reingest(str(document_id))
+    await asyncio.sleep(0)
+
+    assert result.status == "pending"
+    assert document.error_msg is None
+    if has_raw_text:
+        assert calls == [("reindex", document_id, "indexed content")]
+    else:
+        assert calls == [
+            ("extract", document_id, source_path, "week.md", "markdown")
+        ]
+
+
 def test_remove_upload_directory_only_deletes_uuid_scope(tmp_path):
     document_id = uuid.uuid4()
     upload_dir = tmp_path / "uploads"

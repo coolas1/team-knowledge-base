@@ -218,6 +218,11 @@ async def edit_document_content(doc_id: str, content: str) -> dict[str, Any]:
     return asdict(await _get_kb().edit_content(doc_id, content))
 
 
+async def reingest_document(doc_id: str) -> dict[str, Any]:
+    """重新处理失败文档，并在后台重建索引。"""
+    return asdict(await _get_kb().reingest(doc_id))
+
+
 async def list_documents(
     page: int = 1,
     page_size: int = 20,
@@ -268,6 +273,7 @@ mcp.tool()(get_document)
 mcp.tool()(query_graph)
 mcp.tool()(upload_document)
 mcp.tool()(edit_document_content)
+mcp.tool()(reingest_document)
 mcp.tool()(list_documents)
 mcp.tool()(remove_document)
 mcp.tool()(get_full_graph)

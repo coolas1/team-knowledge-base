@@ -125,14 +125,28 @@ class GraphRAGBackend:
             if not doc:
                 raise ValueError(f"文档不存在: {doc_id}")
             new_text = doc.raw_text or ""
+            file_path = Path(doc.file_path) if doc.file_path else None
             title = doc.title
+            file_type = doc.file_type
+            if not new_text and (file_path is None or not file_path.is_file()):
+                raise ValueError("原始文件不存在，请重新上传文件")
+            await session.execute(
+                update(Document)
+                .where(Document.id == uid)
+                .values(status="pending", error_msg=None)
+            )
+            await session.commit()
+            await session.refresh(doc)
+            ref = _to_ref(doc)
 
-        await self._pipeline.reindex_document(uid, new_text)
-
-        async with async_session_factory() as session:
-            doc = await session.get(Document, uid)
-            assert doc is not None
-            return _to_ref(doc)
+        if new_text:
+            asyncio.create_task(self._pipeline.reindex_document(uid, new_text))
+        else:
+            assert file_path is not None
+            asyncio.create_task(
+                self._pipeline.process_file(uid, file_path, title, file_type)
+            )
+        return ref
 
     async def remove(self, doc_id: str) -> None:
         uid = uuid.UUID(doc_id)

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import MDEditor from '@uiw/react-md-editor'
-import { api, type Document } from '../api/client'
+import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react'
+import { ApiError, api, type Document } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
 
 export function DocumentDetailPage() {
@@ -12,6 +13,8 @@ export function DocumentDetailPage() {
   const [editContent, setEditContent] = useState('')
   const [saving, setSaving] = useState(false)
   const [polling, setPolling] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState('')
 
   const loadDoc = async () => {
     if (!id) return
@@ -62,6 +65,22 @@ export function DocumentDetailPage() {
     }
   }
 
+  const handleRetry = async () => {
+    if (!id || retrying) return
+    setRetrying(true)
+    setRetryError('')
+    try {
+      await api.retryDocument(id)
+      await loadDoc()
+    } catch (error) {
+      const suggestion = error instanceof ApiError ? error.suggestion : undefined
+      const message = error instanceof Error ? error.message : '重新处理失败'
+      setRetryError(`${message}${suggestion ? ` · ${suggestion}` : ''}`)
+    } finally {
+      setRetrying(false)
+    }
+  }
+
   if (!doc) return <div style={{ padding: 24 }}>加载中...</div>
 
   const isMarkdown = doc.file_type === 'markdown'
@@ -87,10 +106,32 @@ export function DocumentDetailPage() {
       </div>
 
       {/* 错误信息 */}
-      {doc.error_msg && (
-        <div style={{ padding: 12, background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 6, marginBottom: 16, color: '#cf1322' }}>
-          错误: {doc.error_msg}
-        </div>
+      {doc.status === 'failed' && (
+        <section
+          role="alert"
+          style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 10, padding: 12, background: '#fff7f7', border: '1px solid #fecaca', borderRadius: 6, marginBottom: 16, color: '#7f1d1d' }}
+        >
+          <AlertCircle size={19} aria-hidden="true" style={{ flex: '0 0 auto', marginTop: 1, color: '#dc2626' }} />
+          <div style={{ minWidth: 180, flex: '1 1 240px' }}>
+            <div style={{ fontWeight: 650, fontSize: 14, marginBottom: 3 }}>文件处理失败</div>
+            <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>
+              {doc.error_msg || '处理任务未完成，服务未返回具体原因。'}
+            </div>
+            <div style={{ marginTop: 5, color: '#9f3a3a', fontSize: 12 }}>
+              请确认文件可正常打开，并检查数据库、模型及 OCR 服务；修复后可直接重新处理。
+            </div>
+            {retryError && <div style={{ marginTop: 6, fontSize: 12 }}>{retryError}</div>}
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleRetry()}
+            disabled={retrying}
+            style={{ display: 'inline-flex', minHeight: 32, flex: '0 0 auto', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 5, border: '1px solid #f1a8a8', color: '#8f1d1d', background: '#fff', cursor: retrying ? 'wait' : 'pointer', fontSize: 12, fontWeight: 650 }}
+          >
+            {retrying ? <LoaderCircle className="app-spin" size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}
+            <span>{retrying ? '处理中' : '重新处理'}</span>
+          </button>
+        </section>
       )}
 
       {/* Overview */}

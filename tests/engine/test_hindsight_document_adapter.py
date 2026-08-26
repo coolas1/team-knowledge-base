@@ -102,7 +102,7 @@ async def test_get_document_enriches_memory_failure_without_hiding_document():
     assert document["memory_link_count"] == 2
 
 
-async def test_reingest_returns_latest_memory_state():
+async def test_reingest_marks_memory_pending_while_reprocessing():
     kb = FakeKnowledgeBase()
     ref = await kb.ingest(IngestSource(name="week.md", data=b"content"))
     reader = FakeStateReader(
@@ -119,8 +119,8 @@ async def test_reingest_returns_latest_memory_state():
 
     result = await adapter.reingest(ref.id)
 
-    assert result.status == "indexed"
-    assert result.memory_status == "indexed"
+    assert result.status == "pending"
+    assert result.memory_status == "pending"
     assert result.memory_count == 8
     assert result.memory_link_count == 13
     assert reader.single_calls == [ref.id]

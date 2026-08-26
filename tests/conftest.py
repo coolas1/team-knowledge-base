@@ -82,8 +82,8 @@ class FakeKnowledgeBase:
 
     async def reingest(self, doc_id: str) -> DocumentRef:
         if doc_id not in self.docs:
-            raise KeyError(doc_id)
-        self.docs[doc_id].status = "indexed"
+            raise ValueError(f"文档不存在: {doc_id}")
+        self.docs[doc_id].status = "pending"
         return self.docs[doc_id]
 
     async def edit_content(self, doc_id: str, content: str) -> DocumentRef:

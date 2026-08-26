@@ -202,6 +202,14 @@ async def test_edit_document_content(fake_kb):
     assert fake_kb.raw[uploaded.id] == b"new"
 
 
+async def test_reingest_document(fake_kb):
+    uploaded = await fake_kb.ingest(IngestSource(name="week.md", data=b"content"))
+
+    result = await mcp_mod.reingest_document(uploaded.id)
+
+    assert result["status"] == "pending"
+
+
 async def test_list_documents_tool(fake_kb):
     res = await mcp_mod.list_documents()
     assert {"total", "items"} <= set(res)

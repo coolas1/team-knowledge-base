@@ -113,6 +113,16 @@ async def test_inprocess_edit_content_returns_pending_document():
     assert kb.raw[ref.id] == b"new"
 
 
+async def test_inprocess_reingest_returns_pending_document():
+    kb = FakeKnowledgeBase()
+    ref = await kb.ingest(IngestSource(name="x.md", data=b"content"))
+    client = InProcessEngineClient(kb)
+
+    out = await client.reingest(ref.id)
+
+    assert out["status"] == "pending"
+
+
 async def test_inprocess_get_graph_returns_dict():
     kb = FakeKnowledgeBase()
     kb.graph = GraphData(nodes=[GraphNode(name="n", type="T")])
@@ -214,6 +224,19 @@ async def test_mcp_edit_content_calls_tool(monkeypatch):
 
     monkeypatch.setattr(client, "_call", fake_call)
     out = await client.edit_content("abc", "new")
+    assert out["status"] == "pending"
+
+
+async def test_mcp_reingest_calls_tool(monkeypatch):
+    client = McpEngineClient("http://localhost:8000/mcp")
+
+    async def fake_call(tool, args):
+        assert tool == "reingest_document"
+        assert args == {"doc_id": "abc"}
+        return {"id": "abc", "status": "pending"}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    out = await client.reingest("abc")
     assert out["status"] == "pending"
 
 

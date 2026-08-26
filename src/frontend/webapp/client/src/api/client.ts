@@ -78,9 +78,44 @@ export type PiAgentEvent =
   | { type: 'message.completed'; sessionId: string; answer: string; toolCalls: number }
   | { type: 'message.failed'; error: string; code?: string }
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+    readonly suggestion?: string,
+    readonly retryable = false,
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
 async function responseError(res: Response): Promise<Error> {
-  const body = await res.json().catch(() => ({ detail: res.statusText }))
-  return new Error(body.detail || body.error || body.message || res.statusText)
+  const body = await res.json().catch(() => undefined)
+  const detail = body?.detail
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    return new ApiError(
+      typeof detail.message === 'string' ? detail.message : res.statusText,
+      res.status,
+      typeof detail.code === 'string' ? detail.code : undefined,
+      typeof detail.suggestion === 'string' ? detail.suggestion : undefined,
+      detail.retryable === true,
+    )
+  }
+  const message =
+    (typeof detail === 'string' && detail) ||
+    (typeof body?.error === 'string' && body.error) ||
+    (typeof body?.message === 'string' && body.message) ||
+    res.statusText ||
+    `请求失败 (${res.status})`
+  const suggestion =
+    res.status === 413
+      ? '请选择更小的文件，或压缩文件后重新上传。'
+      : res.status >= 500
+        ? '服务恢复后可直接重试；如果持续失败，请联系管理员检查服务日志。'
+        : undefined
+  return new ApiError(message, res.status, undefined, suggestion, res.status >= 500)
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -151,10 +186,21 @@ export const api = {
     return request<Document>(`/documents/${id}`)
   },
 
-  uploadFile(file: File) {
+  async uploadFile(file: File) {
     const form = new FormData()
     form.append('file', file)
-    return request<Document>('/documents/upload', { method: 'POST', body: form })
+    try {
+      return await request<Document>('/documents/upload', { method: 'POST', body: form })
+    } catch (error) {
+      if (error instanceof ApiError) throw error
+      throw new ApiError(
+        '无法连接上传服务',
+        0,
+        'network_error',
+        '请检查网络或服务状态，恢复后可直接重试。',
+        true,
+      )
+    }
   },
 
   editContent(id: string, content: string) {
@@ -163,6 +209,10 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
     })
+  },
+
+  retryDocument(id: string) {
+    return request<Document>(`/documents/${id}/retry`, { method: 'POST' })
   },
 
   deleteDocument(id: string) {
