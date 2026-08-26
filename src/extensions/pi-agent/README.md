@@ -6,7 +6,7 @@ and provides an HTTP/SSE API for later BFF or UI integration.
 
 ## Safe defaults
 
-The model receives these read-only TKB tools by default:
+The model receives these TKB tools by default:
 
 - `tkb_query_knowledge`
 - `tkb_search_fast`
@@ -14,13 +14,15 @@ The model receives these read-only TKB tools by default:
 - `tkb_get_document`
 - `tkb_query_graph`
 - `tkb_list_documents`
+- `tkb_generate_document` (Word, PDF, PPTX + Slidev source)
 
 Legacy search, document writes, and full-graph output remain opt-in. Pi's
 built-in shell and file-editing tools are not enabled. The only local read tool
 is restricted to Markdown files under this package's `skills` directory.
 
 The bundled skills guide the model to choose Fast or Deep retrieval, perform
-Reflect before Recall for reflective research, and cite retrieved sources.
+Reflect before Recall for reflective research, cite retrieved sources, and
+generate downloadable office documents.
 
 ## Start
 
@@ -122,5 +124,5 @@ SPA does not use RSC, SSR, or Server Actions, and no unaffected React Router
 release is currently published. Any other high or critical advisory blocks the
 image build.
 
-At startup the runtime validates all ten current Engine MCP tools. Only the
+At startup the runtime validates all eleven current Engine MCP tools. Only the
 curated subset is exposed to the model unless an opt-in flag is set.

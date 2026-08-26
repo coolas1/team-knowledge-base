@@ -264,6 +264,29 @@ async def get_full_graph() -> dict[str, Any]:
     }
 
 
+async def generate_document(
+    format: Literal["docx", "pdf", "pptx"],
+    title: str,
+    content: str,
+    file_name: str | None = None,
+) -> dict[str, Any]:
+    """生成可下载的 Word、PDF 或 PPT 文档。
+
+    content 使用 Markdown。生成 PPT 时以独占一行的 ``---`` 分隔幻灯片，
+    每页首个 Markdown 标题作为页标题；同时返回 PPTX 和 Slidev 源文件链接。
+    """
+    from src.agent.artifacts import generate_artifact
+
+    return asdict(
+        generate_artifact(
+            format=format,
+            title=title,
+            content=content,
+            file_name=file_name,
+        )
+    )
+
+
 # Register the async functions as MCP tools (FastMCP introspects signatures).
 mcp.tool()(search)
 mcp.tool()(query_knowledge)
@@ -277,6 +300,7 @@ mcp.tool()(reingest_document)
 mcp.tool()(list_documents)
 mcp.tool()(remove_document)
 mcp.tool()(get_full_graph)
+mcp.tool()(generate_document)
 
 
 def build_app():

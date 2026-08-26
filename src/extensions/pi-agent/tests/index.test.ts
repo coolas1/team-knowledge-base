@@ -20,6 +20,7 @@ describe("TKB Pi extension entry point", () => {
       "tkb_get_document",
       "tkb_query_graph",
       "tkb_list_documents",
+      "tkb_generate_document",
     ]);
     expect(events).toContain("session_start");
   });

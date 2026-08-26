@@ -226,3 +226,15 @@ async def test_get_full_graph_tool(fake_kb):
     ).GraphData()
     res = await mcp_mod.get_full_graph()
     assert res == {"nodes": [], "links": []}
+
+
+async def test_generate_document_tool_returns_download_link(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_DIR", str(tmp_path))
+
+    result = await mcp_mod.generate_document(
+        "docx", "会议纪要", "# 决议\n\n- 发布新版本"
+    )
+
+    assert result["format"] == "docx"
+    assert result["filename"].endswith(".docx")
+    assert result["download_url"].startswith("/api/artifacts/")

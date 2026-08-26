@@ -15,6 +15,7 @@ export const ENGINE_MCP_CONTRACT: Record<string, ToolContract> = {
   list_documents: { required: [] },
   remove_document: { required: ["doc_id"] },
   get_full_graph: { required: [] },
+  generate_document: { required: ["format", "title", "content"] },
 };
 
 export interface ContractReport {

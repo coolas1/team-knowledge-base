@@ -13,7 +13,7 @@ function completeTools() {
 }
 
 describe("inspectEngineContract", () => {
-  it("accepts the current ten-tool engine contract", () => {
+  it("accepts the current eleven-tool engine contract", () => {
     expect(inspectEngineContract(completeTools()).ok).toBe(true);
   });
 

@@ -10,8 +10,8 @@ function client() {
 }
 
 describe("TKB Pi tools", () => {
-  it("maps all ten engine MCP tools", () => {
-    expect(buildAllTkbTools({ client: client() })).toHaveLength(10);
+  it("maps all eleven engine MCP tools", () => {
+    expect(buildAllTkbTools({ client: client() })).toHaveLength(11);
   });
 
   it("enables only the safe curated tools by default", () => {
@@ -26,7 +26,27 @@ describe("TKB Pi tools", () => {
       "tkb_get_document",
       "tkb_query_graph",
       "tkb_list_documents",
+      "tkb_generate_document",
     ]);
+  });
+
+  it("generates documents through the MCP tool", async () => {
+    const fake = client();
+    const tool = buildAllTkbTools({ client: fake }).find(
+      (candidate) => candidate.name === "tkb_generate_document",
+    )!;
+    await tool.execute(
+      "call-2",
+      { format: "pptx", title: "Roadmap", content: "# Q1", file_name: "roadmap" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(fake.callTool).toHaveBeenCalledWith(
+      "generate_document",
+      { format: "pptx", title: "Roadmap", content: "# Q1", file_name: "roadmap" },
+      expect.any(Object),
+    );
   });
 
   it("maps fast search parameters and forwards cancellation", async () => {

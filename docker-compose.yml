@@ -101,6 +101,7 @@ services:
       HINDSIGHT_GRAPH_WORKER_MAX_ATTEMPTS: ${HINDSIGHT_GRAPH_WORKER_MAX_ATTEMPTS:-10}
       # Fixed BFF upstream; no model credentials are exposed to the browser.
       PI_AGENT_URL: http://pi-agent:8010
+      ARTIFACTS_DIR: /app/artifacts
       APP_HOST: 0.0.0.0
       APP_PORT: "8000"
     ports:
@@ -112,6 +113,7 @@ services:
       # ${HOME} is read from your shell. (podman-compose 1.x can't expand $HOME
       # inside a .env value or a ${VAR:-default}, so reference it directly here.)
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      - artifactsdata:/app/artifacts
     restart: unless-stopped
 
   pi-agent:
@@ -169,3 +171,4 @@ volumes:
   neo4jdata:
   ollamadata:
   piagentdata:
+  artifactsdata:
