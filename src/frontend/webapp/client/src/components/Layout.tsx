@@ -10,12 +10,14 @@ export function Layout() {
   const navigate = useNavigate()
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+    const files = Array.from(e.target.files ?? [])
+    if (files.length === 0) return
     setUploading(true)
     try {
-      const doc = await api.uploadFile(file)
-      navigate(`/documents/${doc.id}`)
+      for (const file of files) {
+        await api.uploadFile(file)
+      }
+      navigate('/')
     } catch (err: any) {
       alert('上传失败: ' + err.message)
     } finally {
@@ -60,7 +62,7 @@ export function Layout() {
           )}
           <span>{uploading ? '上传中' : '上传文件'}</span>
         </button>
-        <input ref={fileRef} type="file" hidden onChange={handleUpload} />
+        <input ref={fileRef} type="file" multiple hidden onChange={handleUpload} />
       </header>
 
       <div className="app-content">
