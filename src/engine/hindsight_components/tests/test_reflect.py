@@ -66,3 +66,25 @@ async def test_reflect_forwards_recall_mode_and_top_k() -> None:
         ("question", "fast", 4),
         ("second hop", "fast", 4),
     ]
+
+
+class EmptyRecall:
+    async def recall(
+        self, query: str, *, mode: str = "deep", top_k: int | None = None
+    ) -> RecallResult:
+        return RecallResult(results=[], chunks={}, entities={}, trace={})
+
+
+async def test_reflect_returns_not_found_when_no_evidence() -> None:
+    engine = ReflectEngine(
+        EmptyRecall(),
+        FakeRepository(),
+        FakeProviders(),
+        HindsightOptions(),
+    )
+
+    result = await engine.reflect("unknown topic")
+
+    assert result.text == "知识库中未找到与该问题相关的内容。"
+    assert result.based_on == {}
+    assert len(result.tool_trace) == 2
