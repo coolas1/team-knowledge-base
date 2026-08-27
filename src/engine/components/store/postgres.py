@@ -24,6 +24,33 @@ async def init_db() -> None:
         # 2. 建表（幂等）
         await conn.run_sync(Base.metadata.create_all)
 
+        # 2b. 版本链列迁移：create_all 不会为已存在的表加列。
+        # version_group 默认回填为自身 id（旧数据每个文档自成一组）。
+        await conn.execute(
+            text(
+                "ALTER TABLE documents "
+                "ADD COLUMN IF NOT EXISTS version_group UUID, "
+                "ADD COLUMN IF NOT EXISTS version_number INTEGER NOT NULL DEFAULT 1, "
+                "ADD COLUMN IF NOT EXISTS version_of UUID, "
+                "ADD COLUMN IF NOT EXISTS is_current BOOLEAN NOT NULL DEFAULT true"
+            )
+        )
+        await conn.execute(
+            text("UPDATE documents SET version_group = id WHERE version_group IS NULL")
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_documents_version_group "
+                "ON documents (version_group)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_documents_is_current "
+                "ON documents (is_current)"
+            )
+        )
+
         # 3. 创建特殊索引（SQLAlchemy DDL 不支持这些 PostgreSQL 特有索引）
         # title 模糊搜索索引
         await conn.execute(
