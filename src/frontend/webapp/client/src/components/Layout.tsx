@@ -34,13 +34,18 @@ export function Layout() {
   const fileRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
 
-  const uploadFile = async (file: File, keepFailureVisible = false) => {
+  const uploadFile = async (
+    file: File,
+    keepFailureVisible = false,
+    navigateOnSuccess = true,
+  ) => {
     setUploading(true)
     if (!keepFailureVisible) setUploadFailure(null)
     try {
       const doc = await api.uploadFile(file)
       setUploadFailure(null)
-      navigate(`/documents/${doc.id}`)
+      if (navigateOnSuccess) navigate(`/documents/${doc.id}`)
+      return true
     } catch (error) {
       const apiError = error instanceof ApiError ? error : undefined
       setUploadFailure({
@@ -49,15 +54,24 @@ export function Layout() {
         suggestion: apiError?.suggestion || '请确认文件可正常打开，或稍后直接重试。',
         retryable: apiError?.retryable ?? true,
       })
+      return false
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''
     }
   }
 
-  const handleUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (file) void uploadFile(file)
+  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? [])
+    if (files.length === 0) return
+    if (files.length === 1) {
+      await uploadFile(files[0])
+      return
+    }
+    for (const file of files) {
+      if (!(await uploadFile(file, false, false))) return
+    }
+    navigate('/')
   }
 
   return (
@@ -100,6 +114,7 @@ export function Layout() {
           ref={fileRef}
           type="file"
           accept=".md,.markdown,.txt,.pdf,.docx,.pptx,.png,.jpg,.jpeg,.tiff,.bmp,.webp"
+          multiple
           hidden
           onChange={handleUpload}
         />
