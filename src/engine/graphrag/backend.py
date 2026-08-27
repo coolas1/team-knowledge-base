@@ -6,6 +6,7 @@ owns its own DB sessions (async_session_factory); callers never pass a session.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import shutil
 import uuid
 from pathlib import Path
@@ -20,7 +21,7 @@ from src.engine.components.store.models import Chunk, Document
 from src.engine.components.store.neo4j import Neo4jClient
 from src.engine.components.store.postgres import async_session_factory, init_db
 from src.engine.config import EngineConfig
-from src.engine.graphrag.pipeline import Pipeline
+from src.engine.graphrag.pipeline import Pipeline, VersionParent
 from src.engine.interface import (
     Capabilities,
     DocumentRef,
@@ -56,6 +57,9 @@ def _to_ref(doc: Document, chunk_count: int = 0, overview: str | None = None) ->
         status=doc.status,
         overview=overview if overview is not None else (doc.overview or ""),
         error_msg=doc.error_msg,
+        version_group=str(doc.version_group),
+        version_number=doc.version_number,
+        is_current=doc.is_current,
     )
 
 
@@ -76,27 +80,81 @@ class GraphRAGBackend:
             data = source.path.read_bytes()
         file_type = ExtractorRegistry.guess_file_type(Path(source.name))
 
-        doc_id = uuid.uuid4()
-        doc_dir = UPLOAD_DIR / str(doc_id)
-        doc_dir.mkdir(parents=True, exist_ok=True)
-        file_path = doc_dir / source.name
-        file_path.write_bytes(data)
-
+        # 版本链检测：同名文档的当前版本存在时，本次上传成为新版本。
+        content_hash = hashlib.sha256(data).hexdigest()
         async with async_session_factory() as session:
-            doc = Document(
-                id=doc_id,
-                title=source.name,
-                file_type=file_type,
-                file_path=str(file_path),
-                status="pending",
-            )
+            parent = (
+                await session.execute(
+                    select(Document)
+                    .where(
+                        Document.title == source.name,
+                        Document.is_current.is_(True),
+                    )
+                    .order_by(Document.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+
+            if parent is not None and parent.content_hash == content_hash:
+                # 内容与当前版本一致：不产生新版本，直接返回现有文档。
+                return _to_ref(parent)
+
+            doc_id = uuid.uuid4()
+            doc_dir = UPLOAD_DIR / str(doc_id)
+            doc_dir.mkdir(parents=True, exist_ok=True)
+            file_path = doc_dir / source.name
+            file_path.write_bytes(data)
+
+            if parent is not None:
+                # 挂入版本链：旧版让出 current，新版继承 version_group。
+                await session.execute(
+                    update(Document)
+                    .where(Document.id == parent.id)
+                    .values(is_current=False)
+                )
+                doc = Document(
+                    id=doc_id,
+                    title=source.name,
+                    file_type=file_type,
+                    file_path=str(file_path),
+                    status="pending",
+                    version_group=parent.version_group,
+                    version_number=parent.version_number + 1,
+                    version_of=parent.id,
+                )
+            else:
+                doc = Document(
+                    id=doc_id,
+                    title=source.name,
+                    file_type=file_type,
+                    file_path=str(file_path),
+                    status="pending",
+                )
             session.add(doc)
             await session.commit()
             await session.refresh(doc)
             ref = _to_ref(doc)
 
+            # 版本链上下文（session 关闭前取出纯数据，避免 ORM 脱离会话）。
+            previous_version = (
+                VersionParent(
+                    doc_id=str(parent.id),
+                    raw_text=parent.raw_text or "",
+                    from_version=parent.version_number,
+                    to_version=doc.version_number,
+                )
+                if parent is not None and parent.raw_text
+                else None
+            )
+
         asyncio.create_task(
-            self._pipeline.process_file(doc_id, file_path, source.name, file_type)
+            self._pipeline.process_file(
+                doc_id,
+                file_path,
+                source.name,
+                file_type,
+                previous_version=previous_version,
+            )
         )
         return ref
 

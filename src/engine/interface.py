@@ -47,6 +47,10 @@ class DocumentRef:
     memory_error_msg: str | None = None
     memory_count: int = 0
     memory_link_count: int = 0
+    # 版本链信息（纵向迭代管理）
+    version_group: str = ""
+    version_number: int = 1
+    is_current: bool = True
 
 
 @dataclass

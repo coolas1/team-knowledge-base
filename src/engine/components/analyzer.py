@@ -56,6 +56,14 @@ class AnalysisResult:
     file_relations: list[FileRelation] = field(default_factory=list)
 
 
+@dataclass
+class ChangeAnalysisResult:
+    """相邻版本 diff 的 LLM 分析结果。"""
+
+    summary: str
+    changes: list[dict] = field(default_factory=list)
+
+
 def _load_entity_schema(path: Path) -> dict:
     """加载 entity_schema.yaml。"""
     if path.exists():
@@ -280,6 +288,86 @@ class Analyzer:
             return AnalysisResult(overview=f"[未知 provider] {title}")
 
         return self._parse_overview_response(raw)
+
+    # ── 版本变更分析（LLM diff）────────────────────────────────────
+
+    async def analyze_changes(
+        self, old_text: str, new_text: str, title: str
+    ) -> ChangeAnalysisResult:
+        """对比相邻两个版本的文本，抽取结构化变更。
+
+        Prompt 设计参考 VersionRAG：只提取实质内容变更，
+        过滤排版/标点/空白等非实质差异。
+        """
+        provider = settings.llm_provider
+        if provider == "todo":
+            return ChangeAnalysisResult(
+                summary=f"[待 LLM 生成] {title} 版本变更"
+            )
+
+        prompt = self._build_changes_prompt(old_text, new_text, title)
+
+        if provider == "ollama":
+            raw = await self._call_ollama(prompt)
+        elif provider in ("openai", "custom"):
+            raw = await self._call_openai_compatible(prompt)
+        else:
+            return ChangeAnalysisResult(summary=f"[未知 provider] {title}")
+
+        return self._parse_changes_response(raw)
+
+    @staticmethod
+    def _build_changes_prompt(old_text: str, new_text: str, title: str) -> str:
+        """构建版本 diff prompt。"""
+        return f"""你是一个专业的文档版本对比助手。请对比文档「{title}」的两个版本，提取结构化变更。
+
+**旧版本内容:**
+{old_text[:8000]}
+
+**新版本内容:**
+{new_text[:8000]}
+
+**要求:**
+1. **summary**: 一句话概括本次版本变更的核心内容。
+2. **changes**: 列出所有实质性内容变更。
+   - 只提取有意义的变更：新增/删除/修改的字段、章节、数值、结论、定义等
+   - 忽略非实质变更：排版、格式、标点、空白、页码、字体、大小写等不影响含义的差异
+   - 每个变更包含: name(简短标题), description(详细说明，包含具体的字段名/数值), status(added/removed/modified)
+
+请严格返回 JSON 格式:
+```json
+{{
+  "summary": "...",
+  "changes": [
+    {{"name": "...", "description": "...", "status": "added|removed|modified"}}
+  ]
+}}
+```"""
+
+    @staticmethod
+    def _parse_changes_response(raw: str) -> ChangeAnalysisResult:
+        """解析版本 diff 响应。"""
+        data = _extract_json(raw)
+        if data is None:
+            return ChangeAnalysisResult(summary=f"[LLM 返回解析失败] {raw[:200]}")
+
+        changes: list[dict] = []
+        for c in data.get("changes", []):
+            if not isinstance(c, dict):
+                continue
+            status = c.get("status", "modified")
+            if status not in ("added", "removed", "modified"):
+                status = "modified"
+            changes.append(
+                {
+                    "name": str(c.get("name", "")),
+                    "description": str(c.get("description", "")),
+                    "status": status,
+                }
+            )
+        return ChangeAnalysisResult(
+            summary=str(data.get("summary", "")), changes=changes
+        )
 
     async def _call_ollama(self, prompt: str) -> str:
         """通过 Ollama /api/generate 调用。"""

@@ -64,21 +64,101 @@ class Neo4jClient:
         title: str,
         file_type: str,
         overview: str = "",
+        version_number: int = 1,
+        is_current: bool = True,
     ) -> None:
-        """创建/更新 Document 节点。"""
+        """创建/更新 Document 节点（含版本链属性）。"""
         async with self._driver.session() as session:
             await session.run(
                 """
                 MERGE (d:Document {doc_id: $doc_id})
                 SET d.title = $title,
                     d.file_type = $file_type,
-                    d.overview = $overview
+                    d.overview = $overview,
+                    d.version_number = $version_number,
+                    d.is_current = $is_current
                 """,
                 doc_id=doc_id,
                 title=title,
                 file_type=file_type,
                 overview=overview,
+                version_number=version_number,
+                is_current=is_current,
             )
+
+    # ── 版本链投影 ──────────────────────────────────────────────
+
+    async def link_next_version(self, from_doc_id: str, to_doc_id: str) -> None:
+        """连接两个版本：(:Document)-[:NEXT_VERSION]->(:Document)。"""
+        async with self._driver.session() as session:
+            await session.run(
+                """
+                MATCH (prev:Document {doc_id: $from_doc_id})
+                MATCH (next:Document {doc_id: $to_doc_id})
+                MERGE (prev)-[r:NEXT_VERSION]->(next)
+                SET r.created_at = toString(date())
+                """,
+                from_doc_id=from_doc_id,
+                to_doc_id=to_doc_id,
+            )
+
+    async def upsert_changes(
+        self,
+        doc_id: str,
+        from_version: int,
+        to_version: int,
+        summary: str,
+        changes: list[dict],
+    ) -> None:
+        """写入版本 diff：(:Change)-[:CHANGE_OF]->(:Document)。"""
+        async with self._driver.session() as session:
+            await session.run(
+                """
+                MATCH (d:Document {doc_id: $doc_id})
+                MERGE (c:Change {doc_id: $doc_id})
+                SET c.from_version = $from_version,
+                    c.to_version = $to_version,
+                    c.summary = $summary,
+                    c.changes = $changes
+                MERGE (c)-[:CHANGE_OF]->(d)
+                """,
+                doc_id=doc_id,
+                from_version=from_version,
+                to_version=to_version,
+                summary=summary,
+                changes=json.dumps(changes, ensure_ascii=False),
+            )
+
+    async def get_version_chain(self, doc_id: str) -> list[dict]:
+        """查询某版本所在版本链（沿 NEXT_VERSION 双向展开，按版本号排序）。"""
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (d:Document {doc_id: $doc_id})
+                MATCH (chain:Document)
+                WHERE chain = d
+                   OR (chain)-[:NEXT_VERSION*]->(d)
+                   OR (d)-[:NEXT_VERSION*]->(chain)
+                RETURN chain.doc_id AS doc_id,
+                    chain.title AS title,
+                    chain.version_number AS version_number,
+                    chain.is_current AS is_current,
+                    chain.overview AS overview
+                ORDER BY chain.version_number
+                """,
+                doc_id=doc_id,
+            )
+            records = await result.data()
+            return [
+                {
+                    "doc_id": r["doc_id"],
+                    "title": r["title"],
+                    "version_number": r["version_number"],
+                    "is_current": r["is_current"],
+                    "overview": r["overview"] or "",
+                }
+                for r in records
+            ]
 
     async def delete_document_graph(self, doc_id: str) -> None:
         """删除文档的图谱数据：清理实体 sources + 删 Document 节点。"""
@@ -115,7 +195,16 @@ class Neo4jClient:
                 """
             )
 
-            # 3. 删除 Document 节点及其 doc 级关系
+            # 3. 删除版本 diff Change 节点（版本链上的孤儿子图）
+            await session.run(
+                """
+                MATCH (c:Change {doc_id: $doc_id})
+                DETACH DELETE c
+                """,
+                doc_id=doc_id,
+            )
+
+            # 4. 删除 Document 节点及其 doc 级关系
             await session.run(
                 """
                 MATCH (d:Document {doc_id: $doc_id})
