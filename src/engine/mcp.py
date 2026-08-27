@@ -229,6 +229,26 @@ async def remove_document(doc_id: str) -> dict[str, Any]:
     return {"removed": doc_id}
 
 
+async def tkb_list_versions(doc_id: str) -> dict[str, Any]:
+    """列出文档所在版本链的全部版本（按版本号升序），
+    含每个版本的变更摘要。"""
+    try:
+        versions = await _get_kb().list_versions(doc_id)
+    except ValueError as e:
+        return {"error": str(e)}
+    return {"doc_id": doc_id, "versions": versions}
+
+
+async def tkb_diff_versions(
+    doc_id: str, from_version: int, to_version: int
+) -> dict[str, Any]:
+    """返回文档两个版本间的结构化变更（added/removed/modified 条目）。"""
+    try:
+        return await _get_kb().diff_versions(doc_id, from_version, to_version)
+    except ValueError as e:
+        return {"error": str(e)}
+
+
 async def get_full_graph() -> dict[str, Any]:
     """返回全图数据（所有实体 + 关系）。"""
     graph = await _get_kb().get_graph(None)
@@ -264,6 +284,8 @@ mcp.tool()(query_graph)
 mcp.tool()(upload_document)
 mcp.tool()(list_documents)
 mcp.tool()(remove_document)
+mcp.tool()(tkb_list_versions)
+mcp.tool()(tkb_diff_versions)
 mcp.tool()(get_full_graph)
 
 

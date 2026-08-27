@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload  # noqa: F401  (kept for parity with ori
 
 from src.engine.components.analyzer import Analyzer
 from src.engine.components.extractors.registry import ExtractorRegistry, registry
-from src.engine.components.store.models import Chunk, Document
+from src.engine.components.store.models import Chunk, Document, DocumentChange
 from src.engine.components.store.neo4j import Neo4jClient
 from src.engine.components.store.postgres import async_session_factory, init_db
 from src.engine.config import EngineConfig
@@ -279,11 +279,92 @@ class GraphRAGBackend:
                         "id": str(d.id), "title": d.title, "file_type": d.file_type,
                         "status": d.status,
                         "overview": (d.overview or "")[:200],
+                        "version_group": str(d.version_group),
+                        "version_number": d.version_number,
+                        "is_current": d.is_current,
                         "created_at": d.created_at.isoformat() if d.created_at else None,
                         "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                     }
                     for d in docs
                 ],
+            }
+
+    # ── 版本链查询（纵向迭代管理）─────────────────────────────────
+
+    async def list_versions(self, doc_id: str) -> list[dict[str, Any]]:
+        """列出 doc 所在版本链的全部版本（按版本号升序）。"""
+        uid = uuid.UUID(doc_id)
+        async with async_session_factory() as session:
+            doc = await session.get(Document, uid)
+            if not doc:
+                raise ValueError(f"文档不存在: {doc_id}")
+
+            rows = (
+                await session.execute(
+                    select(Document)
+                    .where(Document.version_group == doc.version_group)
+                    .order_by(Document.version_number.asc())
+                )
+            ).scalars().all()
+
+            versions = []
+            for d in rows:
+                change_row = (
+                    await session.execute(
+                        select(DocumentChange)
+                        .where(DocumentChange.doc_id == d.id)
+                        .order_by(DocumentChange.to_version.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                versions.append(
+                    {
+                        "id": str(d.id),
+                        "title": d.title,
+                        "version_number": d.version_number,
+                        "is_current": d.is_current,
+                        "status": d.status,
+                        "overview": (d.overview or "")[:200],
+                        "change_summary": change_row.summary if change_row else "",
+                        "created_at": d.created_at.isoformat() if d.created_at else None,
+                    }
+                )
+            return versions
+
+    async def diff_versions(
+        self, doc_id: str, from_version: int, to_version: int
+    ) -> dict[str, Any]:
+        """返回两个版本间的结构化变更记录。"""
+        uid = uuid.UUID(doc_id)
+        async with async_session_factory() as session:
+            doc = await session.get(Document, uid)
+            if not doc:
+                raise ValueError(f"文档不存在: {doc_id}")
+
+            row = (
+                await session.execute(
+                    select(DocumentChange).where(
+                        DocumentChange.doc_id == uid,
+                        DocumentChange.from_version == from_version,
+                        DocumentChange.to_version == to_version,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return {
+                    "doc_id": doc_id,
+                    "from_version": from_version,
+                    "to_version": to_version,
+                    "summary": "",
+                    "changes": [],
+                    "error": "版本变更记录不存在",
+                }
+            return {
+                "doc_id": doc_id,
+                "from_version": from_version,
+                "to_version": to_version,
+                "summary": row.summary,
+                "changes": row.changes,
             }
 
     async def get_document(self, doc_id: str) -> dict[str, Any] | None:
@@ -300,6 +381,9 @@ class GraphRAGBackend:
                 "file_path": doc.file_path, "content_hash": doc.content_hash,
                 "status": doc.status, "error_msg": doc.error_msg,
                 "chunk_count": chunk_count,
+                "version_group": str(doc.version_group),
+                "version_number": doc.version_number,
+                "is_current": doc.is_current,
                 "created_at": doc.created_at.isoformat() if doc.created_at else None,
                 "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
             }

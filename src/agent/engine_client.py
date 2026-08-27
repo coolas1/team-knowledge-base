@@ -110,6 +110,14 @@ class InProcessEngineClient:
         await self._kb.remove(doc_id)
         return {"removed": doc_id}
 
+    async def list_versions(self, doc_id: str) -> dict:
+        return {"doc_id": doc_id, "versions": await self._kb.list_versions(doc_id)}
+
+    async def diff_versions(
+        self, doc_id: str, from_version: int, to_version: int
+    ) -> dict:
+        return await self._kb.diff_versions(doc_id, from_version, to_version)
+
 
 class McpEngineClient:
     """EngineClient backed by an engine MCP server (streamable HTTP)."""
@@ -200,3 +208,18 @@ class McpEngineClient:
 
     async def remove(self, doc_id: str) -> dict:
         return await self._call("remove_document", {"doc_id": doc_id})
+
+    async def list_versions(self, doc_id: str) -> dict:
+        return await self._call("tkb_list_versions", {"doc_id": doc_id})
+
+    async def diff_versions(
+        self, doc_id: str, from_version: int, to_version: int
+    ) -> dict:
+        return await self._call(
+            "tkb_diff_versions",
+            {
+                "doc_id": doc_id,
+                "from_version": from_version,
+                "to_version": to_version,
+            },
+        )

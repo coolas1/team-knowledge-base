@@ -28,6 +28,27 @@ async def get_document(doc_id: str, engine: EngineClient = Depends(deps.get_engi
     return out
 
 
+@router.get("/{doc_id}/versions")
+async def list_versions(doc_id: str, engine: EngineClient = Depends(deps.get_engine)):
+    try:
+        return await engine.list_versions(doc_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.get("/{doc_id}/versions/diff")
+async def diff_versions(
+    doc_id: str,
+    from_version: int = Query(..., ge=1),
+    to_version: int = Query(..., ge=1),
+    engine: EngineClient = Depends(deps.get_engine),
+):
+    try:
+        return await engine.diff_versions(doc_id, from_version, to_version)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
