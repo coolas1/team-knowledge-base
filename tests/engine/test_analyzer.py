@@ -40,6 +40,32 @@ def test_parse_chunk_response_bad_json_empty():
     assert ca.relations == []
 
 
+def test_extract_json_tolerates_prose_around_fenced_json():
+    raw = '好的，以下是分析结果：\n```json\n{"overview": "s"}\n```\n希望对你有帮助。'
+    result = Analyzer._parse_response(raw)
+    assert result.overview == "s"
+
+
+def test_extract_json_tolerates_unclosed_fence_from_truncation():
+    raw = '```json\n{"overview": "truncated but usable", "entities": [{"name": "A", "type": "T"'
+    result = Analyzer._parse_response(raw)
+    assert result.overview == "truncated but usable"
+    # 截断前的最后一个实体也能被修复逻辑救回来。
+    assert len(result.entities) == 1
+    assert result.entities[0].name == "A"
+
+
+def test_extract_json_plain_object_without_fence():
+    raw = '{"overview": "plain"}'
+    result = Analyzer._parse_response(raw)
+    assert result.overview == "plain"
+
+
+def test_extract_json_empty_returns_placeholder():
+    result = Analyzer._parse_response("")
+    assert result.overview.startswith("[LLM 返回解析失败]")
+
+
 def test_analyzer_with_todo_provider_returns_placeholder(tmp_path, monkeypatch):
     from config.settings import settings
     monkeypatch.setattr(settings, "llm_provider", "todo")
