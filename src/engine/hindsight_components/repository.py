@@ -511,6 +511,7 @@ class PostgresMemoryRepository:
                     MemoryUnit.state == "active",
                     MemoryUnit.embedding.is_not(None),
                     Document.status == "indexed",
+                    Document.is_current.is_(True),
                 )
                 .order_by(score.desc())
                 .limit(limit)
@@ -530,6 +531,7 @@ class PostgresMemoryRepository:
                         .where(
                             MemoryUnit.state == "active",
                             Document.status == "indexed",
+                    Document.is_current.is_(True),
                         )
                     )
                 ).all()
@@ -566,6 +568,7 @@ class PostgresMemoryRepository:
                 .where(
                     MemoryUnit.state == "active",
                     Document.status == "indexed",
+                    Document.is_current.is_(True),
                     or_(
                         *[
                             MemoryEntity.normalized_name.contains(item)
@@ -609,6 +612,7 @@ class PostgresMemoryRepository:
                                 MemoryUnit.id.in_(expanded_scores),
                                 MemoryUnit.state == "active",
                                 Document.status == "indexed",
+                    Document.is_current.is_(True),
                             )
                         )
                     ).all()
@@ -651,6 +655,7 @@ class PostgresMemoryRepository:
                     *conditions,
                     MemoryUnit.state == "active",
                     Document.status == "indexed",
+                    Document.is_current.is_(True),
                 )
                 .order_by(MemoryUnit.occurred_start.desc())
                 .limit(limit)
