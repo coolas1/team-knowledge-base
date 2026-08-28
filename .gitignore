@@ -30,3 +30,6 @@ docs/superpowers/
 
 # OS
 .DS_Store
+
+# Claude Code local session artifacts (plans, task state)
+.claude/
