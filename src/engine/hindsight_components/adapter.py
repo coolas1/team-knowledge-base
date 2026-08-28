@@ -101,6 +101,14 @@ class HindsightKnowledgeBaseAdapter:
         self._enrich_dict(document, await self._safe_state(doc_id))
         return document
 
+    async def list_versions(self, doc_id: str) -> list[dict]:
+        return await self._knowledge_base.list_versions(doc_id)
+
+    async def diff_versions(
+        self, doc_id: str, from_version: int, to_version: int
+    ) -> dict:
+        return await self._knowledge_base.diff_versions(doc_id, from_version, to_version)
+
     async def _safe_state(self, document_id: str) -> DocumentMemoryState | None:
         try:
             return await self._state_reader.document_state(document_id)
