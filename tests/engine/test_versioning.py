@@ -335,3 +335,71 @@ async def test_mcp_version_tools_report_missing_doc():
         assert "error" in res
     finally:
         mcp_mod._kb = None
+
+
+# ── 版本化编辑（edit_document）────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_mcp_edit_document_reports_versioned_result():
+    from tests.conftest import FakeKnowledgeBase
+
+    from src.engine import mcp as mcp_mod
+    from src.engine.interface import DocumentRef
+
+    kb = FakeKnowledgeBase()
+
+    async def edit_document(doc_id, new_text):
+        return DocumentRef(
+            id="new-1", title="t", file_type="markdown", status="indexed",
+            version_number=2, is_current=True,
+        )
+
+    kb.edit_document = edit_document  # type: ignore[method-assign]
+    mcp_mod.set_kb(kb)
+    try:
+        res = await mcp_mod.tkb_edit_document("old-1", "new content")
+        assert res["id"] == "new-1"
+        assert res["version_number"] == 2
+        assert res["is_current"] is True
+    finally:
+        mcp_mod._kb = None
+
+
+@pytest.mark.asyncio
+async def test_mcp_edit_document_missing_doc_returns_error():
+    from tests.conftest import FakeKnowledgeBase
+
+    from src.engine import mcp as mcp_mod
+
+    kb = FakeKnowledgeBase()
+
+    async def edit_document(doc_id, new_text):
+        raise ValueError(f"文档不存在: {doc_id}")
+
+    kb.edit_document = edit_document  # type: ignore[method-assign]
+    mcp_mod.set_kb(kb)
+    try:
+        res = await mcp_mod.tkb_edit_document("missing", "x")
+        assert "error" in res
+    finally:
+        mcp_mod._kb = None
+
+
+def test_adapter_forwards_edit_document():
+    from src.engine.hindsight_components.adapter import HindsightKnowledgeBaseAdapter
+
+    assert hasattr(HindsightKnowledgeBaseAdapter, "edit_document")
+
+
+def test_reindex_document_accepts_previous_version():
+    import inspect
+
+    sig = inspect.signature(Pipeline.reindex_document)
+    assert "previous_version" in sig.parameters
+
+
+def test_backend_implements_edit_document():
+    from src.engine.graphrag.backend import GraphRAGBackend
+
+    assert hasattr(GraphRAGBackend, "edit_document")

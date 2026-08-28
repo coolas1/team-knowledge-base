@@ -55,6 +55,11 @@ class HindsightKnowledgeBaseAdapter:
         self._enrich_ref(ref, state)
         return ref
 
+    async def edit_document(self, doc_id: str, new_text: str) -> DocumentRef:
+        ref = await self._knowledge_base.edit_document(doc_id, new_text)
+        self._enrich_ref(ref, None)
+        return ref
+
     async def remove(self, doc_id: str) -> None:
         await self._knowledge_base.remove(doc_id)
 

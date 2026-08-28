@@ -174,6 +174,71 @@ class GraphRAGBackend:
             assert doc is not None
             return _to_ref(doc)
 
+    async def edit_document(self, doc_id: str, new_text: str) -> DocumentRef:
+        """版本化编辑：编辑保存 = 生成新版本，旧版保留在版本链中。
+
+        当前版本退位（is_current=False），新行继承 version_group 并
+        链接 version_of；内容 hash 一致时跳过（幂等）。
+        """
+        uid = uuid.UUID(doc_id)
+        async with async_session_factory() as session:
+            doc = await session.get(Document, uid)
+            if not doc:
+                raise ValueError(f"文档不存在: {doc_id}")
+            title = doc.title
+            file_type = doc.file_type
+            old_text = doc.raw_text or ""
+            content_hash = hashlib.sha256(new_text.encode()).hexdigest()
+
+            if content_hash == doc.content_hash:
+                # 内容未变：不产生新版本
+                return _to_ref(doc)
+
+            # 新版本行
+            new_id = uuid.uuid4()
+            new_doc = Document(
+                id=new_id,
+                title=title,
+                file_type=file_type,
+                raw_text=new_text,
+                status="pending",
+                version_group=doc.version_group,
+                version_number=doc.version_number + 1,
+                version_of=doc.id,
+            )
+            session.add(new_doc)
+            await session.execute(
+                update(Document)
+                .where(Document.id == uid)
+                .values(is_current=False)
+            )
+            await session.commit()
+
+            previous_version = (
+                VersionParent(
+                    doc_id=str(uid),
+                    raw_text=old_text,
+                    from_version=doc.version_number,
+                    to_version=doc.version_number + 1,
+                )
+                if old_text
+                else None
+            )
+
+        # 同步保存原始文本到上传目录（供后续提取/下载）
+        doc_dir = UPLOAD_DIR / str(new_id)
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        (doc_dir / title).write_text(new_text, encoding="utf-8")
+
+        await self._pipeline.reindex_document(
+            new_id, new_text, previous_version=previous_version
+        )
+
+        async with async_session_factory() as session:
+            new_row = await session.get(Document, new_id)
+            assert new_row is not None
+            return _to_ref(new_row)
+
     async def remove(self, doc_id: str) -> None:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:

@@ -229,6 +229,33 @@ async def remove_document(doc_id: str) -> dict[str, Any]:
     return {"removed": doc_id}
 
 
+async def tkb_edit_document(doc_id: str, new_text: str) -> dict[str, Any]:
+    """版本化编辑文档：编辑保存生成新版本，旧版保留在版本链中，
+    自动记录 LLM 结构化变更（diff）。返回新版本引用。"""
+    try:
+        ref = await _get_kb().edit_document(doc_id, new_text)
+    except ValueError as e:
+        return {"error": str(e)}
+    result = {
+        "id": ref.id,
+        "title": ref.title,
+        "file_type": ref.file_type,
+        "status": ref.status,
+        "version_number": ref.version_number,
+        "is_current": ref.is_current,
+    }
+    if ref.memory_status is not None:
+        result.update(
+            {
+                "memory_status": ref.memory_status,
+                "memory_error_msg": ref.memory_error_msg,
+                "memory_count": ref.memory_count,
+                "memory_link_count": ref.memory_link_count,
+            }
+        )
+    return result
+
+
 async def tkb_list_versions(doc_id: str) -> dict[str, Any]:
     """列出文档所在版本链的全部版本（按版本号升序），
     含每个版本的变更摘要。"""
@@ -284,6 +311,7 @@ mcp.tool()(query_graph)
 mcp.tool()(upload_document)
 mcp.tool()(list_documents)
 mcp.tool()(remove_document)
+mcp.tool()(tkb_edit_document)
 mcp.tool()(tkb_list_versions)
 mcp.tool()(tkb_diff_versions)
 mcp.tool()(get_full_graph)

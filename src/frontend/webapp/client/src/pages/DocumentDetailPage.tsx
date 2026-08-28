@@ -50,9 +50,14 @@ export function DocumentDetailPage() {
     if (!id) return
     setSaving(true)
     try {
-      await api.editContent(id, editContent)
+      // 版本化编辑：保存生成新版本，跳转到新版本详情页
+      const newDoc = await api.editContent(id, editContent)
       setEditing(false)
-      loadDoc()
+      if (newDoc.id && newDoc.id !== id) {
+        navigate(`/documents/${newDoc.id}`)
+      } else {
+        loadDoc()
+      }
     } catch (err: any) {
       alert('保存失败: ' + err.message)
     } finally {

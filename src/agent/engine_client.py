@@ -91,6 +91,12 @@ class InProcessEngineClient:
         out = await self._kb.get_document(doc_id)
         return out if out is not None else {"error": f"文档不存在: {doc_id}"}
 
+    async def edit_document(self, doc_id: str, new_text: str) -> dict:
+        from src.engine.interface import IngestSource  # noqa: F401  (type parity)
+
+        ref = await self._kb.edit_document(doc_id, new_text)
+        return _jsonable(ref)
+
     async def get_graph(self, entity: str | None = None) -> dict:
         return _jsonable(await self._kb.get_graph(entity))
 
@@ -176,6 +182,11 @@ class McpEngineClient:
 
     async def get_document(self, doc_id: str) -> dict:
         return await self._call("get_document", {"doc_id": doc_id})
+
+    async def edit_document(self, doc_id: str, new_text: str) -> dict:
+        return await self._call(
+            "tkb_edit_document", {"doc_id": doc_id, "new_text": new_text}
+        )
 
     async def get_graph(self, entity: str | None = None) -> dict:
         if entity is None:

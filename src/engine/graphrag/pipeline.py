@@ -186,8 +186,17 @@ class Pipeline:
                 )
                 await session.commit()
 
-    async def reindex_document(self, doc_id: UUID, new_text: str) -> None:
-        """编辑后重新索引：跳过文本提取，直接从文本开始分析。"""
+    async def reindex_document(
+        self,
+        doc_id: UUID,
+        new_text: str,
+        previous_version: VersionParent | None = None,
+    ) -> None:
+        """编辑后重新索引：跳过文本提取，直接从文本开始分析。
+
+        previous_version 提供上一版上下文时，成功入库后追加
+        变更抽取（LLM diff）并写入版本图谱。
+        """
         async with async_session_factory() as session:
             doc = await session.get(Document, doc_id)
             if not doc:
@@ -296,6 +305,16 @@ class Pipeline:
                 if doc_analysis.file_relations:
                     await self._write_file_relations(
                         str(doc_id), doc_analysis.file_relations, session
+                    )
+
+                # L4: 版本链：抽取相邻版本 diff + 版本图谱投影
+                if previous_version is not None:
+                    await self._process_version_change(
+                        doc_id=doc_id,
+                        title=title,
+                        new_text=new_text,
+                        previous_version=previous_version,
+                        session=session,
                     )
 
                 await self._notify_indexed(
