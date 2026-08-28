@@ -69,6 +69,22 @@ export function DocumentListPage() {
           >
             <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {doc.title}
+              {(doc.version_number ?? 1) > 1 && (
+                <span
+                  title={doc.is_current === false ? '历史版本' : '当前版本'}
+                  style={{
+                    marginLeft: 6,
+                    fontSize: 11,
+                    padding: '1px 6px',
+                    borderRadius: 8,
+                    color: doc.is_current === false ? '#999' : '#1890ff',
+                    background: doc.is_current === false ? '#f5f5f5' : '#e6f7ff',
+                    verticalAlign: 'middle',
+                  }}
+                >
+                  v{doc.version_number}
+                </span>
+              )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 12, color: '#999' }}>{doc.file_type}</span>
