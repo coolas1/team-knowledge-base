@@ -6,7 +6,9 @@ owns its own DB sessions (async_session_factory); callers never pass a session.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
+import logging
 import shutil
 import uuid
 from pathlib import Path
@@ -16,12 +18,14 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import selectinload  # noqa: F401  (kept for parity with original)
 
 from src.engine.components.analyzer import Analyzer
+from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import ExtractorRegistry, registry
 from src.engine.components.store.models import Chunk, Document, DocumentChange
 from src.engine.components.store.neo4j import Neo4jClient
 from src.engine.components.store.postgres import async_session_factory, init_db
 from src.engine.config import EngineConfig
 from src.engine.graphrag.pipeline import Pipeline, VersionParent
+from src.engine.graphrag._version_match import find_version_candidate
 from src.engine.interface import (
     Capabilities,
     DocumentRef,
@@ -35,6 +39,8 @@ from src.engine.interface import (
 )
 
 UPLOAD_DIR = Path("uploads")
+
+logger = logging.getLogger(__name__)
 
 
 def _remove_upload_directory(
@@ -94,6 +100,41 @@ class GraphRAGBackend:
                     .limit(1)
                 )
             ).scalar_one_or_none()
+
+            # 改名识别兜底：标题不匹配时，用内容相似度在当前版中
+            # 找疑似同一文档的候选。exact_content=True（纯重命名）自动
+            # 挂链；仅相似则返回候选由调用方确认，不自动挂。
+            version_match = None
+            if parent is None:
+                tmp_dir = UPLOAD_DIR / str(uuid.uuid4())
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+                tmp_path = tmp_dir / source.name
+                tmp_path.write_bytes(data)
+                try:
+                    new_text = registry.extract(tmp_path)
+                except Exception:
+                    new_text = ""
+                    logger.exception("改名识别的文本提取失败，跳过相似度检测")
+                finally:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                if new_text:
+                    existing = (
+                        await session.execute(
+                            select(Document.id, Document.title, Document.raw_text).where(
+                                Document.is_current.is_(True),
+                                Document.status == "indexed",
+                            )
+                        )
+                    ).all()
+                    version_match = find_version_candidate(
+                        source.name,
+                        new_text,
+                        [(str(r.id), r.title, r.raw_text or "") for r in existing],
+                    )
+                    if version_match is not None and version_match.exact_content:
+                        parent = await session.get(
+                            Document, uuid.UUID(version_match.doc_id)
+                        )
 
             if parent is not None and parent.content_hash == content_hash:
                 # 内容与当前版本一致：不产生新版本，直接返回现有文档。
@@ -156,6 +197,10 @@ class GraphRAGBackend:
                 previous_version=previous_version,
             )
         )
+        if version_match is not None and parent is None:
+            # 疑似改名的新版本：入库为独立文档，附候选供确认
+            # （确认后可由调用方把它挂入候选的版本链）。
+            ref = dataclasses.replace(ref, version_match=version_match.to_dict())
         return ref
 
     async def reingest(self, doc_id: str) -> DocumentRef:
@@ -355,6 +400,81 @@ class GraphRAGBackend:
             }
 
     # ── 版本链查询（纵向迭代管理）─────────────────────────────────
+
+    async def propose_edit(self, doc_id: str, edit_request: str) -> dict[str, Any]:
+        """横向修改传播第一步：生成编辑提议（不落库）。
+
+        流程（OneEdit 式 propose-validate）：
+        1. 定位受影响 chunks（编辑请求与本文档 chunks 的向量相似度）
+        2. LLM 生成修改后的完整文本提议
+        3. 跨文档一致性检查：共享实体 / RELATED_TO 的关联文档
+        返回提议，由用户确认后经 edit_document 落库（新版本）。
+        """
+        uid = uuid.UUID(doc_id)
+        async with async_session_factory() as session:
+            doc = await session.get(Document, uid)
+            if not doc:
+                raise ValueError(f"文档不存在: {doc_id}")
+            title = doc.title
+            raw_text = doc.raw_text or ""
+
+        # 1. 受影响 chunks（编辑请求的向量近邻，只看本文档）
+        affected: list[dict[str, Any]] = []
+        try:
+            query_embedding = await embedder.embed_text(edit_request)
+            async with async_session_factory() as session:
+                stmt = (
+                    select(
+                        Chunk.chunk_index,
+                        Chunk.chunk_text,
+                        (
+                            1 - Chunk.embedding.cosine_distance(query_embedding)
+                        ).label("score"),
+                    )
+                    .where(Chunk.doc_id == uid, Chunk.embedding.is_not(None))
+                    .order_by(Chunk.embedding.cosine_distance(query_embedding))
+                    .limit(3)
+                )
+                rows = (await session.execute(stmt)).all()
+                affected = [
+                    {
+                        "chunk_index": r.chunk_index,
+                        "chunk_text": r.chunk_text[:300],
+                        "relevance": round(float(r.score), 3),
+                    }
+                    for r in rows
+                ]
+        except Exception:
+            logger.exception("受影响 chunk 定位失败，继续生成提议")
+            affected = []
+
+        # 2. LLM 编辑提议
+        proposal = await self._pipeline.analyzer.propose_edit(
+            raw_text, edit_request, title
+        )
+
+        # 3. 跨文档一致性检查
+        related_docs: list[dict[str, Any]] = []
+        try:
+            related_docs = await self._neo4j.find_related_docs_via_entities(
+                str(uid), limit=5
+            )
+        except Exception:
+            logger.exception("跨文档关联检查失败，继续返回提议")
+
+        return {
+            "doc_id": doc_id,
+            "title": title,
+            "edit_request": edit_request,
+            "affected_chunks": affected,
+            "related_documents": related_docs,
+            "proposed_text": proposal.proposed_text,
+            "notes": proposal.notes,
+            "next_step": (
+                "确认提议后调用 tkb_edit_document(doc_id, new_text) 落库，"
+                "将自动创建新版本并记录变更。"
+            ),
+        }
 
     async def list_versions(self, doc_id: str) -> list[dict[str, Any]]:
         """列出 doc 所在版本链的全部版本（按版本号升序）。"""

@@ -188,6 +188,11 @@ class McpEngineClient:
             "tkb_edit_document", {"doc_id": doc_id, "new_text": new_text}
         )
 
+    async def propose_edit(self, doc_id: str, edit_request: str) -> dict:
+        return await self._call(
+            "tkb_propose_edit", {"doc_id": doc_id, "edit_request": edit_request}
+        )
+
     async def get_graph(self, entity: str | None = None) -> dict:
         if entity is None:
             return await self._call("get_full_graph", {})

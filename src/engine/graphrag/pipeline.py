@@ -50,6 +50,11 @@ class Pipeline:
         self._analyzer = analyzer or Analyzer()
         self._index_hook = index_hook
 
+    @property
+    def analyzer(self) -> Analyzer:
+        """当前分析器（backend 的编辑提议等流程复用）。"""
+        return self._analyzer
+
     async def process_file(
         self,
         doc_id: UUID,

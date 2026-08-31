@@ -60,6 +60,9 @@ class HindsightKnowledgeBaseAdapter:
         self._enrich_ref(ref, None)
         return ref
 
+    async def propose_edit(self, doc_id: str, edit_request: str) -> dict:
+        return await self._knowledge_base.propose_edit(doc_id, edit_request)
+
     async def remove(self, doc_id: str) -> None:
         await self._knowledge_base.remove(doc_id)
 

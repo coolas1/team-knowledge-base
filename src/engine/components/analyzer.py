@@ -64,6 +64,14 @@ class ChangeAnalysisResult:
     changes: list[dict] = field(default_factory=list)
 
 
+@dataclass
+class EditProposalResult:
+    """编辑提议（propose-validate 范式的 propose 产物）。"""
+
+    proposed_text: str
+    notes: list[str] = field(default_factory=list)
+
+
 def _load_entity_schema(path: Path) -> dict:
     """加载 entity_schema.yaml。"""
     if path.exists():
@@ -315,6 +323,76 @@ class Analyzer:
             return ChangeAnalysisResult(summary=f"[未知 provider] {title}")
 
         return self._parse_changes_response(raw)
+
+    # ── 编辑提议（OneEdit 式 propose-validate 范式）─────────────────
+
+    async def propose_edit(
+        self, text: str, edit_request: str, title: str
+    ) -> EditProposalResult:
+        """根据用户修改要求生成编辑提议（不落库，等待确认）。"""
+        provider = settings.llm_provider
+        if provider == "todo":
+            return EditProposalResult(
+                proposed_text=text,
+                notes=["[待 LLM 生成] LLM 未配置，原文返回"],
+            )
+
+        prompt = self._build_edit_proposal_prompt(text, edit_request, title)
+
+        if provider == "ollama":
+            raw = await self._call_ollama(prompt)
+        elif provider in ("openai", "custom"):
+            raw = await self._call_openai_compatible(prompt)
+        else:
+            return EditProposalResult(
+                proposed_text=text, notes=[f"[未知 provider] {title}"]
+            )
+
+        return self._parse_edit_proposal_response(raw)
+
+    @staticmethod
+    def _build_edit_proposal_prompt(text: str, edit_request: str, title: str) -> str:
+        """构建编辑提议 prompt。"""
+        return f"""你是一个专业的文档编辑助手。请根据修改要求对文档生成编辑提议。
+
+**文档标题:** {title}
+
+**当前文档内容:**
+{text[:12000]}
+
+**用户修改要求:**
+{edit_request}
+
+**要求:**
+1. **new_text**: 修改后的完整文档内容。只做修改要求涉及的改动，
+   其他内容逐字保留；保持原有格式（标题层级、列表、空行）。
+2. **notes**: 简要说明做了哪些改动（2-4 条要点），以及是否发现
+   该修改可能影响文档其他部分或与文档内其他描述冲突。
+
+请严格返回 JSON 格式:
+```json
+{{
+  "new_text": "修改后的完整文档内容",
+  "notes": ["改动1", "改动2"]
+}}
+```"""
+
+    @staticmethod
+    def _parse_edit_proposal_response(raw: str) -> EditProposalResult:
+        """解析编辑提议响应。"""
+        data = _extract_json(raw)
+        if data is None:
+            return EditProposalResult(
+                proposed_text="",
+                notes=[f"[LLM 返回解析失败] {raw[:200]}"],
+            )
+        notes = data.get("notes", [])
+        if isinstance(notes, str):
+            notes = [notes]
+        return EditProposalResult(
+            proposed_text=str(data.get("new_text", "")),
+            notes=[str(n) for n in notes if n],
+        )
 
     @staticmethod
     def _build_changes_prompt(old_text: str, new_text: str, title: str) -> str:

@@ -372,6 +372,12 @@ class Neo4jClient:
                 MATCH (start {{name: $name}})
                 MATCH (start)-[*1..{hops}]-(neighbor)
                 WHERE neighbor <> start
+                  AND (NOT neighbor:Document OR neighbor:Document AND coalesce(neighbor.is_current, true) <> false)
+                  AND (NOT neighbor:Document OR neighbor.sources IS NULL OR EXISTS {{
+                    MATCH (ldn:Document)
+                    WHERE coalesce(ldn.is_current, true) <> false
+                      AND neighbor.sources CONTAINS ldn.doc_id
+                  }})
                 RETURN DISTINCT neighbor, labels(neighbor) AS labels
                 """,
                 name=name,
@@ -402,6 +408,11 @@ class Neo4jClient:
                 """
                 MATCH (n {name: $name})
                 WHERE NOT n:Document
+                  AND (n.sources IS NULL OR EXISTS {
+                    MATCH (ldn:Document)
+                    WHERE coalesce(ldn.is_current, true) <> false
+                      AND n.sources CONTAINS ldn.doc_id
+                  })
                 WITH n
                 ORDER BY coalesce(n.entity_type, ''), elementId(n)
                 WITH collect(n) AS matches
@@ -512,6 +523,11 @@ class Neo4jClient:
                 """
                 MATCH (e)
                 WHERE NOT e:Document AND e.sources IS NOT NULL
+                AND EXISTS {
+                    MATCH (ld:Document)
+                    WHERE coalesce(ld.is_current, true) <> false
+                      AND e.sources CONTAINS ld.doc_id
+                }
                 RETURN e.name AS name, e.description AS description,
                        e.sources AS sources, labels(e) AS labels
                 """
@@ -538,6 +554,21 @@ class Neo4jClient:
                 WHERE NOT a:Document AND NOT b:Document
                   AND type(r) <> 'RELATED_TO'
                   AND a.sources IS NOT NULL AND b.sources IS NOT NULL
+                  AND EXISTS {
+                    MATCH (lda:Document)
+                    WHERE coalesce(lda.is_current, true) <> false
+                      AND a.sources CONTAINS lda.doc_id
+                  }
+                  AND EXISTS {
+                    MATCH (ldb:Document)
+                    WHERE coalesce(ldb.is_current, true) <> false
+                      AND b.sources CONTAINS ldb.doc_id
+                  }
+                  AND (r.sources IS NULL OR EXISTS {
+                    MATCH (ldr:Document)
+                    WHERE coalesce(ldr.is_current, true) <> false
+                      AND r.sources CONTAINS ldr.doc_id
+                  })
                 RETURN a.name AS source, b.name AS target,
                        type(r) AS type, r.description AS description
                 """
@@ -580,6 +611,41 @@ class Neo4jClient:
                     "title": r["title"],
                     "relation_type": r.get("relation_type", ""),
                     "reason": r.get("reason", ""),
+                }
+                for r in records
+            ]
+
+    async def find_related_docs_via_entities(
+        self, doc_id: str, limit: int = 5
+    ) -> list[dict]:
+        """查找与本文档共享实体的其他文档（跨文档一致性检查用）。
+
+        sources 是 JSON 字符串，按子串匹配 doc_id（与现有清理逻辑同策略）。
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (e), (d:Document)
+                WHERE e.sources IS NOT NULL
+                  AND e.sources CONTAINS $doc_id
+                  AND d.doc_id <> $doc_id
+                  AND d.is_current <> false
+                  AND e.sources CONTAINS d.doc_id
+                RETURN d.doc_id AS doc_id,
+                       d.title AS title,
+                       count(DISTINCT e) AS shared_entities
+                ORDER BY shared_entities DESC
+                LIMIT $limit
+                """,
+                doc_id=doc_id,
+                limit=limit,
+            )
+            records = await result.data()
+            return [
+                {
+                    "doc_id": r["doc_id"],
+                    "title": r["title"],
+                    "shared_entities": r["shared_entities"],
                 }
                 for r in records
             ]

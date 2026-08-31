@@ -16,6 +16,13 @@ from src.engine.components.analyzer import Analyzer, ChangeAnalysisResult
 from src.engine.components.store.models import DocumentChange
 from src.engine.components.store.neo4j import Neo4jClient
 from src.engine.graphrag.pipeline import Pipeline, VersionParent
+from src.engine.graphrag._version_match import (
+    SIMILARITY_THRESHOLD,
+    combined_similarity,
+    content_similarity,
+    find_version_candidate,
+    _strip_version_markers,
+)
 
 # ── analyzer: 版本 diff 解析 ─────────────────────────────────────
 
@@ -96,6 +103,9 @@ async def test_analyze_changes_with_todo_provider_returns_placeholder(monkeypatc
 class Result:
     async def data(self):
         return []
+
+    async def single(self):
+        return None
 
 
 class Session:
@@ -403,3 +413,236 @@ def test_backend_implements_edit_document():
     from src.engine.graphrag.backend import GraphRAGBackend
 
     assert hasattr(GraphRAGBackend, "edit_document")
+
+
+# ── P2: 编辑提议（propose-edit）──────────────────────────────────
+
+
+def test_parse_edit_proposal_response_plain():
+    from src.engine.components.analyzer import EditProposalResult
+
+    raw = json.dumps(
+        {"new_text": "# 改后全文", "notes": ["改了标题", "无冲突"]},
+        ensure_ascii=False,
+    )
+    result = Analyzer._parse_edit_proposal_response(raw)
+
+    assert isinstance(result, EditProposalResult)
+    assert result.proposed_text == "# 改后全文"
+    assert result.notes == ["改了标题", "无冲突"]
+
+
+def test_parse_edit_proposal_normalizes_string_notes():
+    raw = '{"new_text": "t", "notes": "single note"}'
+    result = Analyzer._parse_edit_proposal_response(raw)
+
+    assert result.notes == ["single note"]
+
+
+def test_parse_edit_proposal_bad_json_returns_placeholder():
+    result = Analyzer._parse_edit_proposal_response("not json")
+
+    assert result.proposed_text == ""
+    assert result.notes[0].startswith("[LLM 返回解析失败]")
+
+
+def test_build_edit_proposal_prompt_contains_request_and_doc():
+    prompt = Analyzer._build_edit_proposal_prompt("文档内容", "把价格改为10元", "价目表")
+    assert "文档内容" in prompt
+    assert "把价格改为10元" in prompt
+    assert "价目表" in prompt
+
+
+@pytest.mark.asyncio
+async def test_propose_edit_with_todo_provider_returns_original(monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "llm_provider", "todo")
+    result = await Analyzer().propose_edit("原文", "改一下", "t")
+    assert result.proposed_text == "原文"
+
+
+# ── P2: 跨文档一致性检查 / 图谱存活过滤 ──────────────────────────
+
+
+async def test_find_related_docs_via_entities_filters_current():
+    client, session = _client()
+
+    await client.find_related_docs_via_entities("d1", limit=5)
+
+    query = session.queries[0]
+    assert "d.is_current <> false" in query
+    assert "shared_entities" in query
+    assert session.parameters[0] == {"doc_id": "d1", "limit": 5}
+
+
+async def test_get_full_graph_filters_stale_entities():
+    client, session = _client()
+
+    await client.get_full_graph()
+
+    node_query = session.queries[0]
+    assert "coalesce(ld.is_current, true) <> false" in node_query
+    link_query = session.queries[1]
+    # 两端实体 + 关系边都要求存活来源（lda/ldb/ldr 三个存在性子查询）
+    assert link_query.count("is_current, true) <> false") == 3
+
+
+async def test_query_neighbors_keeps_entities_without_sources():
+    client, session = _client()
+
+    await client.query_neighbors("e1", hops=2)
+
+    query = session.queries[0]
+    assert "neighbor.sources IS NULL" in query  # Hindsight 实体无 sources，保留
+
+
+async def test_get_entity_details_filters_stale_graphrag_entities():
+    client, session = _client()
+
+    await client.get_entity_details("Shared")
+
+    query = session.queries[0]
+    # 无 sources 的实体（Hindsight）保留；有 sources 的按存活过滤
+    assert "n.sources IS NULL OR EXISTS" in query
+
+
+def test_backend_implements_propose_edit():
+    from src.engine.graphrag.backend import GraphRAGBackend
+
+    assert hasattr(GraphRAGBackend, "propose_edit")
+
+
+@pytest.mark.asyncio
+async def test_mcp_propose_edit_delegates_to_kb():
+    from tests.conftest import FakeKnowledgeBase
+
+    from src.engine import mcp as mcp_mod
+
+    kb = FakeKnowledgeBase()
+    seen: list[tuple[str, str]] = []
+
+    async def propose_edit(doc_id, edit_request):
+        seen.append((doc_id, edit_request))
+        return {"doc_id": doc_id, "proposed_text": "new", "notes": []}
+
+    kb.propose_edit = propose_edit  # type: ignore[method-assign]
+    mcp_mod.set_kb(kb)
+    try:
+        res = await mcp_mod.tkb_propose_edit("d1", "把A改成B")
+        assert res["proposed_text"] == "new"
+        assert seen == [("d1", "把A改成B")]
+    finally:
+        mcp_mod._kb = None
+
+
+@pytest.mark.asyncio
+async def test_mcp_propose_edit_missing_doc_returns_error():
+    from tests.conftest import FakeKnowledgeBase
+
+    from src.engine import mcp as mcp_mod
+
+    kb = FakeKnowledgeBase()
+
+    async def propose_edit(doc_id, edit_request):
+        raise ValueError(f"文档不存在: {doc_id}")
+
+    kb.propose_edit = propose_edit  # type: ignore[method-assign]
+    mcp_mod.set_kb(kb)
+    try:
+        res = await mcp_mod.tkb_propose_edit("missing", "x")
+        assert "error" in res
+    finally:
+        mcp_mod._kb = None
+
+
+# ── 改名识别（rename detection）──────────────────────────────────
+
+
+def test_strip_version_markers_removes_common_suffixes():
+    assert _strip_version_markers("报告_v2.md") == _strip_version_markers("报告_final.md")
+    assert _strip_version_markers("规范v1.md") != _strip_version_markers("手册.md")
+
+
+def test_content_similarity_identical_text():
+    assert content_similarity("同一文档内容", "同一文档内容") == 1.0
+
+
+def test_content_similarity_disjoint_text():
+    assert content_similarity("甲乙丙丁", "子丑寅卯") == 0.0
+
+
+def test_combined_similarity_detects_revised_renamed_doc():
+    # 真实修订：只改数值，保留大部分文本
+    base = "# 配送规范\n\n- 基础费5元\n- 时段9-18点\n- 人工配送为主，覆盖A栋B栋C栋"
+    revised = "# 配送规范\n\n- 基础费8元\n- 时段9-18点\n- 人工配送为主，覆盖A栋B栋C栋"
+
+    sim = combined_similarity("规范v1.md", base, "规范v2.md", revised)
+    assert sim >= SIMILARITY_THRESHOLD, sim
+
+
+def test_combined_similarity_rejects_different_docs():
+    doc_a = "# 联邦学习调研\n\n联邦学习是分布式机器学习范式，数据不出本地"
+    doc_b = "# 园区配送服务\n\n配送范围覆盖A栋B栋，收费标准五元起"
+
+    sim = combined_similarity("调研.md", doc_a, "配送.md", doc_b)
+    assert sim < SIMILARITY_THRESHOLD, sim
+
+
+def test_find_version_candidate_exact_content_rename():
+    base = "完全相同的内容主体"
+    candidate = find_version_candidate(
+        "新名字.md", base, [("d1", "旧名字.md", base)]
+    )
+    assert candidate is not None
+    assert candidate.exact_content is True
+    assert candidate.similarity == 1.0
+    assert candidate.doc_id == "d1"
+
+
+def test_find_version_candidate_similar_content_flagged():
+    # 真实修订形态：多样文本 + 数值修改 + 少量新增
+    base = (
+        "# 园区配送服务规范\n\n"
+        "配送范围覆盖园区A栋B栋C栋。配送时段为工作日上午九点至下午六点。\n"
+        "基础配送费五元，加急费三元。人工配送为主要方式。\n"
+        "用户可通过小程序下单，支持货到付款与月结两种结算方式。\n"
+        "异常件由客服专线统一处理，响应时效为一个工作日。"
+    )
+    revised = (
+        "# 园区配送服务规范\n\n"
+        "配送范围覆盖园区A栋B栋C栋。配送时段为工作日上午九点至下午六点。\n"
+        "基础配送费八元，加急费五元。人工配送为主要方式。\n"
+        "用户可通过小程序下单，支持货到付款与月结两种结算方式。\n"
+        "异常件由客服专线统一处理，响应时效为一个工作日。"
+    )
+
+    candidate = find_version_candidate(
+        "规范_新版.md", revised, [("d1", "规范.md", base)]
+    )
+    assert candidate is not None
+    assert candidate.exact_content is False
+    assert candidate.similarity >= SIMILARITY_THRESHOLD
+
+
+def test_find_version_candidate_no_match_returns_none():
+    assert find_version_candidate("a.md", "内容甲", [("d1", "b.md", "完全不同的内容乙丙丁")]) is None
+
+
+def test_find_version_candidate_picks_highest_similarity():
+    # 近邻：小修订的真实文本；远邻：无关文档
+    base = (
+        "# 财务报销制度\n\n报销单需附发票原件，邮寄至财务部统一处理。"
+        "差旅住宿标准为每晚三百元，超出部分自理。"
+    )
+    near = (
+        "# 财务报销制度\n\n报销单需附发票原件，邮寄至财务部统一处理。"
+        "差旅住宿标准为每晚四百元，超出部分自理。"
+    )
+    far = "# 前端开发规范\n\n组件命名使用PascalCase，状态用hooks管理。"
+
+    candidate = find_version_candidate(
+        "报销制度.md", near, [("d1", "开发.md", far), ("d2", "报销.md", base)]
+    )
+    assert candidate is not None
+    assert candidate.doc_id == "d2"
