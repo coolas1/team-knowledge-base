@@ -298,6 +298,101 @@ class GraphRAGBackend:
 
     # ── recall ───────────────────────────────────────────────────
 
+    async def confirm_version_match(
+        self, doc_id: str, parent_doc_id: str
+    ) -> dict[str, Any]:
+        """把改名识别的候选挂入版本链（用户确认动作）。
+
+        doc 是新上传的独立文档，parent_doc_id 是 ingest 时返回的
+        version_match 候选。挂链后：doc 成为该组最新版，组内原有
+        当前版退位，并补记 LLM diff + 版本图谱投影。
+        """
+        uid = uuid.UUID(doc_id)
+        pid = uuid.UUID(parent_doc_id)
+        async with async_session_factory() as session:
+            doc = await session.get(Document, uid)
+            parent = await session.get(Document, pid)
+            if doc is None or parent is None:
+                raise ValueError(f"文档不存在: {doc_id if doc is None else parent_doc_id}")
+            if doc.version_group == parent.version_group:
+                return {
+                    "doc_id": doc_id,
+                    "parent_doc_id": parent_doc_id,
+                    "already_linked": True,
+                }
+            if doc.is_current is False:
+                raise ValueError(f"文档 {doc_id} 自身不是当前版，不能挂为父文档的新版本")
+
+            group = parent.version_group
+            next_number = (
+                await session.execute(
+                    select(func.max(Document.version_number)).where(
+                        Document.version_group == group
+                    )
+                )
+            ).scalar() or 0
+            next_number += 1
+
+            # 组内当前版全部退位
+            await session.execute(
+                update(Document)
+                .where(Document.version_group == group, Document.is_current.is_(True))
+                .values(is_current=False)
+            )
+            # 新文档入链并成为当前版
+            await session.execute(
+                update(Document)
+                .where(Document.id == uid)
+                .values(
+                    version_group=group,
+                    version_number=next_number,
+                    version_of=pid,
+                    is_current=True,
+                )
+            )
+            await session.commit()
+
+            previous_version = VersionParent(
+                doc_id=str(pid),
+                raw_text=parent.raw_text or "",
+                from_version=parent.version_number,
+                to_version=next_number,
+            )
+            doc_title = doc.title
+            doc_text = doc.raw_text or ""
+
+        # 补记 LLM diff + 版本图谱投影（复用入库管线）
+        await self._pipeline.record_version_change(
+            doc_id=uid,
+            title=doc_title,
+            new_text=doc_text,
+            previous_version=previous_version,
+        )
+        # 修正两个 Document 节点的版本属性
+        await self._neo4j.upsert_document_node(
+            doc_id=str(pid),
+            title=parent.title,
+            file_type=parent.file_type,
+            overview=parent.overview or "",
+            version_number=parent.version_number,
+            is_current=False,
+        )
+        await self._neo4j.upsert_document_node(
+            doc_id=str(uid),
+            title=doc_title,
+            file_type=doc.file_type,
+            overview=doc.overview or "",
+            version_number=next_number,
+            is_current=True,
+        )
+
+        return {
+            "doc_id": doc_id,
+            "parent_doc_id": parent_doc_id,
+            "already_linked": False,
+            "version_number": next_number,
+        }
+
     async def recall(self, request: RecallRequest) -> RecallResult:
         from src.engine.graphrag._search import full_search
 

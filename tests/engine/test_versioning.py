@@ -646,3 +646,59 @@ def test_find_version_candidate_picks_highest_similarity():
     )
     assert candidate is not None
     assert candidate.doc_id == "d2"
+
+
+# ── 改名确认挂链（confirm_version_match）────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_mcp_confirm_version_match_delegates_to_kb():
+    from tests.conftest import FakeKnowledgeBase
+
+    from src.engine import mcp as mcp_mod
+
+    kb = FakeKnowledgeBase()
+    seen: list[tuple[str, str]] = []
+
+    async def confirm(doc_id, parent_doc_id):
+        seen.append((doc_id, parent_doc_id))
+        return {"doc_id": doc_id, "already_linked": False, "version_number": 2}
+
+    kb.confirm_version_match = confirm  # type: ignore[method-assign]
+    mcp_mod.set_kb(kb)
+    try:
+        res = await mcp_mod.tkb_confirm_version_match("new", "parent")
+        assert res["version_number"] == 2
+        assert seen == [("new", "parent")]
+    finally:
+        mcp_mod._kb = None
+
+
+@pytest.mark.asyncio
+async def test_mcp_confirm_version_match_error_passthrough():
+    from tests.conftest import FakeKnowledgeBase
+
+    from src.engine import mcp as mcp_mod
+
+    kb = FakeKnowledgeBase()
+
+    async def confirm(doc_id, parent_doc_id):
+        raise ValueError(f"文档不存在: {doc_id}")
+
+    kb.confirm_version_match = confirm  # type: ignore[method-assign]
+    mcp_mod.set_kb(kb)
+    try:
+        res = await mcp_mod.tkb_confirm_version_match("missing", "p")
+        assert "error" in res
+    finally:
+        mcp_mod._kb = None
+
+
+def test_backend_implements_confirm_version_match():
+    from src.engine.graphrag.backend import GraphRAGBackend
+
+    assert hasattr(GraphRAGBackend, "confirm_version_match")
+
+
+def test_pipeline_record_version_change_is_public():
+    assert hasattr(Pipeline, "record_version_change")

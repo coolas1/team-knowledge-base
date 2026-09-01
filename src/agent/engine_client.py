@@ -97,6 +97,12 @@ class InProcessEngineClient:
         ref = await self._kb.edit_document(doc_id, new_text)
         return _jsonable(ref)
 
+    async def propose_edit(self, doc_id: str, edit_request: str) -> dict:
+        return await self._kb.propose_edit(doc_id, edit_request)
+
+    async def confirm_version_match(self, doc_id: str, parent_doc_id: str) -> dict:
+        return await self._kb.confirm_version_match(doc_id, parent_doc_id)
+
     async def get_graph(self, entity: str | None = None) -> dict:
         return _jsonable(await self._kb.get_graph(entity))
 
@@ -191,6 +197,12 @@ class McpEngineClient:
     async def propose_edit(self, doc_id: str, edit_request: str) -> dict:
         return await self._call(
             "tkb_propose_edit", {"doc_id": doc_id, "edit_request": edit_request}
+        )
+
+    async def confirm_version_match(self, doc_id: str, parent_doc_id: str) -> dict:
+        return await self._call(
+            "tkb_confirm_version_match",
+            {"doc_id": doc_id, "parent_doc_id": parent_doc_id},
         )
 
     async def get_graph(self, entity: str | None = None) -> dict:

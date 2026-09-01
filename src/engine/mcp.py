@@ -267,6 +267,18 @@ async def tkb_propose_edit(
         return {"error": str(e)}
 
 
+async def tkb_confirm_version_match(
+    doc_id: str, parent_doc_id: str
+) -> dict[str, Any]:
+    """把改名识别的候选文档挂入父文档的版本链（用户确认动作）。
+    doc_id 是上传时返回 version_match 的新文档；parent_doc_id 是候选
+    中的疑似原文档。挂链后新文档成为该版本链的最新版。"""
+    try:
+        return await _get_kb().confirm_version_match(doc_id, parent_doc_id)
+    except ValueError as e:
+        return {"error": str(e)}
+
+
 async def tkb_list_versions(doc_id: str) -> dict[str, Any]:
     """列出文档所在版本链的全部版本（按版本号升序），
     含每个版本的变更摘要。"""
@@ -324,6 +336,7 @@ mcp.tool()(list_documents)
 mcp.tool()(remove_document)
 mcp.tool()(tkb_edit_document)
 mcp.tool()(tkb_propose_edit)
+mcp.tool()(tkb_confirm_version_match)
 mcp.tool()(tkb_list_versions)
 mcp.tool()(tkb_diff_versions)
 mcp.tool()(get_full_graph)

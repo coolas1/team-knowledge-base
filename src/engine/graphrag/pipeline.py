@@ -340,6 +340,37 @@ class Pipeline:
                 )
                 await session.commit()
 
+    async def record_version_change(
+        self,
+        doc_id: UUID,
+        title: str,
+        new_text: str,
+        previous_version: VersionParent,
+        session=None,
+    ) -> None:
+        """公开入口：为已入库的文档补记版本 diff 与图谱投影。
+
+        confirm_version_match（改名确认挂链）等外部流程使用；
+        session 缺省时自开一个。
+        """
+        if session is not None:
+            await self._process_version_change(
+                doc_id=doc_id,
+                title=title,
+                new_text=new_text,
+                previous_version=previous_version,
+                session=session,
+            )
+            return
+        async with async_session_factory() as own_session:
+            await self._process_version_change(
+                doc_id=doc_id,
+                title=title,
+                new_text=new_text,
+                previous_version=previous_version,
+                session=own_session,
+            )
+
     async def _process_version_change(
         self,
         doc_id: UUID,

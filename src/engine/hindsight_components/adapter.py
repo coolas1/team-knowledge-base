@@ -63,6 +63,13 @@ class HindsightKnowledgeBaseAdapter:
     async def propose_edit(self, doc_id: str, edit_request: str) -> dict:
         return await self._knowledge_base.propose_edit(doc_id, edit_request)
 
+    async def confirm_version_match(
+        self, doc_id: str, parent_doc_id: str
+    ) -> dict:
+        return await self._knowledge_base.confirm_version_match(
+            doc_id, parent_doc_id
+        )
+
     async def remove(self, doc_id: str) -> None:
         await self._knowledge_base.remove(doc_id)
 
