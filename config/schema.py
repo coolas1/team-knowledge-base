@@ -15,9 +15,17 @@ class MemoryCfg(BaseModel):
     retain_max_concurrent: int = Field(default=1, ge=1)
 
 
+class IngestCfg(BaseModel):
+    """Ingest parallelism knobs (1 restores fully serial behavior)."""
+
+    chunk_concurrency: int = Field(default=4, ge=1)
+    doc_concurrency: int = Field(default=2, ge=1)
+
+
 class EngineCfg(BaseModel):
     impl: str = "graphrag"
     config: str = "config/engine/graphrag"
+    ingest: IngestCfg = Field(default_factory=IngestCfg)
     memory: MemoryCfg = Field(default_factory=MemoryCfg)
 
 

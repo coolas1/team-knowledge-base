@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from config.schema import AppConfig
@@ -15,10 +15,17 @@ class MemorySettings:
 
 
 @dataclass
+class IngestSettings:
+    chunk_concurrency: int = 4
+    doc_concurrency: int = 2
+
+
+@dataclass
 class EngineConfig:
     impl: str
     config_dir: Path
     index_hook: DocumentIndexHook | None = None
+    ingest: IngestSettings = field(default_factory=IngestSettings)
     memory: MemorySettings | None = None
 
 
@@ -32,6 +39,10 @@ def engine_config_from_app(app: AppConfig) -> EngineConfig:
     return EngineConfig(
         impl=app.engine.impl,
         config_dir=Path(app.engine.config),
+        ingest=IngestSettings(
+            chunk_concurrency=app.engine.ingest.chunk_concurrency,
+            doc_concurrency=app.engine.ingest.doc_concurrency,
+        ),
         memory=memory,
     )
 

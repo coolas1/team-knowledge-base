@@ -89,3 +89,38 @@ def test_graph_worker_settings_must_be_positive():
 def test_conversation_memory_settings_reject_invalid_limits(field, value):
     with pytest.raises(ValueError):
         InfraSettings(_env_file=None, **{field: value})
+
+
+def test_appconfig_ingest_defaults():
+    cfg = AppConfig()
+    assert cfg.engine.ingest.chunk_concurrency == 4
+    assert cfg.engine.ingest.doc_concurrency == 2
+
+
+def test_ingest_concurrency_must_be_positive():
+    with pytest.raises(ValueError):
+        AppConfig.model_validate(
+            {"engine": {"ingest": {"chunk_concurrency": 0}}}
+        )
+    with pytest.raises(ValueError):
+        AppConfig.model_validate(
+            {"engine": {"ingest": {"doc_concurrency": 0}}}
+        )
+
+
+def test_engine_config_maps_ingest_concurrency():
+    from src.engine.config import engine_config_from_app
+
+    app = AppConfig.model_validate(
+        {"engine": {"ingest": {"chunk_concurrency": 8, "doc_concurrency": 3}}}
+    )
+    ecfg = engine_config_from_app(app)
+    assert ecfg.ingest.chunk_concurrency == 8
+    assert ecfg.ingest.doc_concurrency == 3
+
+
+def test_engine_config_ingest_defaults_when_absent():
+    from src.engine.config import EngineConfig, IngestSettings
+
+    ecfg = EngineConfig(impl="graphrag", config_dir=Path("config/engine/graphrag"))
+    assert ecfg.ingest == IngestSettings()

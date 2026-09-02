@@ -1,6 +1,9 @@
 engine:
   impl: graphrag
   config: config/engine/graphrag
+  ingest:
+    chunk_concurrency: 4
+    doc_concurrency: 2
   memory:
     enabled: true
     graph_worker: true
