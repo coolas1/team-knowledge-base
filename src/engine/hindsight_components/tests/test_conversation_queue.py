@@ -232,3 +232,21 @@ async def test_complete_cancel_and_status_counts_map_database_results() -> None:
     assert stats.failed == 1
     assert stats.processing == 0
     assert stats.total == 4
+
+
+async def test_get_status_returns_current_queue_state() -> None:
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def scalar(self, _statement):
+            return "processing"
+
+    status = await PostgresConversationMemoryQueue(lambda: Session()).get_status(
+        str(uuid.uuid4())
+    )
+
+    assert status == "processing"

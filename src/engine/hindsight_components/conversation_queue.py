@@ -246,6 +246,15 @@ class PostgresConversationMemoryQueue:
         counts.update({str(status): int(count) for status, count in rows})
         return ConversationMemoryQueueStats(**counts)
 
+    async def get_status(self, document_id: str) -> str | None:
+        uid = uuid.UUID(document_id)
+        async with self._session_factory() as session:
+            return await session.scalar(
+                select(ConversationMemorySource.status).where(
+                    ConversationMemorySource.document_id == uid
+                )
+            )
+
     async def _set_terminal_state(self, document_id: str, status: str) -> bool:
         uid = uuid.UUID(document_id)
         async with self._session_factory() as session:
