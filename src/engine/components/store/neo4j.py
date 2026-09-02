@@ -44,6 +44,60 @@ class GraphQueryResult:
     relations: list[dict] = field(default_factory=list)
 
 
+def _group_entity_items(
+    items: list[tuple[EntityData, EntitySource]],
+) -> list[tuple[EntityData, list[dict]]]:
+    """按 (name, entity_type) 聚合：description 取最长，sources 按出现顺序去重。"""
+    grouped: dict[tuple[str, str], list] = {}
+    for entity, source in items:
+        new_source = {
+            "doc_id": source.doc_id,
+            "chunk_index": source.chunk_index,
+            "doc_title": source.doc_title,
+        }
+        key = (entity.name, entity.entity_type)
+        if key not in grouped:
+            grouped[key] = [entity, [new_source]]
+            continue
+        existing_entity, sources = grouped[key]
+        if len(entity.description) > len(existing_entity.description):
+            grouped[key][0] = EntityData(
+                name=existing_entity.name,
+                entity_type=existing_entity.entity_type,
+                description=entity.description,
+            )
+        if new_source not in sources:
+            sources.append(new_source)
+    return [(entity, sources) for entity, sources in grouped.values()]
+
+
+def _group_relation_items(
+    items: list[tuple[RelationData, EntitySource]],
+) -> list[tuple[RelationData, list[dict]]]:
+    """按 (from_name, to_name, relation_type) 聚合：description 取最长，sources 去重。"""
+    grouped: dict[tuple[str, str, str], list] = {}
+    for relation, source in items:
+        new_source = {
+            "doc_id": source.doc_id,
+            "chunk_index": source.chunk_index,
+        }
+        key = (relation.from_name, relation.to_name, relation.relation_type)
+        if key not in grouped:
+            grouped[key] = [relation, [new_source]]
+            continue
+        existing_relation, sources = grouped[key]
+        if len(relation.description) > len(existing_relation.description):
+            grouped[key][0] = RelationData(
+                from_name=existing_relation.from_name,
+                to_name=existing_relation.to_name,
+                relation_type=existing_relation.relation_type,
+                description=relation.description,
+            )
+        if new_source not in sources:
+            sources.append(new_source)
+    return [(relation, sources) for relation, sources in grouped.values()]
+
+
 class Neo4jClient:
     """Neo4j 异步客户端，管理知识图谱的实体和关系。"""
 
@@ -247,6 +301,165 @@ class Neo4jClient:
                         from_name=relation.from_name,
                         to_name=relation.to_name,
                         sources=json.dumps(sources, ensure_ascii=False),
+                    )
+
+    # ── 批量写入 ─────────────────────────────────────────────
+
+    async def upsert_entities_batch(
+        self, items: list[tuple[EntityData, EntitySource]]
+    ) -> None:
+        """批量写入实体：每个 entity_type 一次 UNWIND MERGE + 至多一次 sources 回写。
+
+        语义与逐条 upsert_entity 一致（同 label 同名 MERGE、description 取较长、
+        sources 追加去重），但把每个实体 2-3 次往返压缩为每类型 2 次。
+        """
+        if not items:
+            return
+        by_type: dict[str, list[tuple[EntityData, list[dict]]]] = {}
+        for entity, sources in _group_entity_items(items):
+            by_type.setdefault(entity.entity_type, []).append((entity, sources))
+
+        for entity_type, group in by_type.items():
+            label = _quote_cypher_identifier(entity_type, "Entity")
+            rows = [
+                {
+                    "name": e.name,
+                    "entity_type": e.entity_type,
+                    "description": e.description,
+                    "sources": json.dumps(s, ensure_ascii=False),
+                }
+                for e, s in group
+            ]
+            async with self._driver.session() as session:
+                result = await session.run(
+                    f"""
+                    UNWIND $rows AS row
+                    MERGE (e:{label} {{name: row.name}})
+                    SET e.entity_type = row.entity_type,
+                        e.description = CASE
+                            WHEN size(row.description) > size(coalesce(e.description, ''))
+                            THEN row.description
+                            ELSE e.description
+                        END
+                    RETURN row.name AS name, e.sources AS sources
+                    """,
+                    rows=rows,
+                )
+                records = await result.data()
+
+            existing_by_name = {
+                r["name"]: (json.loads(r["sources"]) if r["sources"] else [])
+                for r in records
+            }
+            updates = []
+            for row in rows:
+                merged = list(existing_by_name.get(row["name"], []))
+                changed = False
+                for s in json.loads(row["sources"]):
+                    if not any(
+                        x.get("doc_id") == s["doc_id"]
+                        and x.get("chunk_index") == s["chunk_index"]
+                        for x in merged
+                    ):
+                        merged.append(s)
+                        changed = True
+                if changed:
+                    updates.append(
+                        {
+                            "name": row["name"],
+                            "sources": json.dumps(merged, ensure_ascii=False),
+                        }
+                    )
+            if updates:
+                async with self._driver.session() as session:
+                    await session.run(
+                        f"""
+                        UNWIND $updates AS u
+                        MATCH (e:{label} {{name: u.name}})
+                        SET e.sources = u.sources
+                        """,
+                        updates=updates,
+                    )
+
+    async def upsert_relations_batch(
+        self, items: list[tuple[RelationData, EntitySource]]
+    ) -> None:
+        """批量写入关系：每个 relation_type 一次 UNWIND MERGE + 至多一次 sources 回写。"""
+        if not items:
+            return
+        by_type: dict[str, list[tuple[RelationData, list[dict]]]] = {}
+        for relation, sources in _group_relation_items(items):
+            by_type.setdefault(relation.relation_type, []).append(
+                (relation, sources)
+            )
+
+        for relation_type, group in by_type.items():
+            rel_label = _quote_cypher_identifier(relation_type, "RELATED_TO")
+            rows = [
+                {
+                    "from_name": r.from_name,
+                    "to_name": r.to_name,
+                    "description": r.description,
+                    "sources": json.dumps(s, ensure_ascii=False),
+                }
+                for r, s in group
+            ]
+            async with self._driver.session() as session:
+                result = await session.run(
+                    f"""
+                    UNWIND $rows AS row
+                    MATCH (a {{name: row.from_name}})
+                    MATCH (b {{name: row.to_name}})
+                    MERGE (a)-[r:{rel_label}]->(b)
+                    SET r.description = CASE
+                            WHEN size(row.description) > size(coalesce(r.description, ''))
+                            THEN row.description
+                            ELSE r.description
+                        END
+                    RETURN row.from_name AS from_name, row.to_name AS to_name,
+                           r.sources AS sources
+                    """,
+                    rows=rows,
+                )
+                records = await result.data()
+
+            existing_by_pair = {
+                (r["from_name"], r["to_name"]): (
+                    json.loads(r["sources"]) if r["sources"] else []
+                )
+                for r in records
+            }
+            updates = []
+            for row in rows:
+                merged = list(
+                    existing_by_pair.get((row["from_name"], row["to_name"]), [])
+                )
+                changed = False
+                for s in json.loads(row["sources"]):
+                    if not any(
+                        x.get("doc_id") == s["doc_id"]
+                        and x.get("chunk_index") == s["chunk_index"]
+                        for x in merged
+                    ):
+                        merged.append(s)
+                        changed = True
+                if changed:
+                    updates.append(
+                        {
+                            "from_name": row["from_name"],
+                            "to_name": row["to_name"],
+                            "sources": json.dumps(merged, ensure_ascii=False),
+                        }
+                    )
+            if updates:
+                async with self._driver.session() as session:
+                    await session.run(
+                        f"""
+                        UNWIND $updates AS u
+                        MATCH (a {{name: u.from_name}})-[r:{rel_label}]->(b {{name: u.to_name}})
+                        SET r.sources = u.sources
+                        """,
+                        updates=updates,
                     )
 
     async def create_doc_relation(
