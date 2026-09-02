@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.engine.components.analyzer import Analyzer
+from src.engine.components.analyzer import Analyzer, ChunkAnalysisResult
 from src.engine.components.store.neo4j import Neo4jClient
 from src.engine.graphrag.pipeline import Pipeline
 
@@ -166,12 +166,12 @@ async def test_analyze_document_runs_chunks_parallel_and_bounded(monkeypatch):
     monkeypatch.setattr(pipeline_mod, "embedder", embed)
     pipe = pipeline_mod.Pipeline(object(), analyzer=analyzer, chunk_concurrency=3)
 
-    doc_analysis, chunk_results, embeddings = await pipe._analyze_document(
+    doc_analysis, chunks, chunk_results, embeddings = await pipe._analyze_document(
         _multi_chunk_text(), "t.md", uuid4()
     )
 
     assert doc_analysis.overview == "ov"
-    assert len(chunk_results) > 3
+    assert len(chunks) == len(chunk_results) > 3
     assert [ca.chunk_index for ca in chunk_results] == list(range(len(chunk_results)))
     assert 1 < analyzer.peak <= 3  # 并行但受信号量限流
     assert embed.calls == 1
@@ -201,3 +201,209 @@ def test_unwrap_exception_group_single():
     group = ExceptionGroup("eg", [inner])
     assert _unwrap_exception_group(group) is inner
     assert _unwrap_exception_group(inner) is inner
+
+
+class _RecordingNeo4j:
+    def __init__(self):
+        self.entity_items = None
+        self.relation_items = None
+        self.doc_nodes = []
+
+    async def upsert_entities_batch(self, items):
+        self.entity_items = items
+
+    async def upsert_relations_batch(self, items):
+        self.relation_items = items
+
+    async def upsert_document_node(self, **kwargs):
+        self.doc_nodes.append(kwargs)
+
+    async def delete_document_graph(self, doc_id):
+        self.deleted = doc_id
+
+
+async def test_write_chunk_graph_flattens_analyses_into_batches():
+    from src.engine.components.analyzer import Entity, Relation
+
+    neo = _RecordingNeo4j()
+    pipe = Pipeline(neo, analyzer=_RecordingAnalyzer())
+    analyses = [
+        ChunkAnalysisResult(
+            chunk_index=0,
+            entities=[Entity(name="Acme", type="Organization")],
+            relations=[Relation(from_name="Acme", to_name="Bob", type="EMPLOYS")],
+        ),
+        ChunkAnalysisResult(
+            chunk_index=1,
+            entities=[Entity(name="Acme", type="Organization")],
+            relations=[],
+        ),
+    ]
+
+    await pipe._write_chunk_graph("doc-1", "t.md", analyses)
+
+    assert [(e.name, s.chunk_index) for e, s in neo.entity_items] == [
+        ("Acme", 0),
+        ("Acme", 1),
+    ]
+    assert [(r.from_name, s.chunk_index) for r, s in neo.relation_items] == [
+        ("Acme", 0)
+    ]
+
+
+class _PipelineSession:
+    """记录语句的最小 Session 替身（见 test_backend.py 的同类模式）。"""
+
+    def __init__(self, docs):
+        self.docs = docs  # doc_id -> doc（get 按 id 查）
+        self.statements = []
+        self.added = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def get(self, _model, key):
+        return self.docs.get(key)
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+    async def commit(self):
+        return None
+
+    def add(self, obj):
+        self.added.append(obj)
+
+
+def _doc_statuses(session):
+    statuses = []
+    for stmt in session.statements:
+        try:
+            params = stmt.compile().params
+        except Exception:
+            continue
+        if "status" in params:
+            statuses.append(params["status"])
+    return statuses
+
+
+class _ThreadRecordingRegistry:
+    def __init__(self):
+        self.thread_ids = []
+
+    def extract(self, file_path):
+        import threading
+
+        self.thread_ids.append(threading.get_ident())
+        return "# T\n\n" + "内容文字" * 300
+
+
+async def test_process_file_indexes_document_with_fakes(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+
+    from src.engine.graphrag import pipeline as pipeline_mod
+
+    doc_id = uuid4()
+    doc = SimpleNamespace(
+        id=doc_id, content_hash=None, status="pending"
+    )
+    session = _PipelineSession({doc_id: doc})
+    monkeypatch.setattr(pipeline_mod, "async_session_factory", lambda: session)
+    registry_stub = _ThreadRecordingRegistry()
+    monkeypatch.setattr(pipeline_mod, "registry", registry_stub)
+    monkeypatch.setattr(pipeline_mod, "embedder", _FakeEmbedder())
+    neo = _RecordingNeo4j()
+    file_path = tmp_path / "t.md"
+    file_path.write_text("# T", encoding="utf-8")
+
+    pipe = Pipeline(neo, analyzer=_RecordingAnalyzer())
+    await pipe.process_file(doc_id, file_path, "t.md", "markdown")
+
+    import threading
+
+    assert registry_stub.thread_ids == [] or all(
+        t != threading.get_ident() for t in registry_stub.thread_ids
+    )  # 提取在线程池执行，不阻塞事件循环
+    statuses = _doc_statuses(session)
+    assert "processing" in statuses
+    assert statuses[-1] == "indexed"
+    assert len(neo.doc_nodes) == 1
+    assert neo.entity_items is not None  # 批量图谱写入被调用
+    assert session.added  # chunk 行已入队
+
+
+async def test_process_file_doc_semaphore_serializes(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from src.engine.graphrag import pipeline as pipeline_mod
+
+    gate = asyncio.Event()
+    analyzer = _RecordingAnalyzer()
+    analyzer_gate = gate
+
+    async def gated_analyze_chunk(text, title, idx):
+        analyzer.chunk_calls.append(idx)
+        await analyzer_gate.wait()
+        from src.engine.components.analyzer import ChunkAnalysisResult
+
+        return ChunkAnalysisResult(chunk_index=idx)
+
+    async def gated_overview(text, title):
+        await analyzer_gate.wait()
+        from src.engine.components.analyzer import AnalysisResult
+
+        return AnalysisResult(overview="ov")
+
+    analyzer.analyze_chunk = gated_analyze_chunk
+    analyzer.analyze_overview = gated_overview
+
+    docs = {
+        doc_id: SimpleNamespace(id=doc_id, content_hash=None, status="pending")
+        for doc_id in [uuid4(), uuid4()]
+    }
+    sessions = []
+
+    def make_session():
+        s = _PipelineSession(docs)
+        sessions.append(s)
+        return s
+
+    monkeypatch.setattr(pipeline_mod, "async_session_factory", make_session)
+    registry_stub = _ThreadRecordingRegistry()
+    monkeypatch.setattr(pipeline_mod, "registry", registry_stub)
+    monkeypatch.setattr(pipeline_mod, "embedder", _FakeEmbedder())
+    neo = _RecordingNeo4j()
+    paths = []
+    for i in range(2):
+        p = tmp_path / f"t{i}.md"
+        p.write_text("# T", encoding="utf-8")
+        paths.append(p)
+
+    pipe = Pipeline(neo, analyzer=analyzer, doc_concurrency=1)
+    doc_ids = list(docs)
+    t1 = asyncio.create_task(
+        pipe.process_file(doc_ids[0], paths[0], "t0.md", "markdown")
+    )
+    await asyncio.sleep(0.1)  # doc0 进入被 gate 卡住的分析
+    assert len(analyzer.chunk_calls) >= 1
+
+    t2 = asyncio.create_task(
+        pipe.process_file(doc_ids[1], paths[1], "t1.md", "markdown")
+    )
+    await asyncio.sleep(0.1)
+    assert len(registry_stub.thread_ids) == 1  # doc1 的提取被 doc 信号量挡住
+
+    gate.set()
+    await asyncio.gather(t1, t2)
+    assert len(registry_stub.thread_ids) == 2
+    all_statuses = [st for s in sessions for st in _doc_statuses(s)]
+    assert all_statuses.count("indexed") == 2  # 两篇文档均完成
+    assert "failed" not in all_statuses
