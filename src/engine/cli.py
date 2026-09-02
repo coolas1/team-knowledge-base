@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,40 @@ async def _run(kb: KnowledgeBase, args: argparse.Namespace) -> int:
             )
         )
         _print(ref)
+    elif args.command == "ingest-batch":
+        from src.engine.interface import IngestSource
+
+        sources = []
+        for path_str in args.files:
+            path = Path(path_str)
+            if not path.is_file():
+                print(f"文件不存在: {path}", file=sys.stderr)
+                return 1
+            sources.append(IngestSource(name=path.name, data=path.read_bytes()))
+        refs = await kb.ingest_batch(sources)
+        # 入库是后台任务；轮询直到终态（indexed/failed）或超时
+        pending = {
+            ref.id for ref in refs if ref.status not in ("indexed", "failed")
+        }
+        deadline = time.monotonic() + args.timeout
+        while pending and time.monotonic() < deadline:
+            await asyncio.sleep(0.5)
+            for doc_id in list(pending):
+                doc = await kb.get_document(doc_id)
+                if doc and doc.get("status") in ("indexed", "failed"):
+                    pending.discard(doc_id)
+        final = []
+        for ref in refs:
+            doc = await kb.get_document(ref.id)
+            final.append(
+                {
+                    "id": ref.id,
+                    "title": ref.title,
+                    "status": (doc or {}).get("status", ref.status),
+                    "error_msg": (doc or {}).get("error_msg", ref.error_msg),
+                }
+            )
+        _print(final)
     elif args.command == "recall":
         from src.engine.interface import RecallRequest
 
@@ -71,6 +106,9 @@ def _build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ingest")
     s.add_argument("--name", required=True)
     s.add_argument("--data", required=True)
+    s = sub.add_parser("ingest-batch")
+    s.add_argument("--files", nargs="+", required=True)
+    s.add_argument("--timeout", type=float, default=600.0)
     s = sub.add_parser("recall")
     s.add_argument("--query", required=True)
     s.add_argument("--top-k", type=int, default=20)
