@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { api } from '../client'
+import { ApiError, api } from '../client'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
@@ -29,6 +29,90 @@ describe('api client', () => {
     const [, init] = mockFetch.mock.calls[0]
     expect(init?.method).toBe('POST')
     expect(init?.body).toBe(JSON.stringify({ query: 'acme', top_k: 7 }))
+  })
+
+  it('edits document content with PUT', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: 'doc-1', status: 'pending' }),
+    })
+
+    await api.editContent('doc-1', '# Updated')
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/documents/doc-1/content', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '# Updated' }),
+    })
+  })
+
+  it('preserves structured upload error guidance', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      json: async () => ({
+        detail: {
+          code: 'upload_service_unavailable',
+          message: '上传服务暂时不可用',
+          suggestion: '请稍后直接重试。',
+          retryable: true,
+        },
+      }),
+    })
+
+    const error = await api.uploadFile(new File(['content'], 'retry.md')).catch((caught) => caught)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error).toMatchObject({
+      message: '上传服务暂时不可用',
+      status: 503,
+      code: 'upload_service_unavailable',
+      suggestion: '请稍后直接重试。',
+      retryable: true,
+    })
+  })
+
+  it('marks upload network failures as retryable', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    const error = await api.uploadFile(new File(['content'], 'retry.md')).catch((caught) => caught)
+
+    expect(error).toMatchObject({
+      message: '无法连接上传服务',
+      code: 'network_error',
+      retryable: true,
+    })
+  })
+
+  it('adds file-size guidance to an unstructured 413 response', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 413,
+      statusText: 'Payload Too Large',
+      json: async () => {
+        throw new Error('not json')
+      },
+    })
+
+    const error = await api.uploadFile(new File(['content'], 'large.pdf')).catch((caught) => caught)
+
+    expect(error).toMatchObject({
+      status: 413,
+      suggestion: '请选择更小的文件，或压缩文件后重新上传。',
+      retryable: false,
+    })
+  })
+
+  it('retries document processing', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: 'doc-1', status: 'pending' }),
+    })
+
+    await api.retryDocument('doc-1')
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/documents/doc-1/retry', { method: 'POST' })
   })
 
   it('throws on non-ok response', async () => {
@@ -125,5 +209,19 @@ describe('api client', () => {
     await api.cancelAgentSession('s1')
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agent/sessions/s1/cancel', { method: 'POST' })
+  })
+
+  it('forgets agent session memory through the explicit memory endpoint', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ sessionId: 's1', cancelledJobs: 1, deletedDocuments: 2 }),
+    })
+
+    await api.forgetAgentSessionMemory('session/1')
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/agent/sessions/session%2F1/memory',
+      { method: 'DELETE' },
+    )
   })
 })

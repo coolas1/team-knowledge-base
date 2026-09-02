@@ -14,7 +14,11 @@ from src.agent.engine_client import InProcessEngineClient, McpEngineClient
 from src.agent.interface import AgentPlugin, EngineClient, LlmClient
 from src.engine.components.store.postgres import init_db
 from src.engine.config import EngineConfig, build_engine
-from src.engine.mcp import set_kb, set_query_service
+from src.engine.mcp import (
+    set_conversation_memory_service,
+    set_kb,
+    set_query_service,
+)
 from config.schema import AppConfig, load_config
 from config.settings import settings
 
@@ -23,6 +27,7 @@ _plugin: AgentPlugin | None = None
 _llm: LlmClient | None = None
 _app_config: AppConfig | None = None
 _graph_worker_runtime = None
+_conversation_worker_runtime = None
 
 
 def app_config() -> AppConfig:
@@ -34,9 +39,11 @@ def app_config() -> AppConfig:
 
 async def startup() -> None:
     global _engine_client, _plugin, _graph_worker_runtime
+    global _conversation_worker_runtime
     cfg = app_config()
     if cfg.webapp.engine_access == "mcp":
         set_query_service(None)
+        set_conversation_memory_service(None)
         _engine_client = McpEngineClient("http://localhost:8000/mcp")
     else:
         await init_db()
@@ -64,6 +71,20 @@ async def startup() -> None:
             kb = build_knowledge_base_adapter(kb)
         set_kb(kb)
         set_query_service(query_service)
+        if (
+            cfg.hindsight.enabled
+            and settings.hindsight_conversation_memory_enabled
+        ):
+            from src.engine.hindsight_components.conversation_service import (
+                build_conversation_memory_service,
+            )
+
+            conversation_memory_service = build_conversation_memory_service(
+                max_recall_results=settings.hindsight_conversation_recall_limit
+            )
+            set_conversation_memory_service(conversation_memory_service)
+        else:
+            set_conversation_memory_service(None)
         _engine_client = InProcessEngineClient(kb, query_service=query_service)
     _plugin = build_plugin(cfg)
     global _llm
@@ -86,15 +107,43 @@ async def startup() -> None:
         )
         await runtime.start()
         _graph_worker_runtime = runtime
+    if (
+        cfg.webapp.engine_access == "inprocess"
+        and cfg.hindsight.enabled
+        and settings.hindsight_conversation_memory_enabled
+    ):
+        from src.engine.hindsight_components.conversation_worker import (
+            build_conversation_worker_runtime,
+        )
+
+        runtime = build_conversation_worker_runtime(
+            poll_seconds=settings.hindsight_conversation_worker_poll_seconds,
+            max_concurrent=settings.hindsight_conversation_worker_max_concurrent,
+            lease_seconds=settings.hindsight_conversation_worker_lease_seconds,
+            max_attempts=settings.hindsight_conversation_worker_max_attempts,
+            retry_delay_seconds=settings.hindsight_conversation_worker_retry_seconds,
+            max_retry_delay_seconds=(
+                settings.hindsight_conversation_worker_max_retry_seconds
+            ),
+            retention_context=settings.hindsight_conversation_retention_context,
+        )
+        await runtime.start()
+        _conversation_worker_runtime = runtime
 
 
 async def shutdown() -> None:
-    global _graph_worker_runtime
+    global _graph_worker_runtime, _conversation_worker_runtime
     try:
-        if _graph_worker_runtime is not None:
-            await _graph_worker_runtime.stop()
+        try:
+            if _conversation_worker_runtime is not None:
+                await _conversation_worker_runtime.stop()
+        finally:
+            _conversation_worker_runtime = None
+            if _graph_worker_runtime is not None:
+                await _graph_worker_runtime.stop()
     finally:
         _graph_worker_runtime = None
+        set_conversation_memory_service(None)
         set_query_service(None)
 
 

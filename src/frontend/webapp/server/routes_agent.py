@@ -130,6 +130,12 @@ async def delete_agent_session(session_id: str):
     return await _proxy_json("DELETE", f"/v1/sessions/{session_id}")
 
 
+@router.delete("/sessions/{session_id}/memory")
+async def forget_agent_session_memory(session_id: str):
+    session_id = _checked_session_id(session_id)
+    return await _proxy_json("DELETE", f"/v1/sessions/{session_id}/memory")
+
+
 @router.post("/sessions/{session_id}/cancel")
 async def cancel_agent_session(session_id: str):
     session_id = _checked_session_id(session_id)

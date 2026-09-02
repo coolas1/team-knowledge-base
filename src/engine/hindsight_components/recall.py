@@ -26,7 +26,12 @@ class RecallEngine:
         self._options = options
 
     async def recall(
-        self, query: str, *, mode: str = "deep", top_k: int | None = None
+        self,
+        query: str,
+        *,
+        mode: str = "deep",
+        top_k: int | None = None,
+        source_type: str | None = None,
     ) -> RecallResult:
         if mode not in {"fast", "deep"}:
             raise ValueError(f"unsupported retrieval mode: {mode}")
@@ -64,13 +69,26 @@ class RecallEngine:
             arms = await asyncio.gather(
                 timed(
                     "semantic_search",
-                    self._repository.semantic_search(query_embedding, arm_limit),
+                    self._repository.semantic_search(
+                        query_embedding,
+                        arm_limit,
+                        source_type=source_type,
+                    ),
                 ),
-                timed("bm25_search", self._repository.keyword_search(query, arm_limit)),
+                timed(
+                    "bm25_search",
+                    self._repository.keyword_search(
+                        query,
+                        arm_limit,
+                        source_type=source_type,
+                    ),
+                ),
                 timed(
                     "graph_expansion",
                     self._repository.graph_search(
-                        [str(item) for item in analysis.get("entities", [])], arm_limit
+                        [str(item) for item in analysis.get("entities", [])],
+                        arm_limit,
+                        source_type=source_type,
                     ),
                 ),
                 timed(
@@ -79,6 +97,7 @@ class RecallEngine:
                         parse_datetime(analysis.get("start")),
                         parse_datetime(analysis.get("end")),
                         arm_limit,
+                        source_type=source_type,
                     ),
                 ),
             )
@@ -86,9 +105,20 @@ class RecallEngine:
             semantic, keyword = await asyncio.gather(
                 timed(
                     "semantic_search",
-                    self._repository.semantic_search(query_embedding, arm_limit),
+                    self._repository.semantic_search(
+                        query_embedding,
+                        arm_limit,
+                        source_type=source_type,
+                    ),
                 ),
-                timed("bm25_search", self._repository.keyword_search(query, arm_limit)),
+                timed(
+                    "bm25_search",
+                    self._repository.keyword_search(
+                        query,
+                        arm_limit,
+                        source_type=source_type,
+                    ),
+                ),
             )
             phase_ms["graph_expansion"] = 0.0
             phase_ms["temporal_search"] = 0.0
@@ -139,6 +169,7 @@ class RecallEngine:
             trace={
                 "query": query,
                 "mode": mode,
+                "source_type": source_type,
                 "analysis": analysis,
                 "arm_counts": dict(zip(names, map(len, arms), strict=True)),
                 "candidate_count": len(candidates),

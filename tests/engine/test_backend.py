@@ -1,14 +1,28 @@
 import asyncio
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
 from src.engine.config import EngineConfig
+from src.engine.graphrag import backend as backend_mod
 from src.engine.graphrag.backend import (
     GraphRAGBackend,
     _remove_upload_directory,
     build,
 )
+
+
+class _QueryResult:
+    def __init__(self, *, scalar_value=0, items=None):
+        self._scalar_value = scalar_value
+        self._items = items or []
+
+    def scalar(self):
+        return self._scalar_value
+
+    def scalars(self):
+        return SimpleNamespace(all=lambda: self._items)
 
 
 def test_build_returns_graphrag_backend():
@@ -47,6 +61,7 @@ def test_build_injects_optional_index_hook():
 def test_backend_implements_protocol_methods():
     for name in [
         "ingest",
+        "edit_content",
         "reingest",
         "remove",
         "recall",
@@ -56,6 +71,192 @@ def test_backend_implements_protocol_methods():
         "get_document",
     ]:
         assert hasattr(GraphRAGBackend, name), f"missing {name}"
+
+
+async def test_document_browse_filters_internal_conversation_sources(monkeypatch):
+    visible = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="visible.md",
+        file_type="markdown",
+        status="indexed",
+        overview="",
+        created_at=None,
+        updated_at=None,
+    )
+
+    class Session:
+        def __init__(self):
+            self.statements = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            if len(self.statements) == 1:
+                return _QueryResult(scalar_value=1)
+            return _QueryResult(items=[visible])
+
+    session = Session()
+    monkeypatch.setattr(backend_mod, "async_session_factory", lambda: session)
+    backend = GraphRAGBackend(SimpleNamespace(), SimpleNamespace())
+
+    result = await backend.list_documents()
+
+    statements = [str(statement).lower() for statement in session.statements]
+    assert all("documents.file_type not in" in statement for statement in statements)
+    assert result["total"] == 1
+    assert [item["id"] for item in result["items"]] == [str(visible.id)]
+
+
+async def test_internal_conversation_document_is_not_read_editable_or_removable(
+    monkeypatch,
+):
+    internal = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Conversation turn",
+        file_type="conversation",
+        raw_text="private transcript",
+        status="indexed",
+    )
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _model, _uid):
+            return internal
+
+    pipeline = SimpleNamespace(before_remove=lambda *_args: None)
+    neo4j = SimpleNamespace(delete_document_graph=lambda *_args: None)
+    monkeypatch.setattr(backend_mod, "async_session_factory", Session)
+    backend = GraphRAGBackend(neo4j, pipeline)
+
+    assert await backend.get_document(str(internal.id)) is None
+    with pytest.raises(ValueError, match="文档不存在"):
+        await backend.edit_content(str(internal.id), "replacement")
+    with pytest.raises(ValueError, match="文档不存在"):
+        await backend.reingest(str(internal.id))
+    await backend.remove(str(internal.id))
+
+
+async def test_edit_content_persists_text_and_schedules_reindex(monkeypatch):
+    document_id = uuid.uuid4()
+    document = SimpleNamespace(
+        id=document_id,
+        title="week.md",
+        file_type="markdown",
+        status="indexed",
+        overview="old overview",
+        error_msg="old error",
+    )
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _model, uid):
+            return document if uid == document_id else None
+
+        async def execute(self, _statement):
+            document.raw_text = "updated"
+            document.status = "pending"
+            document.error_msg = None
+
+        async def commit(self):
+            return None
+
+        async def refresh(self, _document):
+            return None
+
+    calls = []
+
+    class FakePipeline:
+        async def reindex_document(self, uid, content):
+            calls.append((uid, content))
+
+    monkeypatch.setattr(backend_mod, "async_session_factory", FakeSession)
+    backend = GraphRAGBackend(SimpleNamespace(), FakePipeline())
+
+    result = await backend.edit_content(str(document_id), "updated")
+    await asyncio.sleep(0)
+
+    assert result.status == "pending"
+    assert document.raw_text == "updated"
+    assert document.error_msg is None
+    assert calls == [(document_id, "updated")]
+
+
+@pytest.mark.parametrize("has_raw_text", [True, False])
+async def test_reingest_schedules_the_available_retry_path(
+    monkeypatch, tmp_path, has_raw_text
+):
+    document_id = uuid.uuid4()
+    source_path = tmp_path / "week.md"
+    source_path.write_text("source content", encoding="utf-8")
+    document = SimpleNamespace(
+        id=document_id,
+        title="week.md",
+        file_type="markdown",
+        raw_text="indexed content" if has_raw_text else "",
+        file_path=str(source_path),
+        status="failed",
+        overview="",
+        error_msg="processing failed",
+    )
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _model, uid):
+            return document if uid == document_id else None
+
+        async def execute(self, _statement):
+            document.status = "pending"
+            document.error_msg = None
+
+        async def commit(self):
+            return None
+
+        async def refresh(self, _document):
+            return None
+
+    calls = []
+
+    class FakePipeline:
+        async def reindex_document(self, uid, content):
+            calls.append(("reindex", uid, content))
+
+        async def process_file(self, uid, file_path, title, file_type):
+            calls.append(("extract", uid, file_path, title, file_type))
+
+    monkeypatch.setattr(backend_mod, "async_session_factory", FakeSession)
+    backend = GraphRAGBackend(SimpleNamespace(), FakePipeline())
+
+    result = await backend.reingest(str(document_id))
+    await asyncio.sleep(0)
+
+    assert result.status == "pending"
+    assert document.error_msg is None
+    if has_raw_text:
+        assert calls == [("reindex", document_id, "indexed content")]
+    else:
+        assert calls == [
+            ("extract", document_id, source_path, "week.md", "markdown")
+        ]
 
 
 def test_remove_upload_directory_only_deletes_uuid_scope(tmp_path):

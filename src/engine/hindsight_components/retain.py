@@ -13,6 +13,7 @@ from .types import (
     ExtractedFact,
     MemoryDraft,
     MemoryLinkDraft,
+    RetainInput,
     RetainPlan,
     RetainResult,
 )
@@ -30,38 +31,27 @@ class RetainEngine:
         self._providers = providers
         self._options = options
 
-    async def retain(
-        self,
-        *,
-        document_id: str,
-        title: str,
-        content: str,
-        file_type: str,
-        source_type: str = "upload",
-    ) -> RetainResult:
+    async def retain(self, retain_input: RetainInput) -> RetainResult:
         chunks = chunk_text(
-            content,
+            retain_input.content,
             chunk_size=self._options.chunk_tokens,
             overlap=self._options.chunk_overlap_tokens,
         )
         if not chunks:
             raise ValueError("cannot retain empty content")
 
-        facts_by_chunk = await self._extract_facts(title, chunks)
+        facts_by_chunk = await self._extract_facts(retain_input, chunks)
         facts = [fact for group in facts_by_chunk for fact in group]
         observations = await self._consolidate(facts)
         plan = await self._build_plan(
-            document_id=document_id,
-            title=title,
-            file_type=file_type,
-            source_type=source_type,
+            retain_input=retain_input,
             chunks=chunks,
             facts_by_chunk=facts_by_chunk,
             observations=observations,
         )
         await self._repository.replace_document(plan)
         return RetainResult(
-            document_id=document_id,
+            document_id=retain_input.document_id,
             chunks=len(chunks),
             facts=len(facts),
             observations=sum(
@@ -72,15 +62,20 @@ class RetainEngine:
         )
 
     async def _extract_facts(
-        self, title: str, chunks: list[Chunk]
+        self, retain_input: RetainInput, chunks: list[Chunk]
     ) -> list[list[ExtractedFact]]:
         results: list[list[ExtractedFact]] = []
         for chunk in chunks:
             try:
                 payload = await self._providers.json(
                     "You extract exhaustive atomic memories. Preserve exact names, numbers, units, dates, "
-                    "contradictions and cross-file references. Classify each as world or experience.",
-                    f"DOCUMENT: {title}\nCHUNK INDEX: {chunk.index}\nTEXT:\n{chunk.text}\n\n"
+                    "contradictions and cross-source references. Classify each as world or experience. "
+                    "For conversations, preserve speaker attribution and do not turn assistant questions "
+                    "or suggestions into user facts.",
+                    f"SOURCE TYPE: {retain_input.source_type}\n"
+                    f"TITLE: {retain_input.title}\n"
+                    f"CONTEXT: {retain_input.context or ''}\n"
+                    f"CHUNK INDEX: {chunk.index}\nTEXT:\n{chunk.text}\n\n"
                     'Return {"facts":[{"text":"self-contained fact","type":"world|experience",'
                     '"entities":["canonical names"],"occurred_start":"ISO or null",'
                     '"occurred_end":"ISO or null","where":"place or null",'
@@ -154,10 +149,7 @@ class RetainEngine:
     async def _build_plan(
         self,
         *,
-        document_id: str,
-        title: str,
-        file_type: str,
-        source_type: str,
+        retain_input: RetainInput,
         chunks: list[Chunk],
         facts_by_chunk: list[list[ExtractedFact]],
         observations: list[dict],
@@ -170,6 +162,26 @@ class RetainEngine:
         texts: list[str] = []
         specs: list[tuple[Chunk, int, ExtractedFact, bool, int | None]] = []
         flat_index = 0
+        context = (
+            retain_input.context.strip()
+            if retain_input.context and retain_input.context.strip()
+            else f"Knowledge-base document: {retain_input.title}"
+        )
+        tags = list(
+            dict.fromkeys(
+                (
+                    "team-knowledge-base",
+                    f"file-type:{retain_input.file_type}",
+                    *retain_input.tags,
+                )
+            )
+        )
+        metadata = {
+            **retain_input.metadata,
+            "title": retain_input.title,
+            "file_type": retain_input.file_type,
+            "source_type": retain_input.source_type,
+        }
 
         for chunk, chunk_facts in zip(chunks, facts_by_chunk, strict=True):
             specs.append((chunk, 0, ExtractedFact(text=chunk.text), True, None))
@@ -192,13 +204,13 @@ class RetainEngine:
             chunk, memory_index, fact, is_source_chunk, fact_index = spec
             memory = MemoryDraft(
                 id=str(uuid4()),
-                document_id=document_id,
+                document_id=retain_input.document_id,
                 chunk_index=chunk.index,
                 memory_index=memory_index,
                 memory_type=fact.fact_type,
                 text=fact.text,
                 source_text=chunk.text,
-                context=f"Knowledge-base document: {title}",
+                context=context,
                 embedding=embedding,
                 entities=list(fact.entities),
                 occurred_start=fact.occurred_start,
@@ -206,12 +218,8 @@ class RetainEngine:
                 confidence=fact.confidence,
                 is_source_chunk=is_source_chunk,
                 location=fact.location,
-                tags=["team-knowledge-base", f"file-type:{file_type}"],
-                metadata={
-                    "title": title,
-                    "file_type": file_type,
-                    "source_type": source_type,
-                },
+                tags=list(tags),
+                metadata=dict(metadata),
             )
             memories.append(memory)
             if fact_index is not None:
@@ -239,7 +247,7 @@ class RetainEngine:
         for _, memory in facts:
             neighbors = await self._repository.semantic_neighbors(
                 memory.embedding,
-                exclude_document_id=document_id,
+                exclude_document_id=retain_input.document_id,
                 limit=self._options.semantic_neighbor_limit,
             )
             links.extend(
@@ -293,19 +301,19 @@ class RetainEngine:
                 continue
             observation = MemoryDraft(
                 id=str(uuid4()),
-                document_id=document_id,
+                document_id=retain_input.document_id,
                 chunk_index=-1,
                 memory_index=index,
                 memory_type="observation",
                 text=str(raw["text"]),
                 source_text="\n".join(source.text for source in sources),
-                context=f"Consolidated observation from {title}",
+                context=f"Consolidated observation; {context}",
                 embedding=embedding,
                 entities=[str(item) for item in raw.get("entities", [])],
                 confidence=float(raw.get("confidence", 1.0)),
                 source_memory_ids=[source.id for source in sources],
-                tags=["team-knowledge-base"],
-                metadata={"title": title, "derived": True},
+                tags=list(tags),
+                metadata={**metadata, "derived": True},
             )
             memories.append(observation)
             links.extend(
@@ -320,10 +328,10 @@ class RetainEngine:
             }.values()
         )
         return RetainPlan(
-            document_id=document_id,
-            title=title,
-            file_type=file_type,
-            source_type=source_type,
+            document_id=retain_input.document_id,
+            title=retain_input.title,
+            file_type=retain_input.file_type,
+            source_type=retain_input.source_type,
             memories=memories,
             links=unique_links,
         )

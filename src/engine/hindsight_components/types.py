@@ -17,6 +17,57 @@ class DocumentMemoryState:
     updated_at: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationMemoryJob:
+    document_id: str
+    session_id: str
+    turn_id: str
+    title: str
+    content: str
+    attempts: int
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationMemoryQueueStats:
+    pending: int = 0
+    processing: int = 0
+    completed: int = 0
+    failed: int = 0
+    cancelled: int = 0
+
+    @property
+    def total(self) -> int:
+        return (
+            self.pending
+            + self.processing
+            + self.completed
+            + self.failed
+            + self.cancelled
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationRetentionBatchResult:
+    claimed: int = 0
+    completed: int = 0
+    retried: int = 0
+    failed: int = 0
+    cancelled: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RetainInput:
+    document_id: str
+    title: str
+    content: str
+    file_type: str
+    source_type: str = "upload"
+    context: str | None = None
+    tags: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass(slots=True)
 class ExtractedFact:
     text: str
@@ -87,6 +138,9 @@ class RecallCandidate:
     text: str
     source_text: str
     chunk_index: int
+    source_type: str = "upload"
+    session_id: str | None = None
+    turn_id: str | None = None
     memory_type: str = "world"
     context: str = ""
     occurred_start: str | None = None
@@ -109,6 +163,9 @@ class RecallCandidate:
             "type": self.memory_type,
             "document_id": self.document_id,
             "chunk_id": f"{self.document_id}_{self.chunk_index}",
+            "source_type": self.source_type,
+            "session_id": self.session_id,
+            "turn_id": self.turn_id,
             "context": self.context,
             "metadata": {**self.metadata, "title": self.title},
             "occurred_start": self.occurred_start,

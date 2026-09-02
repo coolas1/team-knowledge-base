@@ -87,6 +87,12 @@ class InProcessEngineClient:
         ref = await self._kb.ingest(IngestSource(name=name, data=data))
         return _jsonable(ref)
 
+    async def edit_content(self, doc_id: str, content: str) -> dict:
+        return _jsonable(await self._kb.edit_content(doc_id, content))
+
+    async def reingest(self, doc_id: str) -> dict:
+        return _jsonable(await self._kb.reingest(doc_id))
+
     async def get_document(self, doc_id: str) -> dict:
         out = await self._kb.get_document(doc_id)
         return out if out is not None else {"error": f"文档不存在: {doc_id}"}
@@ -165,6 +171,14 @@ class McpEngineClient:
         return await self._call(
             "upload_document", {"file_name": name, "content": data.decode("utf-8")}
         )
+
+    async def edit_content(self, doc_id: str, content: str) -> dict:
+        return await self._call(
+            "edit_document_content", {"doc_id": doc_id, "content": content}
+        )
+
+    async def reingest(self, doc_id: str) -> dict:
+        return await self._call("reingest_document", {"doc_id": doc_id})
 
     async def get_document(self, doc_id: str) -> dict:
         return await self._call("get_document", {"doc_id": doc_id})

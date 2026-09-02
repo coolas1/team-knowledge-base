@@ -49,7 +49,12 @@ async def test_adapter_maps_hindsight_sources_to_original_recall_contract():
                     title="week.md",
                     chunk_text="Implemented the search adapter.",
                     score=0.91,
-                    metadata={"scores": {"semantic": 0.73}},
+                    metadata={
+                        "scores": {"semantic": 0.73},
+                        "source_type": "conversation",
+                        "session_id": "session-1",
+                        "turn_id": "turn-1",
+                    },
                 ),
                 KnowledgeSource(
                     memory_id="memory-2",
@@ -77,6 +82,8 @@ async def test_adapter_maps_hindsight_sources_to_original_recall_contract():
     assert result.chunks[0].memory_id == "memory-1"
     assert result.chunks[0].reranker_score == 0.91
     assert result.chunks[0].vector_score == 0.73
+    assert result.chunks[0].metadata["source_type"] == "conversation"
+    assert result.chunks[0].metadata["session_id"] == "session-1"
     assert result.related_docs == [{"doc_id": "document-1", "title": "week.md"}]
     assert result.related_entities == [{"name": "TKB"}]
     assert result.mode_used == "fast"

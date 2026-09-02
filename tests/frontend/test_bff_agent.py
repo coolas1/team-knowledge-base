@@ -65,6 +65,22 @@ def test_agent_session_proxy(client, monkeypatch):
     assert response.json()["id"] == "session-1"
 
 
+def test_agent_session_memory_forget_proxy(client, monkeypatch):
+    def handler(request):
+        assert request.method == "DELETE"
+        assert request.url.path == "/v1/sessions/session-1/memory"
+        return httpx.Response(
+            200,
+            json={"sessionId": "session-1", "cancelledJobs": 1, "deletedDocuments": 2},
+        )
+
+    _mock_pi(monkeypatch, handler)
+    response = client.delete("/api/agent/sessions/session-1/memory")
+
+    assert response.status_code == 200
+    assert response.json()["deletedDocuments"] == 2
+
+
 def test_agent_message_proxy_streams_sse(client, monkeypatch):
     stream = (
         'event: tool.start\ndata: {"type":"tool.start","toolName":"tkb_list_documents"}\n\n'

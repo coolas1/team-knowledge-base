@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.engine.components.store.models import Document
 
 from .models import (
+    ConversationMemorySource,
     HindsightGraphOutbox,
     HindsightDocumentState,
     MemoryEntity,
@@ -500,7 +501,11 @@ class PostgresMemoryRepository:
         return [(str(memory_id), float(value)) for memory_id, value in rows]
 
     async def semantic_search(
-        self, embedding: list[float], limit: int
+        self,
+        embedding: list[float],
+        limit: int,
+        *,
+        source_type: str | None = None,
     ) -> list[RecallCandidate]:
         score = (1 - MemoryUnit.embedding.cosine_distance(embedding)).label("score")
         async with self._session_factory() as session:
@@ -511,6 +516,7 @@ class PostgresMemoryRepository:
                     MemoryUnit.state == "active",
                     MemoryUnit.embedding.is_not(None),
                     Document.status == "indexed",
+                    *self._recall_source_conditions(source_type),
                 )
                 .order_by(score.desc())
                 .limit(limit)
@@ -520,7 +526,9 @@ class PostgresMemoryRepository:
             for unit, document, value in rows
         ]
 
-    async def keyword_search(self, query: str, limit: int) -> list[RecallCandidate]:
+    async def keyword_search(
+        self, query: str, limit: int, *, source_type: str | None = None
+    ) -> list[RecallCandidate]:
         async with self._session_factory() as session:
             rows = list(
                 (
@@ -530,6 +538,7 @@ class PostgresMemoryRepository:
                         .where(
                             MemoryUnit.state == "active",
                             Document.status == "indexed",
+                            *self._recall_source_conditions(source_type),
                         )
                     )
                 ).all()
@@ -547,7 +556,11 @@ class PostgresMemoryRepository:
         return ranked[:limit]
 
     async def graph_search(
-        self, entities: list[str], limit: int
+        self,
+        entities: list[str],
+        limit: int,
+        *,
+        source_type: str | None = None,
     ) -> list[RecallCandidate]:
         normalized = [normalize_entity(item) for item in entities]
         normalized = [item for item in normalized if item]
@@ -566,6 +579,7 @@ class PostgresMemoryRepository:
                 .where(
                     MemoryUnit.state == "active",
                     Document.status == "indexed",
+                    *self._recall_source_conditions(source_type),
                     or_(
                         *[
                             MemoryEntity.normalized_name.contains(item)
@@ -609,6 +623,7 @@ class PostgresMemoryRepository:
                                 MemoryUnit.id.in_(expanded_scores),
                                 MemoryUnit.state == "active",
                                 Document.status == "indexed",
+                                *self._recall_source_conditions(source_type),
                             )
                         )
                     ).all()
@@ -633,6 +648,8 @@ class PostgresMemoryRepository:
         start: datetime | None,
         end: datetime | None,
         limit: int,
+        *,
+        source_type: str | None = None,
     ) -> list[RecallCandidate]:
         if start is None and end is None:
             return []
@@ -651,6 +668,7 @@ class PostgresMemoryRepository:
                     *conditions,
                     MemoryUnit.state == "active",
                     Document.status == "indexed",
+                    *self._recall_source_conditions(source_type),
                 )
                 .order_by(MemoryUnit.occurred_start.desc())
                 .limit(limit)
@@ -721,6 +739,7 @@ class PostgresMemoryRepository:
     def _candidate(
         unit: MemoryUnit, document: Document, **scores: float
     ) -> RecallCandidate:
+        metadata = dict(unit.metadata_json or {})
         return RecallCandidate(
             id=str(unit.id),
             document_id=str(unit.document_id),
@@ -728,17 +747,41 @@ class PostgresMemoryRepository:
             text=unit.text,
             source_text=unit.source_text,
             chunk_index=unit.chunk_index,
+            source_type=str(metadata.get("source_type") or "upload"),
+            session_id=(
+                str(metadata["session_id"]) if metadata.get("session_id") else None
+            ),
+            turn_id=str(metadata["turn_id"]) if metadata.get("turn_id") else None,
             memory_type=unit.memory_type,
             context=unit.context,
             occurred_start=(
                 unit.occurred_start.isoformat() if unit.occurred_start else None
             ),
             occurred_end=unit.occurred_end.isoformat() if unit.occurred_end else None,
-            metadata=dict(unit.metadata_json or {}),
+            metadata=metadata,
             source_memory_ids=[str(item) for item in unit.source_memory_ids],
             embedding=list(unit.embedding) if unit.embedding is not None else None,
             **scores,
         )
+
+    @staticmethod
+    def _recall_source_conditions(source_type: str | None) -> list[Any]:
+        completed_conversation = (
+            select(ConversationMemorySource.document_id)
+            .where(
+                ConversationMemorySource.document_id == Document.id,
+                ConversationMemorySource.status == "completed",
+            )
+            .exists()
+        )
+        conditions = [
+            or_(Document.file_type != "conversation", completed_conversation)
+        ]
+        if source_type is not None:
+            conditions.append(
+                MemoryUnit.metadata_json["source_type"].astext == source_type
+            )
+        return conditions
 
     @staticmethod
     def _bm25(query: str, documents: list[str]) -> list[float]:

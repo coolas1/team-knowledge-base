@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
 from src.engine.hindsight_components.utils import (
@@ -41,7 +42,12 @@ def test_candidate_mapping_preserves_provenance_and_scores() -> None:
         context="Knowledge-base document: week.md",
         occurred_start=None,
         occurred_end=None,
-        metadata_json={"file_type": "markdown"},
+        metadata_json={
+            "file_type": "conversation",
+            "source_type": "conversation",
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+        },
         source_memory_ids=[],
         embedding=[1.0, 0.0],
     )
@@ -55,6 +61,55 @@ def test_candidate_mapping_preserves_provenance_and_scores() -> None:
     assert candidate.title == "week.md"
     assert candidate.semantic_score == 0.9
     assert candidate.source_text == "source chunk"
+    assert candidate.source_type == "conversation"
+    assert candidate.session_id == "session-1"
+    assert candidate.turn_id == "turn-1"
+    assert candidate.as_evidence()["session_id"] == "session-1"
+
+
+async def test_all_retrieval_arms_filter_source_and_incomplete_conversations() -> None:
+    class EmptyResult:
+        def __iter__(self):
+            return iter(())
+
+        def all(self):
+            return []
+
+    class Session:
+        def __init__(self) -> None:
+            self.statements = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            return EmptyResult()
+
+    session = Session()
+    repository = PostgresMemoryRepository(lambda: session)
+
+    await repository.semantic_search([0.0] * 768, 5, source_type="conversation")
+    await repository.keyword_search("preference", 5, source_type="conversation")
+    await repository.graph_search(["Alice"], 5, source_type="conversation")
+    await repository.temporal_search(
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        None,
+        5,
+        source_type="conversation",
+    )
+
+    assert len(session.statements) == 4
+    compiled = [
+        statement.compile(dialect=postgresql.dialect())
+        for statement in session.statements
+    ]
+    assert all("conversation_memory_sources" in str(item) for item in compiled)
+    assert all("metadata_json" in str(item) for item in compiled)
+    assert all("conversation" in item.params.values() for item in compiled)
 
 
 def test_normalization_tokens_and_advisory_lock_are_stable() -> None:

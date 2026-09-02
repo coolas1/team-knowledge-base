@@ -82,8 +82,15 @@ class FakeKnowledgeBase:
 
     async def reingest(self, doc_id: str) -> DocumentRef:
         if doc_id not in self.docs:
-            raise KeyError(doc_id)
-        self.docs[doc_id].status = "indexed"
+            raise ValueError(f"文档不存在: {doc_id}")
+        self.docs[doc_id].status = "pending"
+        return self.docs[doc_id]
+
+    async def edit_content(self, doc_id: str, content: str) -> DocumentRef:
+        if doc_id not in self.docs:
+            raise ValueError(f"文档不存在: {doc_id}")
+        self.raw[doc_id] = content.encode()
+        self.docs[doc_id].status = "pending"
         return self.docs[doc_id]
 
     async def remove(self, doc_id: str) -> None:
@@ -107,7 +114,7 @@ class FakeKnowledgeBase:
         file_type: str | None = None,
         status: str | None = None,
     ) -> dict:
-        items = list(self.docs.values())
+        items = [doc for doc in self.docs.values() if doc.file_type != "conversation"]
         return {
             "total": len(items),
             "page": page,

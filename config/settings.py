@@ -48,6 +48,22 @@ class InfraSettings(BaseSettings):
     hindsight_recall_min_score: float = Field(default=0.4, ge=0.0, le=1.0)
     hindsight_rerank_semantic_margin: float = Field(default=0.25, ge=0.0)
 
+    # Automatic conversation memory remains separately gated from file-memory
+    # retention so deployments can upgrade the engine contract before enabling it.
+    hindsight_conversation_memory_enabled: bool = False
+    hindsight_conversation_recall_limit: int = Field(default=20, ge=1, le=100)
+    hindsight_conversation_worker_poll_seconds: float = Field(default=1.0, gt=0)
+    hindsight_conversation_worker_lease_seconds: int = Field(default=300, ge=1)
+    hindsight_conversation_worker_max_attempts: int = Field(default=10, ge=1)
+    hindsight_conversation_worker_max_concurrent: int = Field(default=1, ge=1)
+    hindsight_conversation_worker_retry_seconds: float = Field(default=1.0, gt=0)
+    hindsight_conversation_worker_max_retry_seconds: float = Field(
+        default=300.0, gt=0
+    )
+    hindsight_conversation_retention_context: str = Field(
+        default="Completed team conversation turn", min_length=1
+    )
+
     app_host: str = "0.0.0.0"
     app_port: int = 8000
 

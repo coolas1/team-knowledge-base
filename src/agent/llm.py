@@ -10,7 +10,6 @@ from __future__ import annotations
 import httpx
 
 from config.settings import settings
-from src.agent.interface import LlmClient
 
 
 class ConfiguredLlmClient:

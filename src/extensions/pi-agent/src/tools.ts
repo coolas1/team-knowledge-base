@@ -79,6 +79,20 @@ const UPLOAD_PARAMS = Type.Object({
 });
 
 const REMOVE_PARAMS = Type.Object({ doc_id: Type.String() });
+const GENERATE_DOCUMENT_PARAMS = Type.Object({
+  format: Type.Union([
+    Type.Literal("docx"),
+    Type.Literal("pdf"),
+    Type.Literal("pptx"),
+  ], { description: "Output format: Word, PDF, or PowerPoint" }),
+  title: Type.String({ minLength: 1, description: "Document title" }),
+  content: Type.String({
+    minLength: 1,
+    description:
+      "Markdown content. For pptx, separate slides with a line containing only --- and start each slide with a heading.",
+  }),
+  file_name: Type.Optional(Type.String({ description: "Optional output filename" })),
+});
 const EMPTY_PARAMS = Type.Object({});
 
 export interface BuildToolsOptions {
@@ -195,6 +209,26 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
           },
           signal,
           normal,
+        ),
+    }),
+    defineTool({
+      name: "tkb_generate_document",
+      label: "Generate Document",
+      description:
+        "Generate a downloadable Word (.docx), PDF, or PowerPoint (.pptx). PowerPoint output also includes editable Slidev Markdown. Use after drafting complete content.",
+      parameters: GENERATE_DOCUMENT_PARAMS,
+      execute: (_id, params, signal) =>
+        executeMcpTool(
+          client,
+          "generate_document",
+          {
+            format: params.format,
+            title: params.title,
+            content: params.content,
+            file_name: params.file_name ?? null,
+          },
+          signal,
+          deep,
         ),
     }),
     defineTool({

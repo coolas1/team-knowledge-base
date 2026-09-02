@@ -41,12 +41,17 @@ function fakeRuntime(): AgentRuntimeApi {
     listSessions: vi.fn(async () => [session]),
     getSession: vi.fn(async () => sessionDetail),
     streamMessage: vi.fn(async (_id, _message, emit) => {
-      await emit({ type: "message.start", sessionId: "s1" });
+      await emit({ type: "message.start", sessionId: "s1", name: "知识库文件数量" });
       await emit({ type: "assistant.delta", delta: "hello" });
       await emit({ type: "message.completed", sessionId: "s1", answer: "hello", toolCalls: 0 });
     }),
     cancel: vi.fn(async () => true),
     deleteSession: vi.fn(async () => true),
+    forgetSessionMemory: vi.fn(async () => ({
+      sessionId: "s1",
+      cancelledJobs: 1,
+      deletedDocuments: 2,
+    })),
     close: vi.fn(async () => undefined),
   };
 }
@@ -97,6 +102,7 @@ describe("Pi Agent HTTP service", () => {
     const body = await response.text();
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(body).toContain("event: assistant.delta");
+    expect(body).toContain('"name":"知识库文件数量"');
     expect(body).toContain('"delta":"hello"');
     expect(runtime.streamMessage).toHaveBeenCalledWith(
       "s1",
@@ -114,5 +120,20 @@ describe("Pi Agent HTTP service", () => {
     });
     expect(response.status).toBe(400);
     expect((await response.json()).error).toContain("non-empty");
+  });
+
+  it("forgets session memory through a separate delete route", async () => {
+    const runtime = fakeRuntime();
+    const { base } = await listen(runtime);
+    const response = await fetch(`${base}/v1/sessions/s1/memory`, { method: "DELETE" });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      sessionId: "s1",
+      cancelledJobs: 1,
+      deletedDocuments: 2,
+    });
+    expect(runtime.forgetSessionMemory).toHaveBeenCalledWith("s1");
+    expect(runtime.deleteSession).not.toHaveBeenCalled();
   });
 });

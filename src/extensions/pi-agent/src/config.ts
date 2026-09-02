@@ -7,6 +7,11 @@ export interface TkbAdapterConfig {
   enableLegacySearch: boolean;
   enableWriteTools: boolean;
   enableFullGraph: boolean;
+  conversationMemoryEnabled: boolean;
+  conversationMemoryRecallTimeoutMs: number;
+  conversationMemoryRecallLimit: number;
+  conversationMemoryContextBudgetChars: number;
+  conversationMemoryRetentionContext: string;
 }
 
 export type PiModelApi =
@@ -52,6 +57,25 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function requiredPositiveInteger(
+  value: string | undefined,
+  fallback: number,
+  field: string,
+  maximum?: number,
+): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (
+    !Number.isInteger(parsed) ||
+    parsed <= 0 ||
+    (maximum !== undefined && parsed > maximum)
+  ) {
+    const bound = maximum === undefined ? "greater than zero" : `between 1 and ${maximum}`;
+    throw new Error(`${field} must be ${bound}`);
+  }
+  return parsed;
+}
+
 function enabled(value: string | undefined, fallback = false): boolean {
   if (value === undefined) return fallback;
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
@@ -77,6 +101,26 @@ export function loadTkbAdapterConfig(
     enableLegacySearch: enabled(env.TKB_ENABLE_LEGACY_SEARCH),
     enableWriteTools: enabled(env.TKB_ENABLE_WRITE_TOOLS),
     enableFullGraph: enabled(env.TKB_ENABLE_FULL_GRAPH),
+    conversationMemoryEnabled: enabled(env.TKB_CONVERSATION_MEMORY_ENABLED),
+    conversationMemoryRecallTimeoutMs: requiredPositiveInteger(
+      env.TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS,
+      5_000,
+      "TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS",
+    ),
+    conversationMemoryRecallLimit: requiredPositiveInteger(
+      env.TKB_CONVERSATION_MEMORY_RECALL_LIMIT,
+      5,
+      "TKB_CONVERSATION_MEMORY_RECALL_LIMIT",
+      20,
+    ),
+    conversationMemoryContextBudgetChars: requiredPositiveInteger(
+      env.TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS,
+      6_000,
+      "TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS",
+    ),
+    conversationMemoryRetentionContext:
+      env.TKB_CONVERSATION_MEMORY_RETENTION_CONTEXT?.trim() ||
+      "Completed team conversation turn",
   };
 }
 
