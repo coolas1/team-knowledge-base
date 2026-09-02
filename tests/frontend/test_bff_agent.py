@@ -39,7 +39,7 @@ def test_agent_ask(client):
     res = client.post("/api/agent/ask", json={"query": "where is Acme?"})
     assert res.status_code == 200
     out = res.json()
-    assert out["answer"] == "ANSWER FROM LLM"
+    assert out["answer"] == "知识库中未找到与该问题相关的内容。"
     assert out["query"] == "where is Acme?"
 
 

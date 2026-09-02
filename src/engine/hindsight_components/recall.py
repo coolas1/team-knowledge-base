@@ -147,6 +147,7 @@ class RecallEngine:
             candidates.values(), key=lambda item: rrf[item.id], reverse=True
         )[: self._options.rerank_limit]
         await self._rerank(query, ordered, rrf, mode, phase_ms)
+        ordered, filtered_count = self._filter_by_relevance(ordered, mode)
         selected, token_count, selection_ms = self._select(ordered, limit)
         phase_ms["mmr_token_selection"] = selection_ms
         entities = await timed(
@@ -173,6 +174,7 @@ class RecallEngine:
                 "arm_counts": dict(zip(names, map(len, arms), strict=True)),
                 "candidate_count": len(candidates),
                 "selected_count": len(selected),
+                "filtered_count": filtered_count,
                 "token_count": token_count,
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                 "phase_ms": phase_ms,
@@ -233,10 +235,42 @@ class RecallEngine:
             )
         for item in ordered:
             item.reranker_score = scores.get(item.id)
-            item.final_score = (
-                item.reranker_score if item.reranker_score is not None else rrf[item.id]
-            )
+            if item.reranker_score is None:
+                item.final_score = rrf[item.id]
+            elif (item.keyword_score or 0.0) > 0:
+                # BM25 hit is a strong, precise signal; trust it without clamping.
+                item.final_score = item.reranker_score
+            else:
+                # Cap the LLM score with vector similarity so irrelevant chunks
+                # cannot be ranked high on a hallucinated reranker score.
+                item.final_score = min(
+                    item.reranker_score,
+                    (item.semantic_score or 0.0)
+                    + self._options.rerank_semantic_margin,
+                )
         ordered.sort(key=lambda item: item.final_score, reverse=True)
+
+    def _filter_by_relevance(
+        self, ordered: list[RecallCandidate], mode: str
+    ) -> tuple[list[RecallCandidate], int]:
+        """Drop candidates below the relevance thresholds.
+
+        Keyword hits always pass; otherwise a semantic-similarity gate applies
+        in every mode, and the rerank-score gate additionally applies in deep
+        mode when a reranker score is available.
+        """
+        kept: list[RecallCandidate] = []
+        for item in ordered:
+            if (item.keyword_score or 0.0) > 0:
+                kept.append(item)
+                continue
+            if mode == "deep" and item.reranker_score is not None:
+                if item.final_score < self._options.recall_min_score:
+                    continue
+            elif (item.semantic_score or 0.0) < self._options.recall_min_semantic:
+                continue
+            kept.append(item)
+        return kept, len(ordered) - len(kept)
 
     def _select(
         self, ordered: list[RecallCandidate], limit: int

@@ -41,6 +41,13 @@ class InfraSettings(BaseSettings):
     hindsight_graph_worker_lease_seconds: int = Field(default=300, ge=1)
     hindsight_graph_worker_max_attempts: int = Field(default=10, ge=1)
 
+    # Recall relevance gates: drop results below these thresholds so queries
+    # without knowledge-base coverage return "not found" instead of surfacing
+    # unrelated memories.
+    hindsight_recall_min_semantic: float = Field(default=0.45, ge=0.0, le=1.0)
+    hindsight_recall_min_score: float = Field(default=0.4, ge=0.0, le=1.0)
+    hindsight_rerank_semantic_margin: float = Field(default=0.25, ge=0.0)
+
     # Automatic conversation memory remains separately gated from file-memory
     # retention so deployments can upgrade the engine contract before enabling it.
     hindsight_conversation_memory_enabled: bool = False
