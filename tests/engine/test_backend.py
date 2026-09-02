@@ -6,6 +6,7 @@ import pytest
 
 from src.engine.config import EngineConfig
 from src.engine.graphrag import backend as backend_mod
+from src.engine.interface import DocumentRef, IngestSource
 from src.engine.graphrag.backend import (
     GraphRAGBackend,
     _remove_upload_directory,
@@ -387,3 +388,78 @@ async def test_ingest_recall_roundtrip(integration_host_config, monkeypatch):
         finally:
             await kb._neo4j.close()
             await engine.dispose()
+
+
+async def test_ingest_batch_schedules_pipeline_per_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(backend_mod, "UPLOAD_DIR", tmp_path / "uploads")
+    document_ids = iter([uuid.uuid4() for _ in range(2)])
+
+    class FakeSession:
+        def __init__(self):
+            self.doc = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def add(self, doc):
+            self.doc = doc
+
+        async def commit(self):
+            return None
+
+        async def refresh(self, _doc):
+            self.doc.id = next(document_ids)
+
+    calls = []
+
+    class FakePipeline:
+        async def process_file(self, doc_id, file_path, title, file_type):
+            calls.append((doc_id, file_path, title, file_type))
+
+    sessions = iter([FakeSession(), FakeSession()])
+    monkeypatch.setattr(backend_mod, "async_session_factory", lambda: next(sessions))
+    backend = GraphRAGBackend(SimpleNamespace(), FakePipeline())
+
+    refs = await backend.ingest_batch(
+        [
+            IngestSource(name="a.md", data=b"# A"),
+            IngestSource(name="b.md", data=b"# B"),
+        ]
+    )
+    await asyncio.sleep(0)
+
+    assert [r.title for r in refs] == ["a.md", "b.md"]
+    assert all(r.status == "pending" for r in refs)
+    assert len(calls) == 2
+    assert (tmp_path / "uploads").is_dir()
+
+
+async def test_ingest_batch_isolates_per_file_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(backend_mod, "UPLOAD_DIR", tmp_path / "uploads")
+    backend = GraphRAGBackend(SimpleNamespace(), SimpleNamespace())
+    ok_ref = DocumentRef(
+        id=str(uuid.uuid4()), title="ok.md", file_type="markdown", status="pending"
+    )
+
+    async def fake_ingest_one(source):
+        from src.engine.interface import IngestSource  # noqa: F401
+
+        if source.name == "bad.md":
+            raise RuntimeError("disk full")
+        return ok_ref, None
+
+    monkeypatch.setattr(backend, "_ingest_one", fake_ingest_one)
+
+    refs = await backend.ingest_batch(
+        [
+            IngestSource(name="bad.md", data=b"x"),
+            IngestSource(name="ok.md", data=b"y"),
+        ]
+    )
+
+    assert refs[0].status == "failed"
+    assert "disk full" in refs[0].error_msg
+    assert refs[1] is ok_ref

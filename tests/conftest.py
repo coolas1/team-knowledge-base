@@ -80,6 +80,9 @@ class FakeKnowledgeBase:
         self.raw[doc_id] = source.data
         return ref
 
+    async def ingest_batch(self, sources: list[IngestSource]) -> list[DocumentRef]:
+        return [await self.ingest(source) for source in sources]
+
     async def reingest(self, doc_id: str) -> DocumentRef:
         if doc_id not in self.docs:
             raise ValueError(f"文档不存在: {doc_id}")

@@ -6,6 +6,7 @@ owns its own DB sessions (async_session_factory); callers never pass a session.
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 import uuid
 from pathlib import Path
@@ -41,6 +42,8 @@ from src.engine.hindsight_components.enrich import MemoryStateEnricher
 from src.engine.hindsight_components.hook import build_retain_hook
 
 UPLOAD_DIR = Path("uploads")
+
+logger = logging.getLogger(__name__)
 
 
 def _remove_upload_directory(
@@ -103,6 +106,33 @@ class GraphRAGBackend:
     # ── ingest / reingest / remove ───────────────────────────────
 
     async def ingest(self, source: IngestSource) -> DocumentRef:
+        ref, _task = await self._ingest_one(source)
+        return await self._enrich(ref)
+
+    async def ingest_batch(self, sources: list[IngestSource]) -> list[DocumentRef]:
+        """批量入库：逐文件隔离失败，其余文件继续。
+
+        pipeline 任务并发执行，由 Pipeline 的 doc 信号量限流。
+        """
+        refs: list[DocumentRef] = []
+        for source in sources:
+            try:
+                ref, _task = await self._ingest_one(source)
+            except Exception as exc:  # 单文件失败不影响其余文件
+                logger.exception("批量入库文件 %s 失败", source.name)
+                ref = DocumentRef(
+                    id="",
+                    title=source.name,
+                    file_type=ExtractorRegistry.guess_file_type(Path(source.name)),
+                    status="failed",
+                    error_msg=str(exc),
+                )
+            refs.append(await self._enrich(ref))
+        return refs
+
+    async def _ingest_one(
+        self, source: IngestSource
+    ) -> tuple[DocumentRef, asyncio.Task]:
         data = source.data
         if source.path is not None and not data:
             data = source.path.read_bytes()
@@ -127,10 +157,10 @@ class GraphRAGBackend:
             await session.refresh(doc)
             ref = _to_ref(doc)
 
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._pipeline.process_file(doc_id, file_path, source.name, file_type)
         )
-        return await self._enrich(ref)
+        return ref, task
 
     async def edit_content(self, doc_id: str, content: str) -> DocumentRef:
         uid = uuid.UUID(doc_id)
