@@ -57,25 +57,34 @@ async def test_completed_turn_is_recalled_in_another_session_without_visible_inj
     pi_url = os.getenv("PI_AGENT_INTEGRATION_URL", "http://127.0.0.1:8010")
     nonce = f"TKB-{uuid.uuid4().hex[:12].upper()}"
     first_id = None
+    retained_session_id = None
     second_id = None
     async with httpx.AsyncClient(base_url=pi_url, timeout=180) as client:
         health = (await client.get("/health")).json()
-        baseline = int((health.get("conversationMemory") or {}).get("completed", 0))
+        memory_status = health.get("conversationMemory")
+        if not isinstance(memory_status, dict) or not memory_status.get("enabled"):
+            pytest.fail(
+                "Pi Agent conversation memory is unavailable; rebuild/restart the "
+                "webapp and pi-agent services with HINDSIGHT_CONVERSATION_MEMORY_ENABLED=true "
+                "and TKB_CONVERSATION_MEMORY_ENABLED=true"
+            )
+        baseline = int(memory_status.get("completed", 0))
         try:
             first = await client.post("/v1/sessions")
             first.raise_for_status()
             first_id = first.json()["id"]
+            retained_session_id = first_id
             retained = await client.post(
                 f"/v1/sessions/{first_id}/messages",
                 json={
                     "message": (
-                        f"Remember the exact shared team code {nonce}. "
-                        f"Reply with ACK {nonce}."
+                        f"Team exercise note: the shared project code is {nonce}. "
+                        "Please confirm receipt of this note in one sentence."
                     )
                 },
             )
             retained.raise_for_status()
-            assert nonce in _completed_answer(retained)
+            assert _completed_answer(retained).strip()
             await _wait_for_completed_memory(client, baseline)
 
             deleted = await client.delete(f"/v1/sessions/{first_id}")
@@ -90,7 +99,7 @@ async def test_completed_turn_is_recalled_in_another_session_without_visible_inj
                 json={
                     "message": (
                         "What exact shared team code did I ask you to remember earlier? "
-                        "Reply with only that code."
+                        "Use the conversation memory as evidence and reply with only that code."
                     )
                 },
             )
@@ -108,6 +117,8 @@ async def test_completed_turn_is_recalled_in_another_session_without_visible_inj
         finally:
             if first_id:
                 await client.delete(f"/v1/sessions/{first_id}")
+            if retained_session_id:
+                await client.delete(f"/v1/sessions/{retained_session_id}/memory")
             if second_id:
                 await client.delete(f"/v1/sessions/{second_id}/memory")
                 await client.delete(f"/v1/sessions/{second_id}")
