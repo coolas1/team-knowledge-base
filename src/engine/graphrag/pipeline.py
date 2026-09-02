@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from pathlib import Path
@@ -17,7 +18,11 @@ from src.engine.components.store.neo4j import (
     RelationData,
 )
 from src.engine.components.store.postgres import async_session_factory
-from src.engine.components.analyzer import Analyzer, ChunkAnalysisResult
+from src.engine.components.analyzer import (
+    Analyzer,
+    AnalysisResult,
+    ChunkAnalysisResult,
+)
 from src.engine.components.chunker import chunk_text
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
@@ -25,6 +30,13 @@ from src.engine.graphrag.progress import clear_progress, set_progress
 from src.engine.interface import DocumentIndexHook
 
 logger = logging.getLogger(__name__)
+
+
+def _unwrap_exception_group(exc: BaseException) -> BaseException:
+    """TaskGroup 会把单异常包成 ExceptionGroup，展开便于 error_msg 可读。"""
+    if isinstance(exc, ExceptionGroup) and len(exc.exceptions) == 1:
+        return exc.exceptions[0]
+    return exc
 
 
 class Pipeline:
@@ -35,10 +47,59 @@ class Pipeline:
         neo4j: Neo4jClient,
         analyzer: Analyzer | None = None,
         index_hook: DocumentIndexHook | None = None,
+        chunk_concurrency: int = 4,
+        doc_concurrency: int = 2,
     ) -> None:
         self._neo4j = neo4j
         self._analyzer = analyzer or Analyzer()
         self._index_hook = index_hook
+        self._chunk_sem = asyncio.Semaphore(max(1, chunk_concurrency))
+        self._doc_sem = asyncio.Semaphore(max(1, doc_concurrency))
+
+    async def _analyze_document(
+        self, raw_text: str, title: str, doc_id: UUID
+    ) -> tuple[AnalysisResult, list[ChunkAnalysisResult], list[list[float]]]:
+        """分块后并行执行：overview ∥ 逐 chunk 分析（信号量限流）∥ embedding。"""
+        chunks = await asyncio.to_thread(chunk_text, raw_text)
+        total = len(chunks)
+        results: list[ChunkAnalysisResult | None] = [None] * total
+        completed = 0
+        set_progress(str(doc_id), "analyzing_chunks", f"分析实体 0/{total}", 0, total)
+
+        async def analyze_one(index: int, text: str) -> None:
+            nonlocal completed
+            async with self._chunk_sem:
+                ca = await self._analyzer.analyze_chunk(text, title, index)
+            results[index] = ca
+            completed += 1
+            set_progress(
+                str(doc_id),
+                "analyzing_chunks",
+                f"分析实体 {completed}/{total}",
+                completed,
+                total,
+            )
+
+        async def _no_embeddings() -> list[list[float]]:
+            return []
+
+        async with asyncio.TaskGroup() as tg:
+            overview_task = tg.create_task(
+                self._analyzer.analyze_overview(raw_text, title)
+            )
+            embed_task = tg.create_task(
+                embedder.embed_batch([c.text for c in chunks])
+                if chunks
+                else _no_embeddings()
+            )
+            for i, chunk in enumerate(chunks):
+                tg.create_task(analyze_one(i, chunk.text))
+
+        return (
+            overview_task.result(),
+            [ca for ca in results if ca is not None],
+            embed_task.result(),
+        )
 
     async def process_file(
         self,
