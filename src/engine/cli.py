@@ -68,12 +68,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config-dir", default=None)
     sub = p.add_subparsers(dest="command", required=True)
 
-    s = sub.add_parser("ingest"); s.add_argument("--name", required=True); s.add_argument("--data", required=True)
-    s = sub.add_parser("recall"); s.add_argument("--query", required=True); s.add_argument("--top-k", type=int, default=20)
-    s = sub.add_parser("graph"); s.add_argument("--entity", default=None)
-    s = sub.add_parser("get"); s.add_argument("--doc-id", required=True)
-    s = sub.add_parser("list"); s.add_argument("--page", type=int, default=1); s.add_argument("--page-size", type=int, default=20)
-    s = sub.add_parser("remove"); s.add_argument("--doc-id", required=True)
+    s = sub.add_parser("ingest")
+    s.add_argument("--name", required=True)
+    s.add_argument("--data", required=True)
+    s = sub.add_parser("recall")
+    s.add_argument("--query", required=True)
+    s.add_argument("--top-k", type=int, default=20)
+    s = sub.add_parser("graph")
+    s.add_argument("--entity", default=None)
+    s = sub.add_parser("get")
+    s.add_argument("--doc-id", required=True)
+    s = sub.add_parser("list")
+    s.add_argument("--page", type=int, default=1)
+    s.add_argument("--page-size", type=int, default=20)
+    s = sub.add_parser("remove")
+    s.add_argument("--doc-id", required=True)
     return p
 
 
