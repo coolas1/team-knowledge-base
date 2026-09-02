@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from src.engine.components.store.models import Document
@@ -228,6 +228,29 @@ class PostgresConversationMemoryQueue:
                     ConversationMemorySource.status.in_(("pending", "processing")),
                 )
                 .values(status="cancelled", locked_at=None, updated_at=func.now())
+            )
+            await session.commit()
+        return int(result.rowcount or 0)
+
+    async def session_document_ids(self, session_id: str) -> list[str]:
+        async with self._session_factory() as session:
+            rows = await session.scalars(
+                select(ConversationMemorySource.document_id).where(
+                    ConversationMemorySource.session_id == session_id
+                )
+            )
+        return [str(document_id) for document_id in rows]
+
+    async def delete_documents(self, document_ids: list[str]) -> int:
+        if not document_ids:
+            return 0
+        ids = [uuid.UUID(document_id) for document_id in document_ids]
+        async with self._session_factory() as session:
+            result = await session.execute(
+                delete(Document).where(
+                    Document.id.in_(ids),
+                    Document.file_type == CONVERSATION_FILE_TYPE,
+                )
             )
             await session.commit()
         return int(result.rowcount or 0)
