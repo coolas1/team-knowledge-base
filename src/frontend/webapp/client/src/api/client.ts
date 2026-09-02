@@ -36,6 +36,24 @@ export interface DocumentList {
   items: Document[]
 }
 
+export interface BatchUploadError {
+  code: string
+  message: string
+  suggestion: string
+  retryable: boolean
+  filename?: string
+}
+
+export interface BatchUploadItem {
+  ok: boolean
+  document?: Document
+  error?: BatchUploadError
+}
+
+export interface BatchUploadResult {
+  items: BatchUploadItem[]
+}
+
 export interface GraphNode {
   name: string
   type: string
@@ -201,6 +219,26 @@ export const api = {
     form.append('file', file)
     try {
       return await request<Document>('/documents/upload', { method: 'POST', body: form })
+    } catch (error) {
+      if (error instanceof ApiError) throw error
+      throw new ApiError(
+        '无法连接上传服务',
+        0,
+        'network_error',
+        '请检查网络或服务状态，恢复后可直接重试。',
+        true,
+      )
+    }
+  },
+
+  async uploadFiles(files: File[]) {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    try {
+      return await request<BatchUploadResult>('/documents/upload/batch', {
+        method: 'POST',
+        body: form,
+      })
     } catch (error) {
       if (error instanceof ApiError) throw error
       throw new ApiError(

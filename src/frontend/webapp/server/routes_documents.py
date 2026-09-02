@@ -162,12 +162,16 @@ async def upload_documents_batch(
         error = _upload_file_error(file.filename, data)
         if error is not None:
             _status, detail = error
-            items.append({"ok": False, "error": detail})
+            items.append(
+                {"ok": False, "error": {**detail, "filename": file.filename}}
+            )
             continue
         try:
             ref = await _ingest_uploaded(kb, file.filename, data)
         except HTTPException as exc:
-            items.append({"ok": False, "error": exc.detail})
+            items.append(
+                {"ok": False, "error": {**exc.detail, "filename": file.filename}}
+            )
             continue
         items.append({"ok": True, "document": asdict(ref)})
     return {"items": items}
