@@ -11,14 +11,18 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload  # noqa: F401  (kept for parity with original)
 
-from src.engine.components.analyzer import Analyzer
-from src.engine.components.extractors.registry import ExtractorRegistry, registry
-from src.engine.components.store.models import Chunk, Document
+from src.engine.components.extractors.registry import ExtractorRegistry
+from src.engine.components.store.models import (
+    Chunk,
+    Document,
+    is_public_document,
+    public_document_filter,
+)
 from src.engine.components.store.neo4j import Neo4jClient
-from src.engine.components.store.postgres import async_session_factory, init_db
+from src.engine.components.store.postgres import async_session_factory
 from src.engine.config import EngineConfig
 from src.engine.graphrag.pipeline import Pipeline
 from src.engine.interface import (
@@ -104,7 +108,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc):
                 raise ValueError(f"文档不存在: {doc_id}")
             await session.execute(
                 update(Document)
@@ -122,7 +126,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc):
                 raise ValueError(f"文档不存在: {doc_id}")
             new_text = doc.raw_text or ""
             file_path = Path(doc.file_path) if doc.file_path else None
@@ -152,7 +156,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc):
                 return
             await self._pipeline.before_remove(doc_id)
             _remove_upload_directory(uid)
@@ -208,8 +212,8 @@ class GraphRAGBackend:
         return GraphData(
             nodes=[GraphNode(name=n["name"], type=n["type"], description=n.get("description", ""),
                              sources=n.get("sources", [])) for n in raw.get("nodes", [])],
-            links=[GraphLink(source=l["source"], target=l["target"], type=l["type"],
-                             description=l.get("description", "")) for l in raw.get("links", [])],
+            links=[GraphLink(source=link["source"], target=link["target"], type=link["type"],
+                             description=link.get("description", "")) for link in raw.get("links", [])],
         )
 
     async def get_neighbors(self, entity: str) -> GraphData:
@@ -230,13 +234,17 @@ class GraphRAGBackend:
         status: str | None = None,
     ) -> dict[str, Any]:
         async with async_session_factory() as session:
-            stmt = select(Document).order_by(Document.created_at.desc())
+            stmt = (
+                select(Document)
+                .where(public_document_filter())
+                .order_by(Document.created_at.desc())
+            )
             if file_type:
                 stmt = stmt.where(Document.file_type == file_type)
             if status:
                 stmt = stmt.where(Document.status == status)
 
-            count_stmt = select(func.count(Document.id))
+            count_stmt = select(func.count(Document.id)).where(public_document_filter())
             if file_type:
                 count_stmt = count_stmt.where(Document.file_type == file_type)
             if status:
@@ -264,7 +272,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc):
                 return None
             count_stmt = select(func.count(Chunk.id)).where(Chunk.doc_id == uid)
             chunk_count = (await session.execute(count_stmt)).scalar() or 0

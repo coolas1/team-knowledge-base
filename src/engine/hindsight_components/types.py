@@ -17,6 +17,36 @@ class DocumentMemoryState:
     updated_at: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationMemoryJob:
+    document_id: str
+    session_id: str
+    turn_id: str
+    title: str
+    content: str
+    attempts: int
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationMemoryQueueStats:
+    pending: int = 0
+    processing: int = 0
+    completed: int = 0
+    failed: int = 0
+    cancelled: int = 0
+
+    @property
+    def total(self) -> int:
+        return (
+            self.pending
+            + self.processing
+            + self.completed
+            + self.failed
+            + self.cancelled
+        )
+
+
 @dataclass(slots=True)
 class ExtractedFact:
     text: str

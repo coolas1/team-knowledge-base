@@ -29,6 +29,26 @@ def test_list_documents(client):
     assert "items" in res.json()
 
 
+def test_list_documents_hides_internal_conversation_sources(client):
+    c, kb = client
+    from src.engine.interface import DocumentRef
+
+    kb.docs["file-1"] = DocumentRef(
+        id="file-1", title="visible.md", file_type="markdown", status="indexed"
+    )
+    kb.docs["conversation-1"] = DocumentRef(
+        id="conversation-1",
+        title="Conversation turn",
+        file_type="conversation",
+        status="indexed",
+    )
+
+    result = c.get("/api/documents").json()
+
+    assert [item["id"] for item in result["items"]] == ["file-1"]
+    assert result["total"] == 1
+
+
 def test_upload_document(client):
     c, kb = client
     res = c.post(

@@ -114,7 +114,7 @@ class FakeKnowledgeBase:
         file_type: str | None = None,
         status: str | None = None,
     ) -> dict:
-        items = list(self.docs.values())
+        items = [doc for doc in self.docs.values() if doc.file_type != "conversation"]
         return {
             "total": len(items),
             "page": page,

@@ -13,6 +13,18 @@ from src.engine.graphrag.backend import (
 )
 
 
+class _QueryResult:
+    def __init__(self, *, scalar_value=0, items=None):
+        self._scalar_value = scalar_value
+        self._items = items or []
+
+    def scalar(self):
+        return self._scalar_value
+
+    def scalars(self):
+        return SimpleNamespace(all=lambda: self._items)
+
+
 def test_build_returns_graphrag_backend():
     # build() instantiates Neo4j+Pipeline; it only constructs objects, no I/O
     # until a method is awaited. Verify type without touching services.
@@ -59,6 +71,79 @@ def test_backend_implements_protocol_methods():
         "get_document",
     ]:
         assert hasattr(GraphRAGBackend, name), f"missing {name}"
+
+
+async def test_document_browse_filters_internal_conversation_sources(monkeypatch):
+    visible = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="visible.md",
+        file_type="markdown",
+        status="indexed",
+        overview="",
+        created_at=None,
+        updated_at=None,
+    )
+
+    class Session:
+        def __init__(self):
+            self.statements = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            if len(self.statements) == 1:
+                return _QueryResult(scalar_value=1)
+            return _QueryResult(items=[visible])
+
+    session = Session()
+    monkeypatch.setattr(backend_mod, "async_session_factory", lambda: session)
+    backend = GraphRAGBackend(SimpleNamespace(), SimpleNamespace())
+
+    result = await backend.list_documents()
+
+    statements = [str(statement).lower() for statement in session.statements]
+    assert all("documents.file_type not in" in statement for statement in statements)
+    assert result["total"] == 1
+    assert [item["id"] for item in result["items"]] == [str(visible.id)]
+
+
+async def test_internal_conversation_document_is_not_read_editable_or_removable(
+    monkeypatch,
+):
+    internal = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Conversation turn",
+        file_type="conversation",
+        raw_text="private transcript",
+        status="indexed",
+    )
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _model, _uid):
+            return internal
+
+    pipeline = SimpleNamespace(before_remove=lambda *_args: None)
+    neo4j = SimpleNamespace(delete_document_graph=lambda *_args: None)
+    monkeypatch.setattr(backend_mod, "async_session_factory", Session)
+    backend = GraphRAGBackend(neo4j, pipeline)
+
+    assert await backend.get_document(str(internal.id)) is None
+    with pytest.raises(ValueError, match="文档不存在"):
+        await backend.edit_content(str(internal.id), "replacement")
+    with pytest.raises(ValueError, match="文档不存在"):
+        await backend.reingest(str(internal.id))
+    await backend.remove(str(internal.id))
 
 
 async def test_edit_content_persists_text_and_schedules_reindex(monkeypatch):
