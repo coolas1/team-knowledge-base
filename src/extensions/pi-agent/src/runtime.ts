@@ -81,6 +81,12 @@ export interface RuntimeSessionDetail extends RuntimeSessionInfo {
   messages: RuntimeConversationMessage[];
 }
 
+export interface RuntimeConversationMemoryForgetResult {
+  sessionId: string;
+  cancelledJobs: number;
+  deletedDocuments: number;
+}
+
 export interface RuntimeHealth {
   status: "ok" | "degraded";
   model: { provider: string; id: string; baseUrl: string };
@@ -109,6 +115,7 @@ export interface AgentRuntimeApi {
   ): Promise<void>;
   cancel(id: string): Promise<boolean>;
   deleteSession(id: string): Promise<boolean>;
+  forgetSessionMemory(id: string): Promise<RuntimeConversationMemoryForgetResult>;
   close(): Promise<void>;
 }
 
@@ -420,6 +427,18 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       await rm(sessionFile, { force: true });
     }
     return true;
+  }
+
+  async forgetSessionMemory(id: string): Promise<RuntimeConversationMemoryForgetResult> {
+    this.ensureInitialized();
+    const result = await this.mcpClient.forgetConversationMemory(id, {
+      timeoutMs: this.adapterConfig.defaultToolTimeoutMs,
+    });
+    return {
+      sessionId: result.session_id,
+      cancelledJobs: result.cancelled_jobs,
+      deletedDocuments: result.deleted_documents,
+    };
   }
 
   async close(): Promise<void> {

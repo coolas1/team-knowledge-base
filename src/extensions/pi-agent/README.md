@@ -98,6 +98,11 @@ the Pi model API adapter when required by a compatible provider.
 | `TKB_ENABLE_LEGACY_SEARCH` | `false` | Enable legacy `tkb_search` |
 | `TKB_ENABLE_WRITE_TOOLS` | `false` | Enable upload and remove tools |
 | `TKB_ENABLE_FULL_GRAPH` | `false` | Enable full-graph output |
+| `TKB_CONVERSATION_MEMORY_ENABLED` | `false` | Enable automatic shared-team conversation recall and retention |
+| `TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS` | `5000` | Timeout for pre-response conversation recall |
+| `TKB_CONVERSATION_MEMORY_RECALL_LIMIT` | `5` | Maximum recalled conversation memories per turn |
+| `TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS` | `6000` | Maximum injected historical-context size |
+| `TKB_CONVERSATION_MEMORY_RETENTION_CONTEXT` | `Completed team conversation turn` | Label used by the engine retention worker |
 
 When deployed beside the current Compose services, use
 `TKB_MCP_URL=http://webapp:8000/mcp/`.
@@ -110,6 +115,8 @@ When deployed beside the current Compose services, use
 - `GET /v1/sessions/:id` returns the session summary plus filtered
   `user`/`assistant` text messages
 - `DELETE /v1/sessions/:id`
+- `DELETE /v1/sessions/:id/memory` explicitly forgets retained memory for that
+  session without deleting its JSONL history
 - `POST /v1/sessions/:id/cancel`
 - `POST /v1/sessions/:id/messages` with `{ "message": "..." }`
 
@@ -117,6 +124,16 @@ The message endpoint streams typed SSE events for assistant deltas, tool
 status, citations, limits, completion, and failures. Model reasoning and raw
 tool payloads are suppressed by default; citations are still derived on the
 server. Disconnecting the client cancels the active run.
+
+When conversation memory is enabled, completed visible user/assistant turns are
+queued for asynchronous retention. Recall is injected only into the current
+system prompt as bounded, untrusted historical evidence and is never persisted
+as a visible message. The feature uses one shared team scope, so retained
+conversation facts can be recalled by other sessions. Normal session deletion
+does not forget memory; call the explicit memory DELETE endpoint when that is
+intended. Queue counts and failures are exposed through `/health` without
+returning retained content. Memory failures fail open so normal chat remains
+available.
 
 The Webapp image also runs a production dependency security gate. Its single
 tracked exception is React Router's RSC-only `GHSA-qwww-vcr4-c8h2`: this Vite

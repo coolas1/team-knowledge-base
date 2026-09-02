@@ -210,4 +210,18 @@ describe('api client', () => {
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agent/sessions/s1/cancel', { method: 'POST' })
   })
+
+  it('forgets agent session memory through the explicit memory endpoint', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ sessionId: 's1', cancelledJobs: 1, deletedDocuments: 2 }),
+    })
+
+    await api.forgetAgentSessionMemory('session/1')
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/agent/sessions/session%2F1/memory',
+      { method: 'DELETE' },
+    )
+  })
 })

@@ -276,6 +276,17 @@ export const api = {
     )
   },
 
+  forgetAgentSessionMemory(sessionId: string) {
+    return request<{
+      sessionId: string
+      cancelledJobs: number
+      deletedDocuments: number
+    }>(
+      `/agent/sessions/${encodeURIComponent(sessionId)}/memory`,
+      { method: 'DELETE' },
+    )
+  },
+
   async streamAgentMessage(
     sessionId: string,
     message: string,
