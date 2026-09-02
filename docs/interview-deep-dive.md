@@ -1,518 +1,579 @@
-# Team Knowledge Base — 项目完整技术总结(面试深挖版)
+# Team Knowledge Base 项目完整详解(面试版)
 
-> 定位:GraphRAG 团队知识库系统 —— 纵向文档版本迭代管理 + 横向修改传播
-> 分支:feat/versioned-documents(12 个提交,+2522/-31 行,23 个文件)
-> 当前线上规模:18 篇文档 / 22 chunks / 16 memory_units / Neo4j 131 节点 177 边 / 227 个后端测试
-
----
-
-## 0. 电梯陈述(30 秒版)
-
-"我做了一个基于 GraphRAG 的团队知识库:文档入库后自动抽取实体关系构建三层知识图谱(Postgres+pgvector 存向量、Neo4j 存图谱),检索走'向量粗筛 → Reranker 守门 → 图谱增强'两段漏斗,通过 CLI/MCP/Web UI 三种方式访问,LLM agent 用工具协议自主检索问答。在此基础上我实现了研究目标的双轴:**纵向**——文档版本迭代管理,同名上传/编辑自动挂版本链,LLM 生成结构化版本 diff,检索默认只命中当前版;**横向**——用户提出修改要求时,agent 先定位受影响片段、生成编辑提议、做跨文档一致性检查,确认后落库为新版本。还包括改名文件的版本识别(内容指纹三级判定)。"
+> 这份文档的目标:把项目从头到尾讲清楚——有什么功能、每个模块怎么实现、
+> 模块之间怎么协作。每个技术概念都同时给"专业说法"和"大白话"。
+> 读完它,任何一层被追问都能接得住。
 
 ---
 
-## 1. 系统全貌
+# 第一部分:这个项目是什么
 
-### 1.1 三模块架构
+## 1.1 一句话说清楚
 
-```
-src/
-├── engine/     GraphRAG 引擎(本项目的核心)
-│   ├── cli.py / mcp.py / interface.py    入口与协议
-│   ├── components/
-│   │   ├── extractors/   按格式抽取(pdf/docx/pptx/markdown/OCR)
-│   │   ├── chunker.py    分块
-│   │   ├── analyzer.py   LLM 分析(overview/实体/关系/版本diff/编辑提议)
-│   │   ├── embedder.py   向量化(nomic-embed-text, 768维)
-│   │   ├── reranker.py   重排(local torch / http API / none 三模式)
-│   │   └── store/        postgres.py(权威存储) + neo4j.py(图谱) + models.py
-│   ├── graphrag/         pipeline.py(入库编排) + backend.py(实现 KnowledgeBase 协议)
-│   │                     + _search.py(检索漏斗) + _version_match.py(改名识别)
-│   └── hindsight_components/  第二条记忆管线(recall/reflect + Neo4j 投影 worker)
-├── agent/      无状态技能层(engine_client 双实现:in-process / MCP)
-└── frontend/   FastAPI BFF + React 19 SPA
-```
+**一个会"自己长知识"的团队文档问答系统**:把文档(PDF/PPT/Markdown/图片)
+扔进去,它自动提取内容、切分、用大模型分析出"文档里讲到了哪些人/事/物
+以及它们之间的关系",存成一张**知识图谱**;之后团队成员用自然语言提问,
+系统先按语义找出相关内容、再借助图谱补充上下文,最后由 AI 助手给出
+带出处的回答。
 
-外加 `src/extensions/pi-agent/`(TypeScript agent 运行时,通过 MCP 调 engine 工具)。
+再进一层:我在这个系统上实现了**文档的版本进化管理**——文档改了会自动
+变成新版本、自动总结"这版改了什么"、检索永远只给最新内容但历史随时可查;
+还实现了**修改的智能传播**——你说"把配送费从 5 元改成 8 元",AI 会先
+定位到要改的段落、生成修改提议、检查哪些相关文档会被影响,你确认后才
+真正改,而且"改"这个动作本身会生成一个新版本。
 
-### 1.2 技术栈与选型理由
+## 1.2 前置概念(保证后面每个词都能看懂)
 
-| 组件 | 选型 | 为什么 |
+| 术语 | 大白话 | 专业解释 |
 |---|---|---|
-| 向量库 | Postgres + pgvector(HNSW,cosine) | 与业务数据同库,事务一致,免运维独立向量库 |
-| 图谱 | Neo4j 5 | 实体关系 MERGE 聚合、Cypher 变长路径查询 |
-| Embedding | Ollama + nomic-embed-text | 本地部署、768 维、零 API 成本 |
-| LLM | glm-5.3(ark API,OpenAI 兼容) | 推理模型,质量/成本平衡 |
-| Agent 协议 | MCP (streamable HTTP) | 工具自描述,pi-agent/Claude 等客户端即插即用 |
-| 部署 | docker compose 五容器 | postgres/neo4j/ollama/webapp/pi-agent |
+| RAG | 开卷考试:先从资料里翻出相关页,再让 AI 照着答 | Retrieval-Augmented Generation,检索增强生成。LLM 参数知识有截止日期且不可控,用检索结果作为上下文来约束生成 |
+| GraphRAG | 不只翻页,还翻"索引卡片":知道哪些概念互相有关 | 在向量检索之外叠加知识图谱,实体和关系作为额外检索信号,擅长多跳问题("A 的合作方的竞争对手是谁") |
+| Embedding / 向量 | 把一段文字变成一串数字,意思越近的数字越像 | 文本经神经网络编码为定长稠密向量(本项目 768 维),语义相似度用余弦距离度量 |
+| pgvector / HNSW | 在 Postgres 里建了一个"按相似度找"的索引 | Postgres 扩展,提供向量类型和 HNSW 近似最近邻索引(分层可导航小世界图,牺牲少量精度换百倍速度) |
+| 知识图谱 | 一张网:节点是概念,连线是关系 | 实体-关系存储,本项目用 Neo4j,节点带标签和属性,边带类型 |
+| Reranker(重排器) | 二次面试官:粗筛 20 份简历,精挑 10 份 | 第一阶段向量召回是"模糊匹配",CrossEncoder 把 query 和文档拼在一起打精排分,精度高但慢,所以只对少量候选做 |
+| MCP | AI 世界的 USB 接口:工具统一插拔 | Model Context Protocol,Anthropic 推的开放协议,服务端把函数注册成"工具",任何支持 MCP 的 AI 客户端都能自动发现并调用 |
+| LLM 分析 | 让大模型读文本,按要求的格式吐结构化结果 | 提示词工程 + JSON 输出约束 + 容错解析,是本项目所有"智能"环节的实现方式 |
+| 幂等 | 同样的请求来多少次,结果都一样 | 重复上传相同内容不会产生重复数据,靠内容哈希判断 |
 
-### 1.3 关键协议分层(面试常问"怎么解耦的")
+---
+
+# 第二部分:系统全景——模块划分与职责
+
+## 2.1 三个模块(为什么这样切)
 
 ```
-KnowledgeBase Protocol (src/engine/interface.py)   ← 引擎契约
+┌─────────────────────────────────────────────────┐
+│  frontend(前端层)                                │
+│  FastAPI BFF + React SPA                         │
+│  职责:页面、HTTP API、浏览器不该知道的东西全挡在这层 │
+└──────────────────┬──────────────────────────────┘
+                   │ 调用
+┌──────────────────▼──────────────────────────────┐
+│  agent(智能体层)                                 │
+│  engine_client + skills                          │
+│  职责:把"引擎能力"包装成 AI 可调用的统一接口        │
+└──────────────────┬──────────────────────────────┘
+                   │ 依赖
+┌──────────────────▼──────────────────────────────┐
+│  engine(引擎层,核心)                             │
+│  GraphRAG 管线 + 双存储 + Hindsight 记忆管线       │
+│  职责:所有"存"和"查"的实际逻辑                     │
+└─────────────────────────────────────────────────┘
+     │            │            │
+  Postgres      Neo4j       Ollama
+  (权威数据)    (知识图谱)   (本地向量化模型)
+```
+
+**为什么分这三层?** 核心原则是"引擎不懂页面,页面不懂引擎":
+- engine 只做存储检索,不知道自己被谁用(CLI、AI、网页一视同仁)
+- agent 层是"翻译官",把引擎的方法翻译成 AI 生态通用的 MCP 工具
+- frontend 是"门面",浏览器的每个按钮都对应它的一次 HTTP 调用,
+  而 LLM 的 API key 等敏感配置永远不出这层
+
+另外还有一个 `extensions/pi-agent`:一个 TypeScript 写的 AI 助手运行时
+(可以理解为"驻场 AI 员工"),它通过 MCP 协议远程调用 engine 的工具,
+负责和用户多轮对话、自己决定调哪个工具。
+
+## 2.2 支撑服务(docker compose 五容器)
+
+| 容器 | 角色 | 大白话 |
+|---|---|---|
+| Postgres 16 + pgvector | 权威数据库 | 一切以它为准:文档原文、切块、向量、版本记录都在这 |
+| Neo4j 5 | 知识图谱 | 存"谁和谁有什么关系"这张网,方便图查询 |
+| Ollama | 本地模型服务 | 跑 nomic-embed-text,把文字变向量,数据不出内网 |
+| webapp | BFF+SPA+引擎 | 前后端一体的主服务,引擎在它进程里跑 |
+| pi-agent | AI 助手 | 用户的聊天对象,通过 MCP 用引擎的工具 |
+
+**为什么向量放 Postgres 不用独立向量库(Milvus 等)?**
+业务数据(文档/chunks)和向量本来就要一起事务性地增删,同库可以用外键、
+可以 JOIN、一个事务保证一致;独立向量库意味着双写一致性问题。
+数据量到千万级向量再考虑分离。
+
+## 2.3 关键分层:协议(Protocol)——模块解耦的核心机制
+
+**大白话**:协议就是"岗位说明书"。我定义一个接口叫 `KnowledgeBase`,
+里面写清楚"必须会 ingest(入库)、recall(检索)、remove(删除)……"。
+任何引擎只要按说明书实现,上层全部无感替换。
+
+```
+KnowledgeBase 协议(interface.py)          ← 岗位说明书
     ↑ 实现
-GraphRAGBackend                                     ← 具体引擎
-    ↑ 包装
-HindsightKnowledgeBaseAdapter                       ← 记忆状态增强装饰器
-    ↑ 两种实现
-InProcessEngineClient / McpEngineClient             ← agent 侧统一客户端
+GraphRAGBackend(backend.py)                ← 干活的员工
+    ↑ 被包装
+HindsightKnowledgeBaseAdapter(adapter.py)  ← 给员工的每个动作附加"记忆状态"
+    ↑ 被两种方式调用
+InProcessEngineClient / McpEngineClient    ← 内线电话 / 邮件(同一份说明书)
     ↑
-BFF 路由 / pi-agent / CLI / MCP server              ← 四种消费端
+BFF 路由 / pi-agent / CLI / MCP Server     ← 四种使用方
 ```
 
-**教训**(真实 bug):每加一个 KnowledgeBase 方法,必须同步改 5 处——
-backend 实现、interface 协议、hindsight adapter 透传(它手写代理每个方法)、
-两种 EngineClient、MCP 工具注册。漏掉 adapter 就 500(版本工具当时就是这样暴露的)。
+**这个设计的代价(我踩过的坑)**:中间的"附加记忆状态"包装层是
+**手写代理**——它把每个方法一个一个转发给真正的引擎。给协议加了新方法
+(版本查询)却忘了在包装层加转发,请求就 500。教训写进了代码注释:
+**改协议要过一遍"5 处清单":协议定义、引擎实现、包装层透传、双客户端、MCP 注册**。
 
 ---
 
-## 2. 核心数据流
+# 第三部分:一次上传的完整旅程(把所有模块串起来)
 
-### 2.1 入库管线(pipeline.process_file)
+这是理解模块联系的最好方式——跟着一个文件走一遍。
 
-```
-文件字节 → content_hash(SHA256,幂等判断)
-  → registry.extract(按扩展名选抽取器;OCR 走 tesseract)
-  → chunker.chunk_text(先分块)
-  → analyzer.analyze_overview(文档级:摘要 + 跨文档关联推测)
-  → analyzer.analyze_chunk × N(chunk 级:实体/关系抽取)
-  → embedder.embed_batch(chunks 向量化)
-  → Postgres: chunks 表(带 embedding)+ documents 更新
-  → Neo4j: 三层图谱写入(见 2.2)
-  → [有版本上下文时] 版本 diff 抽取 + 版本图谱投影
-  → index_hook.after_indexed(Hindsight 二级索引,失败不影响主流程)
-```
+## 3.1 入库管线(engine/graphrag/pipeline.py 编排)
 
-失败语义:任何一步异常 → status='failed' + error_msg,**版本元数据失败例外**——
-`_process_version_change` 内部 try/except,只记日志不回滚文档 indexed 状态
-(版本 diff 是附加产物,不能拖垮主索引,与 index_hook 同哲学)。
+用户在网页上传 `配送规范.md` →
 
-### 2.2 三层图谱(面试必考)
+1. **BFF 接收**(`routes_documents.py`):校验文件名,读出字节,
+   调 agent 层的 `ingest()`
+2. **InProcessEngineClient** 转发到引擎的 `ingest()`
+3. **HindsightAdapter** 转发到 **GraphRAGBackend.ingest()**,它做三件事:
+   - 算内容哈希(SHA256)——重复内容的"身份证"
+   - **版本链检测**(详见第六部分):有同名当前版文档吗?没有的话做改名
+     识别(第五部分)
+   - 在 Postgres 建一行 document(status=pending),文件字节存到
+     uploads/ 目录(每个文档一个 UUID 子目录,删除时可整目录清理)
+4. **后台异步启动管线**(不阻塞 HTTP 响应,前端轮询状态):
+   ```
+   提取 → registry.extract(file)
+     按扩展名路由到对应抽取器(pdf/docx/pptx/markdown/图片OCR);
+     抽取器的注册表模式让新格式即插即用
+   分块 → chunker.chunk_text(text)
+     为什么要分块?① 向量模型有输入长度限制 ② 检索粒度:一整篇文档
+     的向量是"平均脸",按块检索才能精确定位到相关段落
+   文档级分析 → analyzer.analyze_overview(text, title)
+     LLM 读全文,产出:一段 2-3 句摘要 + 猜测"这篇和库里哪些文档相关"
+     (file_relations,跨文档关联的种子)
+   块级分析 → analyzer.analyze_chunk(text) × N
+     每块独立跑 LLM,抽实体(名称/类型/描述)和关系(谁-什么关系-谁)
+   向量化 → embedder.embed_batch(chunks)
+     批量调 Ollama,得到 N 个 768 维向量
+   落库 → Postgres:chunks 表(文本+向量+所属文档);documents 更新状态
+   图谱 → Neo4j 三层写入(见 3.2)
+   版本 → 若是新版,LLM diff + 版本图谱投影(第六部分)
+   钩子 → index_hook.after_indexed():触发 Hindsight 二级索引(见 3.3)
+   ```
+5. 任何一步失败:状态置 failed + 错误信息,**但版本元数据(第 4 步的
+   diff)失败例外**——它包在独立的 try/except 里只记日志,
+   因为"附加产物不能拖垮主流程"。
 
-- **L1 chunk 级**:每个 chunk 抽取的实体/关系逐条写入
-- **L2 文档内聚合**:实体节点 `MERGE by name` 全局唯一,`sources` 属性(JSON 字符串数组)累积溯源 `[{doc_id, chunk_index, doc_title}]` —— 同名实体跨文档自然聚合,这是 LightRAG 式增量合并的关键
-- **L3 跨文档**:LLM 在 overview 分析时推测 file_relations(REFERENCES/SAME_TOPIC/ANALYZES),按 title 反查目标文档写 `RELATED_TO` 边
+## 3.2 知识图谱的三层结构(Neo4j)
 
-**为什么 sources 用 JSON 字符串不用 list<map>?** Neo4j 属性不支持 list of maps。代价:清理和过滤都要 `CONTAINS doc_id` 子串匹配——因为 doc_id 是 UUID(36 字符定长),子串误匹配概率可忽略。
+入库时往图里写三层,一层比一层范围大:
 
-### 2.3 双检索管线(最容易"被问穿"的地方)
+- **L1 块级(ground truth)**:每个 chunk 抽出的实体、关系逐条写入。
+  实体节点用 **MERGE by name**(Neo4j 的 MERGE = "有则更新,无则创建"):
+  "联邦学习"在第 2 篇文档也出现,不会建第二个节点,而是**复用**。
+- **L2 全局聚合**:实体节点上有个 `sources` 属性,是一个 JSON 数组,
+  记录"哪些文档的哪些块提到了我"。这就是 LightRAG 式增量合并:
+  新文档入库,同名实体自动汇入同一个节点,sources 数组追加一条。
+  - 为什么 sources 是 JSON 字符串而不是结构化列表?Neo4j 属性不支持
+    list<map>,这是图数据库的常见限制
+- **L3 跨文档关联**:overview 分析时 LLM 猜测的 file_relations
+  ("这篇引用了那篇/同主题"),按标题反查目标文档,
+  建 Document 节点之间的 RELATED_TO 边
 
-系统有**两条独立的检索实现**,这是历史架构(引擎检索 + Hindsight 记忆检索)造成的:
+**大白话总结**:L1 是"事实卡片",L2 是"把提到同一事物的卡片钉在一起",
+L3 是"文档之间的友情链接"。
 
-```
-路径 A(GraphRAG): full_search
-  vector_search(pgvector top-K,JOIN documents 过滤 is_current)
-  → reranker_filter(CrossEncoder 阈值 0.01 守门, top-N 10)
-  → graph_enrich(命中 chunk 的实体 + 关联文档)
+## 3.3 Hindsight:第二条记忆管线(为什么会有两套?)
 
-路径 B(Hindsight): recall
-  memory_units 上的 semantic_search / keyword_search / entity_search
-  → RRF 融合 → MMR 多样性选择
-  → reflect 策略时做反思推理
-```
+引擎主管线之外,系统还有一套 **Hindsight 记忆管线**,这是项目早期架构
+遗留+演进的结果:
 
-**真实踩坑**:我给版本管理加"只检索当前版"过滤时,先只改了路径 A 的
-`vector_search`,端到端验证发现旧版本内容照样出现在搜索结果——排查后发现
-`/api/search` 实际走的是路径 B(Hindsight),它的 **5 个查询路径**
-(semantic/keyword/entity/temporal + 状态过滤)全都只查 `status='indexed'`。
-最终在 `hindsight_components/repository.py` 里 5 处全部补上
-`Document.is_current.is_(True)`。
-
-**面试话术**:"这个 bug 教会我,在多管线架构里改横切行为(检索域)必须先做调用链审计,单测 mock 根本暴露不了这种集成缝隙。"
-
-### 2.4 MCP 工具面(14 个)
-
-search / query_knowledge / search_fast / search_deep / get_document /
-query_graph / upload_document / list_documents / remove_document /
-get_full_graph + 版本五件套:
-- `tkb_list_versions(doc_id)` — 版本链 + 每版变更摘要
-- `tkb_diff_versions(doc_id, from, to)` — 结构化 diff
-- `tkb_edit_document(doc_id, new_text)` — 版本化编辑落库
-- `tkb_propose_edit(doc_id, edit_request)` — 生成编辑提议(不落库)
-- `tkb_confirm_version_match(doc_id, parent_doc_id)` — 改名候选确认挂链
-
----
-
-## 3. 纵向:版本迭代管理(Phase 1)
-
-### 3.1 数据模型(面试画图题)
-
-```sql
--- documents 增 4 列(幂等迁移)
-version_group UUID     -- 逻辑文档身份,同组 = 同一文档的各版本(旧数据回填 = 自身 id)
-version_number INT     -- 组内版本号从 1 递增
-version_of UUID        -- 上一版 doc_id(自引用 FK, SET NULL)
-is_current BOOLEAN     -- 组内最新版标记(检索域)
-
--- 新表
-document_changes(
-  id, doc_id FK CASCADE,   -- 指向新版本行
-  from_version, to_version,
-  summary TEXT,            -- LLM 一句话变更摘要
-  changes JSONB            -- [{name, description, status: added|removed|modified}]
-)
-```
-
-**核心设计决策:版本即文档行,不是独立版本表。** 理由:复用 chunks 的
-doc_id 外键、删除级联、Neo4j 投影管线——迁移成本最低。VersionRAG 用独立
-Version 节点因为它以图为中心;本项目 Postgres 是权威存储,行级建模更自然。
-
-**为什么"退位不删除"(is_current=false 而非删行)?** Graphiti 的边失效思想:
-历史是特性不是垃圾——支撑追溯、审计、未来回滚。旧版全文/chunks/图谱全部保留。
-
-**迁移怎么做的?** `Base.metadata.create_all` 不会给已存在的表加列,所以在
-`init_db` 里手写 `ALTER TABLE documents ADD COLUMN IF NOT EXISTS ...` +
-`UPDATE documents SET version_group = id WHERE version_group IS NULL` 回填。
-老库无感升级。
-
-### 3.2 版本链入库(backend.ingest)
-
-```
-上传 → hash 计算 → 同名(且 is_current)文档存在?
-  ├─ 是 → 内容 hash 相同? → 幂等返回现有文档(不产生新版本)
-  │       否则 → 挂链:新行继承 version_group,version_number=parent+1,
-  │              version_of=parent.id;parent 置 is_current=false
-  └─ 否 → 走改名识别(见第 5 节) → 仍无匹配则独立入库(v1)
-```
-
-版本上下文(VersionParent: 上一版 doc_id/raw_text/版本号)在 session 关闭前
-提取成**纯 dataclass**,避免 ORM 对象脱离会话的陷阱。
-
-### 3.3 LLM 版本 diff(analyzer.analyze_changes)
-
-Prompt 设计参考 VersionRAG 的 `generate_changes_from_diff`:
-- 只提取**实质变更**(字段/章节/数值/结论/定义),明确排除排版/标点/空白/页码
-- 输出 `{summary, changes:[{name, description, status: added|removed|modified}]}`
-- status 白名单校验,非法值归一为 modified
-- 复用 `_extract_json` 容错解析(见 7.1)
-
-实测效果(真实文档 v1→v2):返回 7 条结构化变更,精准覆盖配送范围扩大/
-时间延长/取消人工配送(removed)/新增机器人试点(added)/两次价格上调。
-
-### 3.4 Neo4j 版本投影
-
-```
-(d:Document {version_number, is_current})
-(prev)-[:NEXT_VERSION]->(next)
-(c:Change {from_version, to_version, summary, changes})-[:CHANGE_OF]->(d)
-```
-
-删除文档时连带清理:Change 节点 → 孤立实体(sources 清空后 DETACH DELETE)
-→ Document 节点。reindex 路径注意点:delete 会拆掉 NEXT_VERSION 边,
-所以 reindex 后要按 `doc.version_of` **重连版本边**。
-
-### 3.5 检索默认最新版
-
-- 路径 A:`vector_search` JOIN documents WHERE is_current
-- 路径 B:repository 5 处查询全部加过滤(见 2.3 的教训)
-- 图谱侧:`get_full_graph`/`query_neighbors`/`get_entity_details` 加"存活"
-  过滤——实体/关系边的 sources 里至少有一个**当前版**文档(见 6.3)
+- **它是什么**:入库钩子触发,把文档内容**再**提炼一层成"记忆单元"
+  (memory_units 表)——比 chunk 更语义化的观察/结论粒度;
+  检索时它有自己的算法(语义+关键词+实体三路召回,RRF 融合,
+  MMR 去冗余),还支持 reflect(反思推理)模式
+- **为什么保留**:它擅长"时间线/多记忆关联"类问题,和 GraphRAG 的
+  精确检索互补
+- **它的投影 worker**:memory 数据变化时通过 outbox(发件箱)模式投个
+  事件,后台 worker 把变化投影到 Neo4j 的 Hindsight* 标签节点上
+  (Postgres 是权威,Neo4j 是可重建的投影视图)
+- **代价**:每次给检索加"横切规则"(比如版本过滤),要**两个管线都改**——
+  这不是纸上谈兵,是我在版本功能上真实踩的坑(见 8.2)
 
 ---
 
-## 4. 横向:编辑传播(Phase 2)
+# 第四部分:一次提问的完整旅程(检索与回答)
 
-### 4.1 编辑即版本(edit_document)
+用户在聊天页问"园区配送费多少钱" →
 
-前端编辑按钮调 `PUT /documents/{id}/content` ——这个接口**后端原本不存在**
-(405,历史遗留;远端甚至有个 `bugfix/indexed-file-edit-405` 分支名)。
-我把它实现为版本化编辑:创建 v+1 新行(继承版本链)→ 旧版退位 →
-pipeline 重索引 + 补记 diff → 前端跳转新版本详情页。
+1. **pi-agent**(AI 助手)收到消息,它有一个系统提示词(行为准则)+ 
+   一堆可用工具(MCP 从引擎拉取的工具清单)
+2. 它的**推理**决定:这是简单事实问题 → 调 `tkb_search_fast`
+3. **引擎的检索漏斗**(_search.py):
+   ```
+   第一层:向量粗筛(快而糙)
+     问题 → embed → 在 chunks 表按余弦相似度取 top-20
+     [版本过滤:只取 is_current=true 的文档的块]
+   第二层:Reranker 精排(慢而准)
+     20 个候选逐个和问题拼对打分,阈值 0.01 过滤 + top-10
+     (CrossEncoder 精排为什么不能全库跑?每对都要过一次模型,
+      只能放在漏斗出口)
+   第三层:图谱增强
+     命中块的实体列表 + 这些实体参与的图谱关系 + 关联文档
+     —— 交给 LLM 的不只是"原文",还有"背景网"
+   ```
+4. Agent 拿到证据,如果不够会换关键词再查(它会自主决定);
+   足够则组织回答,**必须标注出处**(文档标题 + doc_id)
+5. 提示词里有安全规则:文档内容是"数据"不是"指令",
+   忽略文档里任何试图改变 AI 行为的内容(提示注入防护)
 
-幂等:内容 hash 与当前版相同 → 直接返回现有文档。
-
-### 4.2 编辑提议管线(tkb_propose_edit,OneEdit 范式)
-
-**核心哲学:编辑是"提议 + 验证",不是直接写。**
-
-```
-① 定位:edit_request 向量化 → 该文档 chunks 的 cosine top-3(带 relevance 分)
-② 提议:LLM 生成修改后全文 + notes
-   (prompt 约束:只做要求涉及的改动,其余逐字保留,保持格式;
-    notes 还要求报告发现的潜在冲突)
-③ 影响面:Neo4j 查共享实体的其他当前版文档(跨文档一致性检查)
-→ 返回 {affected_chunks, proposed_text, notes, related_documents, next_step}
-→ 用户确认 → tkb_edit_document 落库(新版本 + LLM diff)
-```
-
-实测(改配送费 5元→8元):affected chunk 定位正确(relevance 0.637)、
-提议只改目标行(加急费 3 元逐字保留)、notes 3 条(含"全文仅此一处提及
-该金额,加急费不受影响"的影响面判断)。
-
-**为什么不自动落库?** 内容相似不等于同一文档;同理,LLM 的编辑提议
-可能有错,把确认权留给人。这与改名识别第三级不自动挂链是同一个设计原则。
-
-### 4.3 意图路由(版本敏感问题分流)
-
-pi-agent 系统提示词加"版本规则"区块 + 新增 `tkb-versions` skill:
-- 问版本历史 → tkb_list_versions
-- 问两版区别 → tkb_diff_versions
-- 要求修改 → 先 propose 后 edit
-- 内容问题默认当前版;涉及历史状态先查版本链
-
-(注:这比 VersionRAG 的 LLM 意图分类器轻量——agent 本身就是 LLM,
-让工具选择发生在 agent 的 reasoning 里,不需要独立分类器。)
-
-### 4.4 跨文档一致性检查
-
-`find_related_docs_via_entities(doc_id, limit=5)`:Cypher 找与本文档
-**共享实体**的其他当前版文档,按共享实体数排序。原理:实体节点全局
-MERGE,sources 数组含多个 doc_id 即为共享。加 `is_current <> false`
-过滤排除退版文档。
+**Agent 的版本感知路由**(Phase 2 加的):系统提示词里写明——
+问"改了几版"用版本列表工具、问"v1 和 v2 区别"用 diff 工具、
+要求改文档先要提议。没有做独立的"意图分类器",因为 agent 本身
+就是 LLM,工具选择自然发生在它的推理里(这比 VersionRAG 的
+独立分类器方案更轻)。
 
 ---
 
-## 5. 改名识别(最常被追问的算法细节)
+# 第五部分:功能一——改名识别(最常被问的算法)
 
-### 5.1 问题与三级判定
+## 5.1 问题场景
 
-用户改内容又改文件名(`规范v1.md` → `规范_final.md`),标题匹配失效。
-`_version_match.py` 三级判定:
+用户改了内容**又改了文件名**:`规范v1.md` → `规范_final.md`。
+按标题匹配,系统会当成两个不相干的文档——版本链断了。
 
-```
-第一级:纯重命名 —— content_hash(SHA256)与某当前版完全相同
-        → 确定性判断,自动挂链
-第二级:改名+修改 —— 加权相似度 ≥ 0.70 → 返回候选,等确认
-第三级:无匹配 → 独立新文档
-```
-
-### 5.2 相似度算法
+## 5.2 三级判定(_version_match.py)
 
 ```
-sim = 0.3 × 标题相似度 + 0.7 × 内容相似度
-
-内容相似度:正文 3-gram 字符 shingle 的 Jaccard
-  - 为什么 shingle 不用 embedding?零依赖/零成本/确定性/可解释,
-    且上传路径要同步算,不能容忍一次 ollama 往返(刻意取舍)
-  - 为什么 3-gram 字符不用词?中文无需分词,对错别字/局部改动鲁棒
-标题相似度:2-gram shingle Jaccard,且先剥离版本痕迹
-  (正则去 v1/final/draft/r2/日期/序号,让"报告_v2"和"报告_final"对齐)
-权重:改名场景标题天然低分,证据权重必须让位内容(0.3/0.7)
+上传新文档(标题和所有当前版文档都不一致)
+ │
+ ├─ 第一级:纯重命名检测
+ │   新文件的内容哈希 == 某个当前版文档的内容哈希?
+ │   (SHA256 相等 = 内容一个字节都没变,只是改了名)
+ │   → 铁证,自动挂入它的版本链
+ │
+ ├─ 第二级:内容相似度(改名 + 修改了内容)
+ │   加权分 = 0.3 × 标题相似度 + 0.7 × 内容相似度
+ │   ≥ 0.70 → 返回"疑似候选",等待用户确认
+ │
+ └─ 第三级:都不到 → 独立新文档
 ```
 
-### 5.3 阈值标定(面试最有说服力的部分)
+## 5.3 相似度怎么算(逐个概念解释)
 
-实测五档场景:
+**shingle(滑窗切片)**:把文本规范化后,以 3 个字符为窗口滑动,
+得到一堆 3 字符片段的集合。两个文本的 shingle 集合重叠越多,内容越像。
+- 大白话:像比对两篇文章的"指纹碎片"
+- 为什么 3 字符不是分词?中文不需要分词器,对错别字/局部改动天然鲁棒
 
-| 场景 | 相似度 | 期望 |
+**Jaccard 系数**:两个集合的交集 ÷ 并集。
+- 全同 = 1,全异 = 0,重叠一半 = 0.33
+- 直觉:改掉 30% 内容,新内容的 shingle 大部分是旧的,得分仍高
+
+**标题的版本痕迹剥离**:正则去掉 `v1`/`final`/`draft`/日期/序号
+再比对——让"报告_v2"和"报告_final"在标题维度上对齐。
+
+**权重 0.3/0.7**:改名场景标题必然不像,内容才是主证据;
+标题只作加分项。
+
+## 5.4 阈值 0.70 的标定(最有说服力的部分)
+
+| 场景 | 实测相似度 | 正确判定 |
 |---|---|---|
-| 小改 1 处(5元→8元) | 0.81 | 判为新版本 |
-| 中改 30% 内容 | 0.71 | 判为新版本 |
-| **同模板不同内容**(会议纪要模板) | **0.44** | 判为独立 |
-| 全部重写 | 0.30 | 独立 |
-| 无关文档 | 0.06 | 独立 |
+| 小改一处(5元→8元) | 0.81 | 是新版本 ✓ |
+| 中改 30% 内容 | 0.71 | 是新版本 ✓ |
+| 同模板不同内容(两份会议纪要) | **0.44** | 不是 ✓ |
+| 全文重写 | 0.30 | 不是 ✓ |
+| 完全无关 | 0.06 | 不是 ✓ |
 
-**0.70 卡在修订版(≥0.71)与模板陷阱(≤0.44)之间,两侧各有 0.25+ 安全边际。**
+阈值卡在"真修订"(≥0.71)和"模板陷阱"(≤0.44)正中间,
+两侧各留 0.25+ 安全边际。
 
-端到端实测:上传改名+改价版 → 相似度 0.784 → 返回 version_match 候选
-(doc_id/title/similarity/exact_content),未自动挂链 →
-`tkb_confirm_version_match` 确认 → 挂链 v2、补 LLM diff、连 NEXT_VERSION 边。
+**为什么第二级不自动挂链**:内容相似度在原理上无法区分
+"同一篇的修订"和"同一模板写的新文档"(两份会议纪要模板,内容
+重合度天然很高)。误挂链 = 把别人的文档错认成你的新版本,
+会污染版本链;漏挂链的代价只是需要手动挂一次。**宁可保守**。
 
-### 5.4 已知边界(主动说出来加分)
+**为什么用 shingle 不用 embedding**(高频追问):
+1. 上传是同步路径,shingle 纯 CPU 微秒级;embedding 要一次模型调用
+2. 确定性:阈值可标定、可审计、可复现;embedding 相似度随模型漂移
+3. 信号本质:这里需要的是"文本重叠"不是"语义相似"——两篇同主题
+   不同文挡 embedding 也很像,模板陷阱在语义空间里更危险
+4. 代价(诚实):同义改写("配送费"→"运输费")shingle 抓不住,
+   已列为演进方向(embedding 做第二信号)
 
-- 大幅重写(<0.70)的改名版会漏判为独立文档——**刻意保守**:误挂链
-  (把别人的文档认成你的新版本)比漏挂危害大
-- 超短文档 shingle 集合太小,区分度下降(实测重复串文本 Jaccard 被压到
-  0.43-0.52),建议文档下限约 50 字——这是我标定测试数据时踩的真实坑:
-  第一版测试用 `"条款一"*40` 这种重复文本,相似度算出来 0.44,
-  排查后发现是 shingle 集合坍缩(重复片段只贡献一个 shingle),
-  换真实多样文本后标定才成立
-- 未来方向:embedding 全文向量对语义改写更鲁棒,但引入推理成本
+**端到端实测**:上传改名+改价版 → 相似度 0.784,返回候选
+(含原版 doc_id),未自动挂链 → 确认接口挂链 v2 → LLM 补记 diff
+("基础配送费上调" modified)→ 图谱连上 v1→v2 边 →
+搜索只命中改名后的新版本。
 
 ---
 
-## 6. 图谱净化与一致性(Phase 2.5)
+# 第六部分:功能二——纵向版本管理(Phase 1)
 
-### 6.1 退版实体问题
+## 6.1 数据模型(拿张纸就能画出来)
 
-版本退位后,旧版实体(及其独有实体)仍在图谱里污染
-`get_full_graph`/`query_neighbors`/`query_graph`。
+核心思路:**一行 = 一个版本,而不是"一篇文档一行 + 版本存别处"**。
 
-### 6.2 方案:存活过滤(借 Graphiti 边失效思想)
+```
+documents 表(原有列略)增加 4 列:
+  version_group  逻辑文档身份证 —— 同一篇文章的所有版本共享同一个值
+  version_number 组内序号 1,2,3...
+  version_of     我修改自谁(上一版的 id)
+  is_current     我是不是组内最新版(检索只看 true 的)
 
-实体/关系边"存活" = sources 里至少有一个 doc_id 属于 is_current 的文档:
+document_changes 新表(版本间的"修改说明"):
+  doc_id       属于哪个新版本
+  from/to_version  从第几版到第几版
+  summary      LLM 生成的一句话总结("本次上调了配送费")
+  changes      结构化明细(JSONB):
+               [{名称, 详细描述, 状态: added/removed/modified}]
+```
+
+**为什么"版本即文档行"**(设计决策,必问):
+- chunks 表通过 doc_id 外键挂在文档上,版本是独立行 → 每个版本的
+  chunks 天然隔离,不用改任何下游代码
+- 删除级联、图谱投影管线全部复用
+- 对比方案"独立版本表"(VersionRAG 的做法,以图为中心所以合理):
+  我们以 Postgres 为权威,行级建模最自然,迁移成本最低
+
+**为什么"退位不删除"**(is_current=false 而非删行):
+Graphiti 的边失效思想——历史是特性不是垃圾。旧版本全文/chunks/图谱
+全部保留,支撑追溯、审计、未来的"回滚到 v2"功能。
+
+**存量数据迁移**:ORM 的 create_all 只建新表不会加列,所以 init_db
+里手写 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` + 把旧行的
+version_group 回填成自身 id(老文档各自成组,v1)。老库无感升级。
+
+## 6.2 版本从哪来(三条路汇入同一条链)
+
+| 入口 | 机制 |
+|---|---|
+| 同名上传 | ingest 时查同名+当前版文档 → 挂为 v+1(哈希相同则幂等返回旧文档) |
+| 网页编辑保存 | PUT 接口实现为版本化编辑:新建 v+1 行,旧版退位 |
+| 改名文件 | 三级判定(第五部分)后手动确认挂链 |
+
+## 6.3 LLM 版本 diff(analyze_changes)
+
+新版入库成功后,把新旧两版文本交给 LLM:
+- Prompt 明确要求**只提取实质变更**(数值/结论/章节/定义的增删改),
+  **排除排版、标点、空白等噪音**——这是从 VersionRAG 论文借鉴的
+  prompt 设计
+- 输出 JSON;解析时 status 做白名单校验,未知值归一为 modified
+- 结果写 document_changes 表 + 投影到 Neo4j:
+  `(c:Change {摘要, 明细})-[:CHANGE_OF]->(文档)` 和
+  `(v1:Document)-[:NEXT_VERSION]->(v2:Document)`
+
+实测:一次真实改版产出 7 条变更,added/removed/modified 三种状态
+全部正确标注(含"取消人工配送"=removed 这种需要语义理解才能分类的)。
+
+## 6.4 检索只看当前版——"两处都要改"的教训
+
+需求:搜出来的应该是"现在的事实",不是上周的旧价格。
+- GraphRAG 管线:向量查询 JOIN documents 过滤 is_current ✓
+- **但端到端一测,旧价格照样出现**。排查:/api/search 走的是
+  Hindsight 管线,它有 5 个独立查询路径(语义/关键词/实体/时间/状态),
+  全都只过滤了 status=indexed
+- 修复:5 处全部补上 is_current
+
+这就是"双管线一致性税":系统里有两套检索实现,任何横切规则
+(权限、版本、命名空间)都要双份实现。长期演进方向是收敛成
+单一检索抽象。
+
+## 6.5 对外接口(版本五件套,MCP 工具)
+
+| 工具 | 用途 | 使用方 |
+|---|---|---|
+| tkb_list_versions | 查版本链+每版摘要 | agent/前端 |
+| tkb_diff_versions | 两版结构化对比 | agent/前端 |
+| tkb_edit_document | 版本化编辑落库 | agent |
+| tkb_propose_edit | 生成编辑提议(不落库) | agent |
+| tkb_confirm_version_match | 改名候选确认挂链 | agent/前端 |
+
+前端:列表页 v{n} 徽标(历史版本置灰),详情页版本历史时间线。
+
+---
+
+# 第七部分:功能三——横向修改传播(Phase 2)
+
+## 7.1 编辑提议管线(tkb_propose_edit)
+
+**设计哲学:编辑是"提议 + 验证",不是直接写**(OneEdit 论文的范式)。
+
+用户:"把配送规范里的基础配送费从 5 元改成 8 元" →
+
+```
+第一步 定位(找到"哪里要改")
+  把修改要求本身向量化,在目标文档的 chunks 里做余弦近邻 → top-3
+  实测:第一条命中的就是收费标准段(相关度 0.637)
+  为什么要定位?① 给 LLM 明确的修改焦点 ② 给用户"系统理解对了"的信心
+
+第二步 提议(LLM 起草)
+  输入:全文 + 修改要求;约束(写死在 prompt 里):
+    - 只做要求涉及的改动,其余逐字保留
+    - 保持原有格式(标题层级/列表/空行)
+    - 额外报告发现的潜在冲突
+  实测输出:只改了目标行,加急费等其他内容逐字未动;
+  说明里主动指出"全文仅此一处提及该金额,加急费不受影响"
+
+第三步 影响面(改动会波及谁)
+  Neo4j 查询:与本文档共享实体的其他当前版文档,按共享实体数排序
+  ("配送规范"和"客服手册"都提到"加急费" → 改价可能影响后者)
+  这是跨文档一致性检查的种子数据
+
+→ 返回提议包(受影响片段/修改后全文/改动说明/关联文档/下一步指引)
+→ 用户确认 → tkb_edit_document 落库 → 自动生成新版本 + LLM diff
+```
+
+**为什么不自动落库**:LLM 的提议可能有错(改错位置/漏改),
+影响面检查也可能误报;确认权留给人,和改名识别的保守原则一脉相承。
+
+## 7.2 图谱净化(旧版本的"幽灵实体"问题)
+
+**问题**:文档退版后,它独有的实体(比如 v1 提到但 v2 删掉的概念)
+还在图谱里——`get_full_graph`(图谱可视化)、`query_neighbors`
+(实体邻居)会返回这些"幽灵"。
+
+**方案**(借鉴 Graphiti 边失效):查询时加"存活"过滤——
+一个实体/关系是"活的",当且仅当它的 sources 里**至少有一个**
+来源文档是当前版:
 
 ```cypher
 AND EXISTS {
   MATCH (ld:Document)
-  WHERE coalesce(ld.is_current, true) <> false   -- 关键
+  WHERE coalesce(ld.is_current, true) <> false
     AND e.sources CONTAINS ld.doc_id
 }
 ```
 
-**`coalesce(ld.is_current, true)` 的原因**:版本化功能上线前的存量
-Document 节点没有 is_current 属性,Cypher 里 `null <> false` 是 null
-(不匹配),不加 coalesce 会把所有存量实体制裁掉——灰度兼容的经典细节。
-
-`get_entity_details` 特意放宽为 `n.sources IS NULL OR EXISTS{...}`:
-Hindsight 投影的实体**没有 sources 属性**,要保留可见,只过滤 GraphRAG
-实体(有 sources 的)。
-
-### 6.3 删除的并发问题(真实生产问题)
-
-连续快速删除版本链关联的文档:
-1. Neo4j **TransientError 死锁**(两个删除 + graph worker 并发锁同批节点)
-   → 重试即成功;改进方向:删除加 backoff 重试或合并事务
-2. **graph worker 竞态**:Hindsight 投影 worker 处理删除事件时,
-   in-flight 的 replace 事件重建了 Document 节点 → 孤儿节点
-   (Postgres 权威数据已清,图谱残留)→ 手动清理;改进方向:删除事件
-   优先级标记 / 投影幂等键
-
-**面试话术**:"权威存储与投影的最终一致在删除场景最脆弱——
-我遇到的孤儿节点问题本质是 outbox 事件乱序,方案是给 delete 事件
-加屏障或做投影侧 tombstone。"
+两个细节(体现工程成熟度):
+- `coalesce(..., true)`:功能上线**之前**的存量 Document 节点没有
+  is_current 属性;Cypher 里 `null <> false` 结果是 null(不匹配),
+  不加 coalesce 会把所有存量实体错误地藏掉
+- `n.sources IS NULL OR ...`:Hindsight 投影的实体没有 sources 属性,
+  要保持可见——只过滤"有 sources 的 GraphRAG 实体"
 
 ---
 
-## 7. LLM 工程细节(推理模型踩坑全记录)
+# 第八部分:LLM 工程(推理模型踩坑全记录)
 
-glm-5.3 是推理模型(reasoning model),三个连环坑,全部真实踩过:
+生产环境的 LLM 不是 Demo 里的 LLM。glm-5.3 是推理模型(会先"思考"
+再回答),连环踩了三个坑:
 
-### 7.1 JSON 解析三连击
+## 8.1 JSON 输出三连击
 
-1. **围栏**:回复包 ```json 围栏,原文按行剥离的旧逻辑在"围栏外有说明
-   文字"或"围栏未闭合"时全崩 → 重写 `_extract_json`:多候选提取
-   (闭合围栏 → 未闭合围栏余文 → 原文 → 最外层花括号子串)
-2. **截断**:推理消耗输出预算,JSON 正文被 max_tokens 腰斩 →
-   a) 请求显式设 `max_tokens: 8192`;b) `_repair_truncated_json`
-   兜底:状态机扫描字符串/转义/括号栈,补齐未闭合引号与括号、
-   去悬空尾逗号(能救回截断前的大部分实体)
-3. **空响应**:并发时偶发 content 为空(预算全给思考)→
-   `_call_openai_compatible` 空响应自动重试 3 次
+| 坑 | 现象 | 解法 |
+|---|---|---|
+| 围栏包裹 | 回复包在 ```json 围栏里,前后还有说明文字 | 多候选提取器:依次尝试(闭合围栏内文 → 未闭合围栏余文 → 原文 → 最外层花括号子串) |
+| 正文截断 | 推理把输出预算花光,JSON 被拦腰砍断 | ① 请求显式 max_tokens=8192;② 截断修复器:状态机扫描字符串/转义/括号嵌套栈,补齐未闭合的引号和括号、去掉悬空逗号 |
+| 空响应 | 偶发 content 为空(预算全给了思考) | 空响应自动重试 3 次 |
 
-### 7.2 developer role 400
+效果:修复前实体抽取全 0;修复后三篇文档 17/16/19 实体。
 
-pi-agent 库按 OpenAI 新规范发 `"role": "developer"`,ark 的 glm-5.3
-只认 system/assistant/user/tool → 400,且 pi-agent 把错误吞了,
-表现为"提问没有回复"(0.2s 返回空 answer)。排查手段:monkey-patch
-`globalThis.fetch` 打日志,抓到真实请求体和 400 响应。修复:`.env` 加
-`PI_AGENT_REASONING=false`(库的 useDeveloperRole 条件是
-`model.reasoning && compat.supportsDeveloperRole`,关 reasoning 即回落
-system 角色;模型原生思考不受影响,只改请求格式)。
+## 8.2 一个"无声失败"的排查故事(面试讲最出彩)
 
-### 7.3 环境变量污染
+**现象**:网页上提问,AI 秒回空白,毫无报错。
 
-`~/.bashrc` export 的 LLM_*/NEO4J_* 优先级高于 `.env`(compose 变量
-替换规则:shell env > .env),导致容器拿到内网 LLM 地址、密码错位。
-修复:注释 bashrc + `.env` 与实际值对齐。**教训:基础设施调试先查
-环境变量三层(shell/.env/容器 env)的一致性。**
+**排查链**:
+1. webapp 日志一切正常,LLM 调用 HTTP 200
+2. pi-agent 日志只有一行 `TypeError: fetch failed`
+3. 在 pi-agent 容器里 monkey-patch `globalThis.fetch`,
+   打印每个请求的 URL 和响应 → 抓到:对 LLM 的请求返回 **400**,
+   错误体写着 *role `developer` 不合法,只支持 system/assistant/user/tool*
+4. 根因:pi-agent 底层库按 OpenAI 新规范发系统提示词(角色名 developer),
+   而 ark 网关的 glm-5.3 只认传统 system;库把 400 吞了,
+   上层表现为"正常完成但内容为空"
+
+**修复**:一行环境变量 `PI_AGENT_REASONING=false`——库的逻辑是
+"reasoning 模型才用 developer 角色",关掉开关即回落 system;
+模型自身的思考能力不受影响,只是请求格式变了。
+
+**方法论**:无声失败 > 有声失败。抓包/打桩是终极手段;
+"HTTP 200 不代表成功"要看响应体。
+
+## 8.3 环境变量三层污染
+
+**现象**:容器里的 LLM 地址和 .env 里写的完全不一样。
+**根因**:`~/.bashrc` 里 export 过旧的 LLM_* 变量,而 docker compose 的
+变量优先级是 **shell 环境 > .env 文件**——shell 里跑 compose,
+旧变量悄悄覆盖了配置。
+**修复**:注释 bashrc 导出项;.env 与实际值对齐。
+**方法论**:基础设施行为诡异时,先查三层环境变量(shell/配置文件/容器)
+的一致性。
 
 ---
 
-## 8. 测试与验证策略
+# 第九部分:测试与验证体系
 
-### 8.1 数字速查
+## 9.1 四层验证
 
-- 后端 pytest:227 passed / 2 skipped(本分支新增 52 个,版本测试文件 47 个)
-- 前端 vitest:8 个 api-client 测试
-- 迁移:真实容器启动验证(4 列 + document_changes 表自动创建/回填)
-- E2E:同名两版上传、PUT 编辑、diff API、改名候选、confirm 挂链、
-  检索单一命中、图谱边验证(cypher-shell 直查)
+| 层 | 手段 | 数量/结果 |
+|---|---|---|
+| 单元 | pytest,mock 到底 | 227 passed(版本相关 47 个) |
+| 前端 | vitest | 8 passed |
+| 集成 | 真实五容器 | 迁移自动执行/版本链/diff/检索 |
+| 端到端 | API 实调 + cypher-shell 直查图 | 见 9.3 |
 
-### 8.2 单测设计模式(面试可讲)
+## 9.2 单测怎么写的(可复用的模式)
 
-- **Neo4j mock**:Fake Driver/Session 记录 Cypher 语句和参数,断言
-  语句包含关键子句(如 `coalesce(ld.is_current, true)`)——不依赖真实库
-- **分层替身**:FakeSession 记录 session.add 的 ORM 对象;
-  RecordingAnalyzer/RecordingNeo4j 记录调用参数,验证编排正确性
-- **不 mock 的部分**:analyzer 的纯解析函数直接用各种畸形 JSON 直测
-  (围栏/截断/未知 status/非 dict 条目)
-- **测试数据反例**:标定测试最初用重复串文本,相似度全错——
-  换真实多样文本才对。**经验:相似度类算法的测试数据必须模拟真实分布,
-  合成数据会系统性扭曲统计量**
+- **Neo4j mock**:假 Driver/Session 记录收到的 Cypher 语句和参数,
+  断言语句包含关键子句(如 `coalesce(ld.is_current, true)`)——
+  不需要真实图库就能验证查询逻辑
+- **编排层替身**:RecordingAnalyzer/RecordingNeo4j 只记调用参数,
+  验证"管线按正确顺序调了正确的东西"
+- **纯函数直测**:JSON 解析器直接喂各种畸形输入
+- **测试数据的坑**:标定相似度阈值时,最初用重复串文本
+  ("条款一"×40)做测试数据,相似度全部失真——重复文本的 shingle
+  集合会坍缩(重复片段只贡献一个唯一 shingle),Jaccard 被系统性压低。
+  换真实多样文本后标定才成立。
+  **结论:统计类算法的测试数据必须模拟真实分布**
 
-### 8.3 端到端验证发现的 bug 清单(证明 E2E 不可替代)
+## 9.3 端到端验证清单(每条都真跑过)
 
-| bug | 单测为何没拦住 |
+| 验证项 | 结果 |
 |---|---|
-| hindsight adapter 缺版本方法 → 500 | 协议是手写代理,mock 的 FakeKB 直接实现了方法 |
-| hindsight 5 路径检索缺 is_current → 旧版泄漏 | 两条检索管线独立,单测各测各的 |
-| pi-agent 吞 400 → 空回复 | 库内部行为,应用层测试覆盖不到 |
-| Neo4j 删除死锁/孤儿节点 | 并发时序,功能测试串行执行 |
+| 同名两版上传 | 版本号递增/组继承/旧版退位 ✓ |
+| LLM diff | 7 条结构化变更,三种状态标注全对 ✓ |
+| 编辑保存 | 生成 v2,diff 精准 ✓ |
+| 改名+修改上传 | 0.784 返回候选,不自动挂链 ✓ |
+| 确认挂链 | v1→v2 边建立,diff 补记 ✓ |
+| 检索当前版 | 旧版内容零泄漏 ✓ |
+| 删除清理 | 版本边/Change 节点/chunks 级联 ✓ |
+
+## 9.4 只有端到端才能发现的 bug(证明 mock 的边界)
+
+| bug | 单测为什么没拦住 |
+|---|---|
+| adapter 缺方法透传 → 500 | mock 的假引擎直接实现了方法,装饰器层的遗漏测不到 |
+| 检索旧版泄漏 | 双管线独立,各自的单测都是对的 |
+| pi-agent 吞 400 | 第三方库内部行为 |
+| 删除死锁/孤儿节点 | 并发时序,串行测试无法触发 |
 
 ---
 
-## 9. 面试追问预案(Q&A)
+# 第十部分:诚实交底——已知局限与演进
 
-**Q: 为什么不用 Git 管理文档版本?**
-A: Git 管字节序列,不懂语义。我们要的是 LLM 可消费的结构化 diff
-(added/removed/modified 条目)、实体级影响分析、以及与检索域
-(is_current)的联动——这些都是应用层语义,Git 给不了。
-当然,反过来说,如果用户场景是代码/配置文件,Git 是对的;我们的场景是
-办公文档(pdf/pptx/中文 markdown)。
+主动说出来 + 给出方案,永远好过被问出来:
 
-**Q: 相似度为什么不用 embedding?**
-A: 三点:①上传是同步路径,shingle 零延迟零成本,embedding 要一次
-ollama 往返;②确定性可解释,阈值可标定可审计,embedding 相似度
-受模型/维度影响会漂移;③改名检测需要的是"文本重叠"信号而不是
-"语义相似"——两份同主题不同文档 embedding 也很像(0.4x 的模板陷阱
-在 embedding 空间里可能更高)。代价是对同义改写不鲁棒,已列为演进方向。
-
-**Q: 版本链为什么不用链表式 next 指针而用 version_of(父指针)?**
-A: 版本只追加不重排,父指针天然表达"我修改自谁";取全链一条
-`WHERE version_group = X ORDER BY version_number` 即可,不需要遍历。
-Neo4j 侧反而存 NEXT_VERSION 边(子指针),因为图查询方向灵活,
-两种表示各取所长。
-
-**Q: document_changes 为什么按 doc_id 幂等覆盖(先 delete 再 insert)?**
-A: 重试/确认重复时不能产生重复变更记录;`(doc_id, from_version)`
-唯一约束兜底,业务代码先删后插保持简单。
-
-**Q: 如果两个用户并发上传同名文件?**
-A: 当前实现 select-then-insert 存在竞态窗口(都查到无 parent → 各自成 v1)。
-危害低(产生两个组,后续 confirm 可合并)。正确做法:documents 加
-`(version_group, version_number)` 部分唯一索引 + ON CONFLICT 重试。
-这是已知局限,诚实说出来并给出方案比假装没有强。
-
-**Q: LLM diff 的成本?**
-A: 每次 2 次调用(overview + 各 chunk)+ 新版时 1 次 diff 调用;
-diff 输入 8000 字截断,输出 max_tokens 8192,glm-5.3 实测每次
-约 1-3k completion tokens。索引期成本 ≈ GraphRAG 常规入库 + ~15%。
-
-**Q: 系统瓶颈在哪?**
-A: 入库管线是 LLM 密集(每 chunk 一次分析),大文档分钟级;
-检索路径 B(Hindsight)每次 query 都全量 RRF;图谱存活过滤的
-EXISTS 子查询在实体多时是 O(E×D)——数据量上来后应物化
-"存活 sources"或在退版时重写实体 sources(当前选择查询时过滤,
-因为退版是低频操作,读多写少)。
-
-**Q: 这个项目和 Microsoft GraphRAG 的区别?**
-A: MS GraphRAG 是社区检测+全局摘要的离线索引,每次更新全量重算;
-我们是增量 MERGE(实体 sources 聚合)+ 版本感知 + 编辑传播,
-且检索是两段漏斗(reranker 守门)不是图遍历优先。
-
-**Q: 最大的技术风险?**
-A: LLM 抽取质量决定图谱质量(0 实体问题我们真实遇到过);
-单点依赖推理模型的行为怪癖(developer role/空响应/截断);
-以及双管线架构的一致性税——每加横切能力要改 N 处,
-长期应该收敛成单一检索抽象。
+1. **并发安全(最该修的)**:
+   - ingest 是"先查后插",两个同名上传并发会各自成组 → 方案:
+     (version_group, version_number) 部分唯一索引 + ON CONFLICT 重试
+   - 删除时 Neo4j 偶发死锁(多事务锁同批节点)→ 方案:重试退避
+   - 图谱投影 worker 事件乱序产生孤儿节点 → 方案:删除事件加屏障
+     或投影侧 tombstone(墓碑标记)
+2. **改名识别不识同义改写**("配送费"→"运输费"相似度会掉到阈值下)
+   → 演进:embedding 作第二信号,双通道投票
+3. **横向传播止于检查报告**:确认修改后不自动改关联文档
+   → 演进:自动传播 + 人工审核队列
+4. **意图路由是提示词级**,没有量化评测 → 演进:参照 VersionQA
+   构建中文版本化文档基准
 
 ---
 
-## 10. 局限与演进(主动交底)
+# 第十一部分:一页速查(面试前 5 分钟)
 
-1. **并发安全**:ingest 的 select-then-insert 竞态(见 Q&A)、
-   删除死锁重试、投影事件乱序 —— 三个并发问题都有明确修复方案未做
-2. **改名识别对语义改写不鲁棒**:同义重写 < 0.70 会漏判(保守取舍)
-3. **意图路由是提示词级**:未做独立的版本意图分类器和量化评测
-   (VersionQA 式中文基准是自然的下一步)
-4. **横向传播只到"检查报告"**:确认后不自动修改关联文档
-   (OneEdit 式自动传播 + 人工审核队列是演进方向)
-5. **前端版本 UI 最小化**:列表 v{n} 徽标 + 详情版本历史,无版本对比视图
-
-## 11. 一页速查(面试前 5 分钟看这个)
-
-- 栈:FastAPI BFF + React 19 SPA + MCP + pi-agent(TS);
-  Postgres/pgvector(HNSW cosine) + Neo4j 5 + Ollama(nomic-embed-text 768d);
-  glm-5.3 via ark
-- 管线:extract → chunk → analyze(overview+chunk) → embed → 写库 → 图谱
-- 图谱三层:L1 chunk / L2 MERGE-by-name+sources 聚合 / L3 file_relations
-- 检索漏斗:vector top-20 → reranker(阈值 0.01, top-10)→ graph enrich
-- 版本:version_group/number/of/is_current + document_changes;
-  退位不删;diff = LLM 结构化(added/removed/modified)
-- 改名识别:hash(自动)→ 0.3×标题+0.7×内容 shingle Jaccard ≥0.70(候选待确认)
-- 编辑:propose(定位+提议+影响面)→ confirm → edit(新版本)
-- 关键数:阈值 0.70(修订≥0.71 / 模板≤0.44)/ 227 tests / 12 commits / +2522 行
-- 最深坑:双管线检索域不一致、developer-role 400、JSON 截断修复、
-  Neo4j 删除死锁
+- **一句话**:GraphRAG 知识库 + 纵向版本管理 + 横向修改传播
+- **栈**:FastAPI BFF + React 19;Postgres/pgvector(HNSW) + Neo4j 5 +
+  Ollama(nomic-embed-text);glm-5.3;MCP;docker compose 五容器
+- **入库管线**:提取→分块→LLM分析(摘要+实体/关系)→向量化→落库→三层图谱→版本diff
+- **图谱三层**:L1 块级事实 / L2 MERGE-by-name 全局聚合(sources 溯源)/ L3 跨文档关联
+- **检索漏斗**:向量 top-20 → Reranker 阈值 0.01 守门 top-10 → 图谱增强
+- **双管线**:GraphRAG(精确)+ Hindsight(记忆/反思),横切规则要改两处
+- **版本模型**:version_group/number/of/is_current + document_changes;退位不删除
+- **改名识别**:hash(自动挂)→ 0.3×标题+0.7×内容 shingle Jaccard ≥0.70(候选待确认)
+- **编辑传播**:定位(top-3 块)→ 提议(LLM 起草+冲突报告)→ 影响面(共享实体文档)→ 确认落库
+- **关键数字**:阈值 0.70(修订≥0.71/模板≤0.44)/ 实测 0.784 / 227 测试 / 13 提交 / +2522 行
+- **三大坑**:双管线检索泄漏、developer-role 400 无声失败、JSON 截断修复
+- **文献**:VersionRAG(版本感知RAG)/ Graphiti(边失效)/ LightRAG(增量合并)/ OneEdit(提议-验证)
