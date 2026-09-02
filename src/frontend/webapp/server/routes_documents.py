@@ -77,37 +77,47 @@ async def get_document(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
     return out
 
 
-@router.post("/upload")
-async def upload_document(file: UploadFile = File(...), kb: KnowledgeBase = Depends(deps.get_kb)):
-    if not file.filename:
-        raise _upload_error(
+def _upload_file_error(filename: str | None, data: bytes) -> tuple[int, dict] | None:
+    """上传文件的通用校验：返回 (status, detail) 或 None（通过）。"""
+    if not filename:
+        return (
             400,
-            "missing_filename",
-            "未读取到文件名",
-            "请重新选择本地文件后再试。",
-            retryable=False,
+            {
+                "code": "missing_filename",
+                "message": "未读取到文件名",
+                "suggestion": "请重新选择本地文件后再试。",
+                "retryable": False,
+            },
         )
-    extension = Path(file.filename).suffix.lower()
+    extension = Path(filename).suffix.lower()
     if extension not in SUPPORTED_UPLOAD_EXTENSIONS:
         formats = "、".join(sorted(SUPPORTED_UPLOAD_EXTENSIONS))
-        raise _upload_error(
+        return (
             400,
-            "unsupported_file_type",
-            f"不支持 {extension or '无扩展名'} 文件",
-            f"请选择以下格式：{formats}。",
-            retryable=False,
+            {
+                "code": "unsupported_file_type",
+                "message": f"不支持 {extension or '无扩展名'} 文件",
+                "suggestion": f"请选择以下格式：{formats}。",
+                "retryable": False,
+            },
         )
-    data = await file.read()
     if not data:
-        raise _upload_error(
+        return (
             400,
-            "empty_file",
-            "文件内容为空",
-            "请确认文件包含内容，保存后重新选择该文件。",
-            retryable=False,
+            {
+                "code": "empty_file",
+                "message": "文件内容为空",
+                "suggestion": "请确认文件包含内容，保存后重新选择该文件。",
+                "retryable": False,
+            },
         )
+    return None
+
+
+async def _ingest_uploaded(kb: KnowledgeBase, filename: str, data: bytes):
+    """调用入库并归一错误为 (status, detail)；成功返回 DocumentRef。"""
     try:
-        ref = await kb.ingest(IngestSource(name=file.filename, data=data))
+        return await kb.ingest(IngestSource(name=filename, data=data))
     except ValueError as exc:
         raise _upload_error(
             400,
@@ -117,7 +127,7 @@ async def upload_document(file: UploadFile = File(...), kb: KnowledgeBase = Depe
             retryable=False,
         ) from exc
     except Exception as exc:
-        logger.exception("上传文件 %s 失败", file.filename)
+        logger.exception("上传文件 %s 失败", filename)
         raise _upload_error(
             503,
             "upload_service_unavailable",
@@ -125,7 +135,42 @@ async def upload_document(file: UploadFile = File(...), kb: KnowledgeBase = Depe
             "请稍后直接重试；如果持续失败，请检查数据库和存储服务状态。",
             retryable=True,
         ) from exc
+
+
+@router.post("/upload")
+async def upload_document(file: UploadFile = File(...), kb: KnowledgeBase = Depends(deps.get_kb)):
+    data = await file.read()
+    error = _upload_file_error(file.filename, data)
+    if error is not None:
+        status_code, detail = error
+        raise HTTPException(status_code, detail=detail)
+    ref = await _ingest_uploaded(kb, file.filename, data)
     return asdict(ref)
+
+
+@router.post("/upload/batch")
+async def upload_documents_batch(
+    files: list[UploadFile] = File(...), kb: KnowledgeBase = Depends(deps.get_kb)
+):
+    """批量上传：逐文件校验并隔离失败，一个坏文件不影响其余文件。
+
+    空请求（0 个文件）由 FastAPI 在参数校验层以 422 拒绝。
+    """
+    items: list[dict] = []
+    for file in files:
+        data = await file.read()
+        error = _upload_file_error(file.filename, data)
+        if error is not None:
+            _status, detail = error
+            items.append({"ok": False, "error": detail})
+            continue
+        try:
+            ref = await _ingest_uploaded(kb, file.filename, data)
+        except HTTPException as exc:
+            items.append({"ok": False, "error": exc.detail})
+            continue
+        items.append({"ok": True, "document": asdict(ref)})
+    return {"items": items}
 
 
 @router.put("/{doc_id}/content")

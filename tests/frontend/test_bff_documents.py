@@ -164,3 +164,30 @@ def test_get_document_not_found(client):
     # FakeKnowledgeBase.get_document returns None -> 404
     res = c.get("/api/documents/00000000-0000-0000-0000-000000000000")
     assert res.status_code == 404
+
+
+def test_upload_batch_mixes_success_and_failure(client):
+    c, kb = client
+    res = c.post(
+        "/api/documents/upload/batch",
+        files=[
+            ("files", ("good.md", b"# ok", "text/markdown")),
+            ("files", ("bad.zip", b"x", "application/zip")),
+            ("files", ("empty.md", b"", "text/markdown")),
+        ],
+    )
+    assert res.status_code == 200
+    items = res.json()["items"]
+    assert [i["ok"] for i in items] == [True, False, False]
+    assert items[0]["document"]["title"] == "good.md"
+    assert items[0]["document"]["status"] == "indexed"
+    assert items[1]["error"]["code"] == "unsupported_file_type"
+    assert items[2]["error"]["code"] == "empty_file"
+    assert list(kb.raw.values()) == [b"# ok"]
+
+
+def test_upload_batch_rejects_empty_request(client):
+    c, _ = client
+    # 0 个文件在 FastAPI 参数校验层被拒绝（required File 字段缺失）
+    res = c.post("/api/documents/upload/batch", files=[])
+    assert res.status_code == 422
