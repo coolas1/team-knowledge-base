@@ -16,8 +16,9 @@ Postgres+pgvector (vectors/chunks) and Neo4j (entity/relation graph).
   - `chunker.py`, `analyzer.py`, `embedder.py`, `reranker.py` - chunk, analyze, embed, rerank.
   - `store/` - persistence (`models.py`, `postgres.py`).
 - `graphrag/` - GraphRAG orchestration: `backend.py` (store impl; optional
-  memory enrichment + retain-hook wiring in `build()`), `pipeline.py` (ingest),
-  `_search.py` (retrieval).
+  memory enrichment + retain-hook wiring in `build()`), `pipeline.py` (ingest;
+  parallel chunk analysis + batched Neo4j writes, bounded by
+  `engine.ingest.*` concurrency knobs), `_search.py` (retrieval).
 - `memory/` - memory (Hindsight) capabilities, selected by the
   `engine.memory.*` flags in `config/app.yaml`:
   - retain pipeline (`retain.py`, `retain_hook.py`) - runs at index time.
