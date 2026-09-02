@@ -12,6 +12,7 @@ from src.engine.interface import (
     KnowledgeSource,
 )
 
+from .config import HindsightOptions
 from .providers import ProjectHindsightProviders
 from .repository import PostgresMemoryRepository
 from .service import HindsightService
@@ -154,6 +155,13 @@ class HindsightQueryService:
 
 
 def build_query_service() -> HindsightQueryService:
+    from config.settings import settings
+
     repository = PostgresMemoryRepository()
-    core = HindsightService(repository, ProjectHindsightProviders())
+    options = HindsightOptions(
+        recall_min_semantic=settings.hindsight_recall_min_semantic,
+        recall_min_score=settings.hindsight_recall_min_score,
+        rerank_semantic_margin=settings.hindsight_rerank_semantic_margin,
+    )
+    core = HindsightService(repository, ProjectHindsightProviders(), options)
     return HindsightQueryService(core)
