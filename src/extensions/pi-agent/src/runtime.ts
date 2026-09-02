@@ -21,6 +21,10 @@ import { TkbMcpClient } from "./mcp-client.js";
 import { buildModelServices, type ModelServices } from "./model.js";
 import { buildSkillReadTool } from "./skill-reader.js";
 import { enabledTkbTools } from "./tools.js";
+import {
+  buildConversationMemoryExtension,
+  extractCompletedConversationTurn,
+} from "./conversation-memory.js";
 
 const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent。
 
@@ -82,6 +86,14 @@ export interface RuntimeHealth {
   model: { provider: string; id: string; baseUrl: string };
   mcp: ContractReport;
   loadedSessions: number;
+  conversationMemory?: {
+    enabled: boolean;
+    pending: number;
+    processing: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+  };
 }
 
 export interface AgentRuntimeApi {
@@ -208,6 +220,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
   private modelServices?: ModelServices;
   private resourceLoader?: DefaultResourceLoader;
   private contract?: ContractReport;
+  private conversationMemoryStatus?: RuntimeHealth["conversationMemory"];
   private readonly skillsDir: string;
 
   constructor(
@@ -221,7 +234,11 @@ export class PiAgentRuntime implements AgentRuntimeApi {
   async initialize(): Promise<void> {
     await mkdir(this.config.dataDir, { recursive: true });
     await mkdir(this.config.sessionDir, { recursive: true });
-    this.contract = await validateEngineContract(this.mcpClient);
+    this.contract = await validateEngineContract(
+      this.mcpClient,
+      undefined,
+      this.adapterConfig.conversationMemoryEnabled,
+    );
     if (!this.contract.ok && this.adapterConfig.strictContract) {
       throw new Error(`TKB MCP contract mismatch: ${formatContractErrors(this.contract)}`);
     }
@@ -234,6 +251,9 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
+      extensionFactories: [
+        buildConversationMemoryExtension(this.mcpClient, this.adapterConfig),
+      ],
       systemPromptOverride: () => SYSTEM_PROMPT,
     });
     await this.resourceLoader.reload();
@@ -241,8 +261,30 @@ export class PiAgentRuntime implements AgentRuntimeApi {
 
   async health(): Promise<RuntimeHealth> {
     this.ensureInitialized();
-    const mcp = await validateEngineContract(this.mcpClient);
+    const mcp = await validateEngineContract(
+      this.mcpClient,
+      undefined,
+      this.adapterConfig.conversationMemoryEnabled,
+    );
     this.contract = mcp;
+    if (this.adapterConfig.conversationMemoryEnabled) {
+      try {
+        this.conversationMemoryStatus = await this.mcpClient.getConversationMemoryStatus({
+          timeoutMs: this.adapterConfig.defaultToolTimeoutMs,
+        });
+      } catch {
+        this.conversationMemoryStatus = {
+          enabled: true,
+          pending: 0,
+          processing: 0,
+          completed: 0,
+          failed: 1,
+          cancelled: 0,
+        };
+      }
+    } else {
+      this.conversationMemoryStatus = { enabled: false, pending: 0, processing: 0, completed: 0, failed: 0, cancelled: 0 };
+    }
     return {
       status: mcp.ok ? "ok" : "degraded",
       model: {
@@ -252,6 +294,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       },
       mcp,
       loadedSessions: this.sessions.size,
+      conversationMemory: this.conversationMemoryStatus,
     };
   }
 
@@ -298,6 +341,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     managed.lastAccess = Date.now();
     managed.budget.reset();
     managed.active = {};
+    const messageCountBeforePrompt = managed.session.messages.length;
     const citations = new Set<string>();
     if (!managed.session.sessionName) {
       const firstUserMessage = conversationMessagesFrom(managed.session.messages).find(
@@ -335,6 +379,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       if (managed.budget.limitReached) {
         throw new RuntimeLimitError("tool_calls", "agent exceeded its tool call limit");
       }
+      await this.enqueueCompletedTurn(managed, messageCountBeforePrompt);
       const answer = [...managed.session.messages]
         .reverse()
         .find((candidate) => (candidate as { role?: unknown }).role === "assistant");
@@ -414,6 +459,33 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       customTools: tools,
     });
     return { session, budget, lastAccess: Date.now() };
+  }
+
+  private async enqueueCompletedTurn(
+    managed: ManagedSession,
+    messageCountBeforePrompt: number,
+  ): Promise<void> {
+    if (!this.adapterConfig.conversationMemoryEnabled) return;
+    if (managed.active?.reason) return;
+    const turn = extractCompletedConversationTurn(
+      managed.session.messages,
+      managed.session.sessionManager.getEntries(),
+      messageCountBeforePrompt,
+    );
+    if (!turn) return;
+    try {
+      await this.mcpClient.enqueueConversationTurn(
+        {
+          sessionId: managed.session.sessionId,
+          turnId: turn.turnId,
+          userText: turn.userText,
+          assistantText: turn.assistantText,
+        },
+        { timeoutMs: this.adapterConfig.defaultToolTimeoutMs },
+      );
+    } catch {
+      // Retention is failure-isolated from the completed answer.
+    }
   }
 
   private async loadSession(id: string): Promise<ManagedSession> {

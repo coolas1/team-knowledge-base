@@ -11,7 +11,15 @@ function client() {
 
 describe("TKB Pi tools", () => {
   it("maps all eleven engine MCP tools", () => {
-    expect(buildAllTkbTools({ client: client() })).toHaveLength(11);
+    const tools = buildAllTkbTools({ client: client() });
+    expect(tools).toHaveLength(11);
+    expect(tools.map((tool) => tool.name)).not.toEqual(
+      expect.arrayContaining([
+        "recall_conversation_memory",
+        "enqueue_conversation_turn",
+        "forget_conversation_memory",
+      ]),
+    );
   });
 
   it("enables only the safe curated tools by default", () => {

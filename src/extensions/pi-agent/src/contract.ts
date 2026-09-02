@@ -18,6 +18,15 @@ export const ENGINE_MCP_CONTRACT: Record<string, ToolContract> = {
   generate_document: { required: ["format", "title", "content"] },
 };
 
+export const CONVERSATION_MEMORY_MCP_CONTRACT: Record<string, ToolContract> = {
+  recall_conversation_memory: { required: ["query"] },
+  enqueue_conversation_turn: {
+    required: ["session_id", "turn_id", "user_text", "assistant_text"],
+  },
+  forget_conversation_memory: { required: ["session_id"] },
+  get_conversation_memory_status: { required: [] },
+};
+
 export interface ContractReport {
   ok: boolean;
   missingTools: string[];
@@ -25,14 +34,20 @@ export interface ContractReport {
   availableTools: string[];
 }
 
-export function inspectEngineContract(tools: McpToolInfo[]): ContractReport {
+export function inspectEngineContract(
+  tools: McpToolInfo[],
+  includeConversationMemory = false,
+): ContractReport {
+  const expected = includeConversationMemory
+    ? { ...ENGINE_MCP_CONTRACT, ...CONVERSATION_MEMORY_MCP_CONTRACT }
+    : ENGINE_MCP_CONTRACT;
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
-  const missingTools = Object.keys(ENGINE_MCP_CONTRACT).filter(
+  const missingTools = Object.keys(expected).filter(
     (name) => !byName.has(name),
   );
   const schemaErrors: string[] = [];
 
-  for (const [name, contract] of Object.entries(ENGINE_MCP_CONTRACT)) {
+  for (const [name, contract] of Object.entries(expected)) {
     const tool = byName.get(name);
     if (!tool) continue;
     const properties = (tool.inputSchema.properties ?? {}) as Record<string, unknown>;
@@ -59,8 +74,12 @@ export function inspectEngineContract(tools: McpToolInfo[]): ContractReport {
 export async function validateEngineContract(
   client: TkbMcpClient,
   signal?: AbortSignal,
+  includeConversationMemory = false,
 ): Promise<ContractReport> {
-  return inspectEngineContract(await client.listTools(signal));
+  return inspectEngineContract(
+    await client.listTools(signal),
+    includeConversationMemory,
+  );
 }
 
 export function formatContractErrors(report: ContractReport): string {

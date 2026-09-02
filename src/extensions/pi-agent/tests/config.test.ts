@@ -9,6 +9,13 @@ describe("loadTkbAdapterConfig", () => {
     expect(config.enableLegacySearch).toBe(false);
     expect(config.enableWriteTools).toBe(false);
     expect(config.enableFullGraph).toBe(false);
+    expect(config.conversationMemoryEnabled).toBe(false);
+    expect(config.conversationMemoryRecallTimeoutMs).toBe(5000);
+    expect(config.conversationMemoryRecallLimit).toBe(5);
+    expect(config.conversationMemoryContextBudgetChars).toBe(6000);
+    expect(config.conversationMemoryRetentionContext).toBe(
+      "Completed team conversation turn",
+    );
   });
 
   it("accepts explicit timeouts and feature switches", () => {
@@ -22,6 +29,30 @@ describe("loadTkbAdapterConfig", () => {
     expect(config.connectTimeoutMs).toBe(2500);
     expect(config.deepToolTimeoutMs).toBe(9000);
     expect(config.enableWriteTools).toBe(true);
+  });
+
+  it("validates conversation memory limits and context", () => {
+    const config = loadTkbAdapterConfig({
+      TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS: "1200",
+      TKB_CONVERSATION_MEMORY_RECALL_LIMIT: "10",
+      TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS: "4000",
+      TKB_CONVERSATION_MEMORY_RETENTION_CONTEXT: "Support conversation",
+    });
+    expect(config.conversationMemoryEnabled).toBe(true);
+    expect(config.conversationMemoryRecallTimeoutMs).toBe(1200);
+    expect(config.conversationMemoryRecallLimit).toBe(10);
+    expect(config.conversationMemoryContextBudgetChars).toBe(4000);
+    expect(config.conversationMemoryRetentionContext).toBe("Support conversation");
+
+    for (const [key, value] of [
+      ["TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS", "0"],
+      ["TKB_CONVERSATION_MEMORY_RECALL_LIMIT", "21"],
+      ["TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS", "-1"],
+      ["TKB_CONVERSATION_MEMORY_RECALL_LIMIT", "1.5"],
+    ] as const) {
+      expect(() => loadTkbAdapterConfig({ [key]: value })).toThrow(key);
+    }
   });
 });
 
