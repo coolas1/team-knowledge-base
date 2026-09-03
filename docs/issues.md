@@ -14,7 +14,7 @@ this file adds what the live run verified and what it newly surfaced.
 | ---- | ------- | -------- |
 | PR #3 — recall relevance gate | `6323149c` | Gate is live on the recall path: `/api/search` and `/api/query` both ride it; BM25 bypass observed (kw>0 chunks retained); unit tests pass in the 307-green suite. |
 | PR #4 — indexed-file edit (was 405) | `c3293534` | End-to-end probe: PUT `/api/documents/{id}/content` on an **indexed** doc → 200 → pending→processing→indexed → new content top hit in search. Pre-fix 405 is gone. |
-| Three-module restructure | `64cf4a98` | Native `uvicorn src.tkb.server.app:app` boots and served the whole run; `uv run pytest` → **307 passed, 7 skipped, 0 failed**; engine/plugin/tkb cross-imports all exercised. |
+| Three-module restructure | `64cf4a98` | Native `uvicorn src.frontend.webapp.server.app:app` boots and served the whole run; `uv run pytest` → **307 passed, 7 skipped, 0 failed**; engine/plugin/tkb cross-imports all exercised. |
 | Parallel ingest | `c5c6e789`…`4218e140` | Live integration tests: `test_batch_entities_match_single_upserts` ✅, `test_ingest_batch_roundtrip` ✅ (13 s). Corpus ingest visibly paired docs at the same second (`doc_concurrency: 2`); BFF batch upload endpoint live-tested. |
 
 ## Open issues
@@ -66,7 +66,7 @@ this file adds what the live run verified and what it newly surfaced.
 - **N9 · P3 — `benchmark/ingest.sh` targets a dead endpoint.** Posts to
   `/api/engine/ingest` on :8002; the current BFF exposes
   `/api/documents/upload[/batch]` on :8000. Update the script.
-- **N10 · P2 — Deployment drift.** The prebuilt `team-kb-backend:latest`
+- **N10 · P2 — Deployment drift.** The prebuilt `team-kb-webapp:latest`
   image is 7 days / 10 commits behind `main` (predates PR #3/#4 remap and
   parallel ingest); a `podman compose up --build` rebuild took long enough
   to be abandoned. Cache the heavy layers or publish images on merge.
@@ -74,7 +74,7 @@ this file adds what the live run verified and what it newly surfaced.
 ### Carried over — `docs/upstream-pr-followups.md` (all still open)
 
 - PR #3: P1 deep-mode `elif` gate contradiction (confirmed still present at
-  `src/engine/memory/recall.py:267-270` — deep mode with a reranker score
+  `src/engine/hindsight_components/recall.py:267-270` — deep mode with a reranker score
   skips the semantic gate entirely; note N1 makes the semantics matter even
   more); P2 repurposed BFF happy-path test; P3 not-found string ×3; P4
   Aliyun mirror baked into the Containerfile.

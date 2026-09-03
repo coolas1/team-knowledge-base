@@ -9,7 +9,7 @@ Paths use the current layout. Check items off as they land.
 ## PR #3 — recall relevance threshold gate
 
 - [ ] **P1 — Deep-mode gate logic contradicts its own documentation.**
-  In `_filter_by_relevance` (`src/engine/memory/recall.py`), the `elif`
+  In `_filter_by_relevance` (`src/engine/hindsight_components/recall.py`), the `elif`
   makes the semantic and score gates mutually exclusive: in deep mode with
   a reranker score present, only `final_score >= recall_min_score` (0.4)
   applies. Because `final_score` is clamped to
@@ -34,8 +34,8 @@ Paths use the current layout. Check items off as they land.
   below-gate fixtures.
 - [ ] **P3 — Not-found string hardcoded in three places.**
   `"知识库中未找到与该问题相关的内容。"` appears in
-  `src/engine/memory/reflect.py`, `src/plugin/tkb/skills/search_and_answer/skill.py`,
-  and `src/plugin/tkb/skills/reflective_search/skill.py`. Extract a shared
+  `src/engine/hindsight_components/reflect.py`, `src/agent/tkb/skills/search_and_answer/skill.py`,
+  and `src/agent/tkb/skills/reflective_search/skill.py`. Extract a shared
   constant.
 - [ ] **P4 — Containerfile bakes the Aliyun PyPI mirror into the shared
   build.** `sed`-remapping `uv.lock` URLs to `mirrors.aliyun.com` and the
@@ -48,14 +48,14 @@ Paths use the current layout. Check items off as they land.
 - [ ] **P1 — No transcript size bound on retention (design promised one).**
   `design.md` lists "bound transcript size" as the mitigation for LLM
   extraction cost, but `enqueue_conversation_turn`
-  (`src/engine/memory/conversation_service.py`) validates only
+  (`src/engine/hindsight_components/conversation_service.py`) validates only
   non-emptiness — no cap on the engine side, the queue, or the pi-agent
   runtime. A pasted ~200k-char document becomes one retained Document,
   ~50+ chunks, each hitting the LLM extractor, per turn, with the feature
   enabled by default in Compose. Fix: cap turn content in
   `enqueue_conversation_turn` (e.g. 50–100k chars), truncate with a
-  marker; optionally cap client-side in `src/tkb/agent/src/runtime.ts`
-  too. (Compare: `src/plugin/artifacts.py` already caps content at 250k.)
+  marker; optionally cap client-side in `src/extensions/pi-agent/src/runtime.ts`
+  too. (Compare: `src/agent/artifacts.py` already caps content at 250k.)
 - [ ] **P2 — Fire-and-forget reindex tasks can die silently.**
   `edit_content` / `reingest` in the graphrag backend (plus the
   pre-existing `ingest` site — four total) schedule
@@ -69,14 +69,14 @@ Paths use the current layout. Check items off as they land.
   (docx/pdf/pptx via reportlab/python-pptx, up to 250k chars) inside the
   async handler; the deployment runs BFF + engine + plugin in one
   process, so a large generation stalls all requests. Fix: wrap in
-  `asyncio.to_thread` in `src/plugin/tkb/mcp/server.py`.
+  `asyncio.to_thread` in `src/agent/tkb/mcp/server.py`.
 - [ ] **P4 — Artifacts have no retention policy.**
   Generated files accumulate forever in the `artifactsdata` volume. Add a
   TTL or max-size sweep (e.g. delete artifacts older than N days on
   worker poll).
 - [ ] **P5 — Silent failure swallowing where the design promises
   diagnostics.** `recallMemoryForPrompt` and `enqueueCompletedTurn`
-  (`src/tkb/agent/src/conversation-memory.ts`, `runtime.ts`) catch all
+  (`src/extensions/pi-agent/src/conversation-memory.ts`, `runtime.ts`) catch all
   errors with no logging — recall outages are indistinguishable from "no
   memories". `health()` also fabricates `failed: 1` when the status call
   errors, conflating "queue has a failed job" with "status unavailable".
