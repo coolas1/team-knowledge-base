@@ -1,6 +1,9 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 build/
 dist/
 wheels/
@@ -25,6 +28,9 @@ node_modules/
 src/frontend/webapp/client/dist/
 src/frontend/webapp/client/node_modules/
 src/frontend/webapp/client/tsconfig.tsbuildinfo
+
+# Runtime data
+.pi-agent-data/
 
 # Local-only generated docs (plugin plan files; not shared)
 docs/superpowers/

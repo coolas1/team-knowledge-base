@@ -1,7 +1,7 @@
 """Engine module contract: the KnowledgeBase Protocol + shared types.
 
 This is THE contract every engine implementation must satisfy. Adapters
-(cli.py, mcp.py) and consumers (agent engine_client, frontend BFF) program
+(cli.py) and consumers (plugin skills/MCP server, host BFF) program
 against these types, never against a concrete backend.
 """
 

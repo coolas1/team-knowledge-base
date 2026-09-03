@@ -1,13 +1,14 @@
-"""BFF document routes: browse, upload, edit, retry, and delete."""
+"""Webapp host document routes: call the in-process KnowledgeBase."""
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
-from src.agent.interface import EngineClient
+from src.engine.interface import IngestSource, KnowledgeBase
 from src.frontend.webapp.server import deps
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -54,28 +55,30 @@ class EditContentRequest(BaseModel):
 
 @router.get("")
 async def list_documents(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    file_type: str | None = None,
-    status: str | None = None,
-    engine: EngineClient = Depends(deps.get_engine),
+    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+    file_type: str | None = None, status: str | None = None,
+    kb: KnowledgeBase = Depends(deps.get_kb),
 ):
-    return await engine.list_documents(page, page_size, file_type, status)
+    return await kb.list_documents(page, page_size, file_type, status)
 
 
 @router.get("/{doc_id}")
-async def get_document(doc_id: str, engine: EngineClient = Depends(deps.get_engine)):
-    out = await engine.get_document(doc_id)
-    if out.get("error"):
-        raise HTTPException(404, out["error"])
+async def get_document(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
+    out = await kb.get_document(doc_id)
+    if out is None:
+        raise HTTPException(404, f"文档不存在: {doc_id}")
+
+    # Pipeline progress: in-memory (engine runs in-process).
+    from src.engine.graphrag.progress import get_progress
+
+    p = get_progress(doc_id)
+    if p is not None:
+        out["pipeline"] = p
     return out
 
 
 @router.post("/upload")
-async def upload_document(
-    file: UploadFile = File(...),
-    engine: EngineClient = Depends(deps.get_engine),
-):
+async def upload_document(file: UploadFile = File(...), kb: KnowledgeBase = Depends(deps.get_kb)):
     if not file.filename:
         raise _upload_error(
             400,
@@ -104,7 +107,7 @@ async def upload_document(
             retryable=False,
         )
     try:
-        return await engine.ingest(file.filename, data)
+        ref = await kb.ingest(IngestSource(name=file.filename, data=data))
     except ValueError as exc:
         raise _upload_error(
             400,
@@ -122,27 +125,25 @@ async def upload_document(
             "请稍后直接重试；如果持续失败，请检查数据库和存储服务状态。",
             retryable=True,
         ) from exc
+    return asdict(ref)
 
 
 @router.put("/{doc_id}/content")
 async def edit_document_content(
     doc_id: str,
     body: EditContentRequest,
-    engine: EngineClient = Depends(deps.get_engine),
+    kb: KnowledgeBase = Depends(deps.get_kb),
 ):
     try:
-        return await engine.edit_content(doc_id, body.content)
+        return asdict(await kb.edit_content(doc_id, body.content))
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/{doc_id}/retry")
-async def retry_document(
-    doc_id: str,
-    engine: EngineClient = Depends(deps.get_engine),
-):
+async def retry_document(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
     try:
-        return await engine.reingest(doc_id)
+        return asdict(await kb.reingest(doc_id))
     except ValueError as exc:
         raise _upload_error(
             400,
@@ -163,5 +164,6 @@ async def retry_document(
 
 
 @router.delete("/{doc_id}")
-async def delete_document(doc_id: str, engine: EngineClient = Depends(deps.get_engine)):
-    return await engine.remove(doc_id)
+async def delete_document(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
+    await kb.remove(doc_id)
+    return {"removed": doc_id}

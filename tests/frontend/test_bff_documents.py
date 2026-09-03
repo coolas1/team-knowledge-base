@@ -2,7 +2,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.frontend.webapp.server import app as app_mod, deps
-from src.agent.engine_client import InProcessEngineClient
 from tests.conftest import FakeKnowledgeBase
 
 
@@ -14,8 +13,7 @@ def client(monkeypatch):
     monkeypatch.setattr(deps, "startup", _noop)
     monkeypatch.setattr(deps, "shutdown", _noop)
     kb = FakeKnowledgeBase()
-    fake = InProcessEngineClient(kb)
-    app_mod.app.dependency_overrides[deps.get_engine] = lambda: fake
+    app_mod.app.dependency_overrides[deps.get_kb] = lambda: kb
     app_mod.app.dependency_overrides[deps.get_plugin] = lambda: None
     with TestClient(app_mod.app) as c:
         yield c, kb
@@ -95,7 +93,7 @@ def test_upload_service_failure_is_retryable(client, monkeypatch):
     async def fail_ingest(_name, _data):
         raise RuntimeError("database unavailable")
 
-    engine = app_mod.app.dependency_overrides[deps.get_engine]()
+    engine = app_mod.app.dependency_overrides[deps.get_kb]()
     monkeypatch.setattr(engine, "ingest", fail_ingest)
 
     res = c.post(
@@ -163,6 +161,6 @@ def test_delete_document(client):
 
 def test_get_document_not_found(client):
     c, _ = client
-    # FakeKnowledgeBase.get_document returns None -> EngineClient returns {"error": ...}
+    # FakeKnowledgeBase.get_document returns None -> 404
     res = c.get("/api/documents/00000000-0000-0000-0000-000000000000")
     assert res.status_code == 404

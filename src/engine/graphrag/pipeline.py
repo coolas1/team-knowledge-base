@@ -1,4 +1,4 @@
-"""文件入库 Pipeline：提取 → 分块 → LLM 分析 → Embedding → 写入存储。"""
+"""文件入库 Pipeline：提取 -> 分块 -> LLM 分析 -> Embedding -> 写入存储。"""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from src.engine.components.analyzer import Analyzer, ChunkAnalysisResult
 from src.engine.components.chunker import chunk_text
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
+from src.engine.graphrag.progress import clear_progress, set_progress
 from src.engine.interface import DocumentIndexHook
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ class Pipeline:
         title: str,
         file_type: str,
     ) -> None:
-        """处理新上传的文件：提取 → 分块 → 分析 → embedding → 写入。
+        """处理新上传的文件：提取 -> 分块 -> 分析 -> embedding -> 写入。
 
         幂等性：通过 content_hash (SHA256) 判断，内容未变则跳过。
         """
@@ -71,14 +72,17 @@ class Pipeline:
 
             try:
                 # 3. 文本提取
+                set_progress(str(doc_id), "extracting", "提取文本")
                 raw_text = registry.extract(file_path)
                 logger.info(f"文档 {doc_id} 提取完成, {len(raw_text)} 字符")
 
                 # 4. 文本分块（先分块再分析）
+                set_progress(str(doc_id), "chunking", "文本分块")
                 chunks = chunk_text(raw_text)
                 logger.info(f"文档 {doc_id} 分块完成: {len(chunks)} chunks")
 
                 # 5. 文档级 overview + file_relations
+                set_progress(str(doc_id), "overview", "生成文档摘要")
                 doc_analysis = await self._analyzer.analyze_overview(raw_text, title)
                 logger.info(
                     f"文档 {doc_id} overview 生成完成, "
@@ -86,18 +90,28 @@ class Pipeline:
                 )
 
                 # 6. 逐 Chunk LLM 分析
+                set_progress(
+                    str(doc_id), "analyzing_chunks",
+                    f"分析实体 0/{len(chunks)}", 0, len(chunks),
+                )
                 chunk_analyses: list[ChunkAnalysisResult] = []
                 for chunk in chunks:
                     ca = await self._analyzer.analyze_chunk(
                         chunk.text, title, chunk.index
                     )
                     chunk_analyses.append(ca)
+                    set_progress(
+                        str(doc_id), "analyzing_chunks",
+                        f"分析实体 {chunk.index + 1}/{len(chunks)}",
+                        chunk.index + 1, len(chunks),
+                    )
                     logger.info(
                         f"文档 {doc_id} chunk[{chunk.index}]: "
                         f"{len(ca.entities)} 实体, {len(ca.relations)} 关系"
                     )
 
                 # 7. Embedding
+                set_progress(str(doc_id), "embedding", "生成嵌入向量")
                 if chunks:
                     texts = [c.text for c in chunks]
                     embeddings = await embedder.embed_batch(texts)
@@ -105,6 +119,7 @@ class Pipeline:
                     embeddings = []
 
                 # 8. 写入 Postgres（overview 使用 doc_analysis.overview）
+                set_progress(str(doc_id), "writing_postgres", "写入数据库")
                 await session.execute(
                     Chunk.__table__.delete().where(Chunk.doc_id == doc_id)  # type: ignore[union-attr]
                 )
@@ -137,6 +152,7 @@ class Pipeline:
                 logger.info(f"文档 {doc_id} Postgres 写入完成")
 
                 # 9. 写入 Neo4j（三层图谱）
+                set_progress(str(doc_id), "writing_neo4j", "写入知识图谱")
                 await self._write_graph(
                     doc_id=str(doc_id),
                     title=title,
@@ -152,9 +168,11 @@ class Pipeline:
                     content=raw_text,
                     file_type=file_type,
                 )
+                clear_progress(str(doc_id))
                 logger.info(f"文档 {doc_id} Pipeline 完成 ✓")
 
             except Exception as e:
+                clear_progress(str(doc_id))
                 logger.error(f"文档 {doc_id} Pipeline 失败: {e}", exc_info=True)
                 await session.execute(
                     update(Document)
@@ -182,16 +200,27 @@ class Pipeline:
 
             try:
                 # 重新分块 + 逐 chunk 分析
+                set_progress(str(doc_id), "chunking", "文本分块")
                 chunks = chunk_text(new_text)
                 chunk_analyses: list[ChunkAnalysisResult] = []
+                set_progress(
+                    str(doc_id), "analyzing_chunks",
+                    f"分析实体 0/{len(chunks)}", 0, len(chunks),
+                )
                 for chunk in chunks:
                     ca = await self._analyzer.analyze_chunk(
                         chunk.text, title, chunk.index
                     )
                     chunk_analyses.append(ca)
+                    set_progress(
+                        str(doc_id), "analyzing_chunks",
+                        f"分析实体 {chunk.index + 1}/{len(chunks)}",
+                        chunk.index + 1, len(chunks),
+                    )
 
                 if chunks:
                     texts = [c.text for c in chunks]
+                    set_progress(str(doc_id), "embedding", "生成嵌入向量")
                     embeddings = await embedder.embed_batch(texts)
                 else:
                     embeddings = []
@@ -201,6 +230,7 @@ class Pipeline:
                 )
 
                 # 更新 overview
+                set_progress(str(doc_id), "overview", "生成文档摘要")
                 doc_analysis = await self._analyzer.analyze_overview(new_text, title)
 
                 doc_uri = f"{doc_id}:{title}"
@@ -230,6 +260,7 @@ class Pipeline:
                 await session.commit()
 
                 # 更新 Neo4j（先清理旧图谱数据，防止过时实体残留）
+                set_progress(str(doc_id), "writing_neo4j", "写入知识图谱")
                 await self._neo4j.delete_document_graph(str(doc_id))
                 await self._neo4j.upsert_document_node(
                     doc_id=str(doc_id),
@@ -262,7 +293,7 @@ class Pipeline:
                             source=source,
                         )
 
-                # L3: file_relations → Document↔Document 边
+                # L3: file_relations -> Document↔Document 边
                 if doc_analysis.file_relations:
                     await self._write_file_relations(
                         str(doc_id), doc_analysis.file_relations, session
@@ -274,10 +305,12 @@ class Pipeline:
                     content=new_text,
                     file_type=doc.file_type,
                 )
+                clear_progress(str(doc_id))
 
                 logger.info(f"文档 {doc_id} re-index 完成 ✓")
 
             except Exception as e:
+                clear_progress(str(doc_id))
                 logger.error(f"文档 {doc_id} re-index 失败: {e}", exc_info=True)
                 await session.execute(
                     update(Document)
@@ -361,7 +394,7 @@ class Pipeline:
                     source=source,
                 )
 
-        # L3: file_relations → Document↔Document 边
+        # L3: file_relations -> Document↔Document 边
         if file_relations:
             await self._write_file_relations(doc_id, file_relations, session)
 

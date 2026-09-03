@@ -1,9 +1,8 @@
 """ConfiguredLlmClient: an LlmClient backed by the chat LLM configured via the
 LLM_* env vars in .env (provider/model/base_url/api_key). Used by the webapp BFF
-to synthesize answers/summaries when invoking agent skills in-process.
+to synthesize answers/summaries when invoking plugin skills in-process.
 
-(The codex harness, when run as its own process, supplies its own LLM or lets
-codex synthesize - skills tolerate ctx.llm=None.)
+(Skills tolerate ctx.llm=None and fall back to returning raw context/overview.)
 """
 from __future__ import annotations
 

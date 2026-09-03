@@ -9,20 +9,23 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
+import httpx
+
 from sqlalchemy import or_, select
 
 from src.engine.components.store.models import Document
 
-from .models import HindsightDocumentState
-from .providers import ProjectHindsightProviders
-from .repository import PostgresMemoryRepository
-from .service import HindsightService
-from .types import RetainResult
+from src.engine.hindsight_components.models import HindsightDocumentState
+from src.engine.hindsight_components.providers import ProjectHindsightProviders
+from src.engine.hindsight_components.repository import PostgresMemoryRepository
+from src.engine.hindsight_components.service import HindsightService
+from src.engine.hindsight_components.types import RetainResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +128,32 @@ class PostgresCandidateSource:
         ]
 
 
+class HttpCandidateSource:
+    """Fetch backfill candidates from the engine server via HTTP."""
+
+    def __init__(self, engine_url: str) -> None:
+        self._base = engine_url.rstrip("/")
+        self._client = httpx.AsyncClient(timeout=60.0)
+
+    async def list_candidates(
+        self,
+        *,
+        document_id: str | None = None,
+        force: bool = False,
+    ) -> list[BackfillCandidate]:
+        params: dict[str, str] = {}
+        if document_id:
+            params["document_id"] = document_id
+        if force:
+            params["force"] = "true"
+        resp = await self._client.get(
+            f"{self._base}/api/engine/hindsight/backfill/candidates",
+            params=params,
+        )
+        resp.raise_for_status()
+        return [BackfillCandidate(**item) for item in resp.json()]
+
+
 async def run_backfill(
     source: CandidateSource,
     service: RetainService,
@@ -222,13 +251,21 @@ async def _run(args: argparse.Namespace) -> int:
     if args.document_id is not None:
         uuid.UUID(args.document_id)
 
+    engine_url = os.getenv("ENGINE_URL")
+    if engine_url:
+        raise RuntimeError(
+            "ENGINE_URL is no longer supported: memory backfill runs in-process"
+        )
     from src.engine.components.store.postgres import init_db
 
     await init_db()
     repository = PostgresMemoryRepository()
+    source = PostgresCandidateSource()
+
+    service = HindsightService(repository, ProjectHindsightProviders())
     report = await run_backfill(
-        PostgresCandidateSource(),
-        HindsightService(repository, ProjectHindsightProviders()),
+        source,
+        service,
         repository,
         document_id=args.document_id,
         force=args.force,

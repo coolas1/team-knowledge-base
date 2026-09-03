@@ -6,10 +6,11 @@ import asyncio
 import logging
 from typing import Protocol
 
-from .providers import ProjectHindsightProviders
-from .repository import PostgresMemoryRepository
-from .service import HindsightService
-from .types import RetainInput
+from src.engine.hindsight_components.providers import ProjectHindsightProviders
+from src.engine.hindsight_components.protocols import MemoryRepository
+from src.engine.hindsight_components.repository import PostgresMemoryRepository
+from src.engine.hindsight_components.service import HindsightService
+from src.engine.hindsight_components.types import RetainInput
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,11 @@ class HindsightRetainHook:
             logger.exception("Hindsight cleanup failed for %s", document_id)
 
 
-def build_retain_hook(*, max_concurrent: int = 1) -> HindsightRetainHook:
-    repository = PostgresMemoryRepository()
+def build_retain_hook(
+    *,
+    max_concurrent: int = 1,
+    repository: MemoryRepository | None = None,
+) -> HindsightRetainHook:
+    repository = repository or PostgresMemoryRepository()
     service = HindsightService(repository, ProjectHindsightProviders())
     return HindsightRetainHook(service, repository, max_concurrent=max_concurrent)

@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from src.agent.interface import EngineClient
+from src.engine.interface import KnowledgeQuery, KnowledgeQueryRequest
 from src.frontend.webapp.server import deps
 
 router = APIRouter(tags=["query"])
@@ -31,17 +31,21 @@ class KnowledgeQueryBody(BaseModel):
 @router.post("/query")
 async def query_knowledge(
     body: KnowledgeQueryBody,
-    engine: EngineClient = Depends(deps.get_engine),
+    query_service: KnowledgeQuery | None = Depends(deps.get_query),
 ):
+    if query_service is None:
+        raise HTTPException(status_code=503, detail="Hindsight 查询服务未初始化")
     try:
-        return await engine.query(
-            body.query,
-            strategy=body.strategy,
-            mode=body.mode,
-            top_k=body.top_k,
-            needs_answer=body.needs_answer,
+        result = await query_service.query(
+            KnowledgeQueryRequest(
+                query=body.query,
+                strategy=body.strategy,
+                mode=body.mode,
+                top_k=body.top_k,
+                needs_answer=body.needs_answer,
+            )
         )
-    except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        from dataclasses import asdict
+        return asdict(result)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error

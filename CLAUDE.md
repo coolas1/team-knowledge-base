@@ -6,8 +6,8 @@ with reranking, and query through a CLI, an MCP server, or a web UI.
 
 Three independently switchable modules live under `src/`:
 
-- **engine** — GraphRAG storage/retrieval (Postgres+pgvector, Neo4j), CLI, MCP.
-- **agent** — stateless skills + LLM orchestration (see `src/agent/CLAUDE.md`).
+- **engine** — GraphRAG storage/retrieval (Postgres+pgvector, Neo4j), CLI.
+- **agent** — plugin-based skills + LLM orchestration (see `src/agent/CLAUDE.md`).
 - **frontend** — FastAPI BFF + React SPA (see `src/frontend/CLAUDE.md`).
 
 ## Commands
@@ -19,9 +19,8 @@ Run from the repo root unless noted. Python tooling uses `uv`.
 - **Integration tests:** `RUN_INTEGRATION=1 uv run pytest` (live Postgres+Neo4j+Ollama)
 - **Lint:** `uv run ruff check`
 - **Format:** `uv run ruff format`
-- **Engine MCP server:** `uv run python -m src.engine.mcp` (port 8000, `/mcp`)
 - **Engine CLI:** `uv run python -m src.engine.cli recall --query "..."`
-- **BFF server:** `uv run uvicorn src.frontend.webapp.server.app:app --reload`
+- **BFF server:** `uv run uvicorn src.frontend.webapp.server.app:app --reload` (serves `/mcp`)
 - **SPA (dev):** `cd src/frontend/webapp/client && npm install && npm run dev` (proxies `/api` → :8000)
 - **SPA tests:** `cd src/frontend/webapp/client && npm test`
 
@@ -32,6 +31,10 @@ Run from the repo root unless noted. Python tooling uses `uv`.
    copy `.env.example` to `.env` and set `OLLAMA_BASE_URL` first.
 3. The reranker is configurable via `RERANKER_PROVIDER`: `http` (external
    `/v1/rerank` API, default), `local` (torch — needs `--extra reranker`), or `none`.
+4. Memory capabilities (retain, reflective query, graph worker) toggle via
+   `engine.memory.*` in `config/app.yaml`.
+5. Ingest parallelism is bounded by `engine.ingest.chunk_concurrency` and
+   `engine.ingest.doc_concurrency` in `config/app.yaml` (1 = serial).
 
 ## Coding Standards
 

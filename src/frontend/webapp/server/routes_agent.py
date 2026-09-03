@@ -1,4 +1,5 @@
-"""BFF agent-skill routes: invoke harness-agnostic skills in-process."""
+"""Webapp host agent routes: invoke plugin skills in-process AND proxy to the
+optional Pi Agent runtime (session management, SSE streaming)."""
 from __future__ import annotations
 
 import json
@@ -11,16 +12,45 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from src.agent.interface import EngineClient, LlmClient, SkillContext
+from src.agent.interface import LlmClient, SkillContext
 from src.frontend.webapp.server import deps
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 
+# ── In-process skill routes ──────────────────────────────────────────
+
 class AskRequest(BaseModel):
     query: str
     top_k: int = 10
 
+
+def _get_skill(name: str):
+    plugin = deps.get_plugin()
+    skill = plugin.skills.get(name)
+    if skill is None:
+        raise HTTPException(404, f"skill not found: {name}")
+    return skill
+
+
+@router.post("/ask")
+async def ask(body: AskRequest, kb=Depends(deps.get_kb), llm: LlmClient | None = Depends(deps.get_llm)):
+    skill = _get_skill("search_and_answer")
+    ctx = SkillContext(kb=kb, llm=llm, params={"query": body.query, "top_k": body.top_k})
+    return (await skill.run(ctx)).output
+
+
+@router.post("/ingest-summarize")
+async def ingest_summarize(file: UploadFile = File(...), kb=Depends(deps.get_kb), llm: LlmClient | None = Depends(deps.get_llm)):
+    if not file.filename:
+        raise HTTPException(400, "文件名不能为空")
+    data = await file.read()
+    skill = _get_skill("ingest_and_summarize")
+    ctx = SkillContext(kb=kb, llm=llm, params={"name": file.filename, "data": data})
+    return (await skill.run(ctx)).output
+
+
+# ── Pi Agent proxy routes ────────────────────────────────────────────
 
 class AgentMessageRequest(BaseModel):
     message: str
@@ -86,26 +116,6 @@ async def _relay_sse(
     finally:
         await response.aclose()
         await client.aclose()
-
-
-def _find_skill(name: str):
-    plugin = deps.get_plugin()
-    for s in plugin.skills():
-        if s.name == name:
-            return s
-    raise HTTPException(404, f"skill not found: {name}")
-
-
-@router.post("/ask")
-async def ask(
-    body: AskRequest,
-    engine: EngineClient = Depends(deps.get_engine),
-    llm: LlmClient | None = Depends(deps.get_llm),
-):
-    skill = _find_skill("search_and_answer")
-    ctx = SkillContext(engine=engine, llm=llm, params={"query": body.query, "top_k": body.top_k})
-    result = await skill.run(ctx)
-    return result.output
 
 
 @router.post("/sessions", status_code=201)
@@ -176,18 +186,3 @@ async def stream_agent_message(session_id: str, body: AgentMessageRequest):
             "X-Accel-Buffering": "no",
         },
     )
-
-
-@router.post("/ingest-summarize")
-async def ingest_summarize(
-    file: UploadFile = File(...),
-    engine: EngineClient = Depends(deps.get_engine),
-    llm: LlmClient | None = Depends(deps.get_llm),
-):
-    if not file.filename:
-        raise HTTPException(400, "文件名不能为空")
-    data = await file.read()
-    skill = _find_skill("ingest_and_summarize")
-    ctx = SkillContext(engine=engine, llm=llm, params={"name": file.filename, "data": data})
-    result = await skill.run(ctx)
-    return result.output

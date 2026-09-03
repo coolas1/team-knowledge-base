@@ -4,9 +4,9 @@ from src.engine.components.extractors.base import BaseExtractor
 
 
 class MarkdownExtractor(BaseExtractor):
-    """提取 Markdown (.md) 和纯文本 (.txt) 文件。"""
+    """提取 Markdown (.md)、纯文本 (.txt) 和 CSV (.csv) 文件。"""
 
-    SUPPORTED_EXTENSIONS = {".md", ".txt", ".markdown"}
+    SUPPORTED_EXTENSIONS = {".md", ".txt", ".markdown", ".csv"}
 
     def extract(self, file_path: Path) -> str:
         self._ensure_file_exists(file_path)

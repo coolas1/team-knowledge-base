@@ -1,18 +1,26 @@
-"""TKB-owned Hindsight retain, recall, and reflect core.
+"""Hindsight engine components: memory storage, retrieval, and data model.
 
-This package contains only Hindsight-specific memory behaviour.  Document
-ingestion, file extraction, database sessions, transports, and GraphRAG remain
-owned by the existing project and are connected in later integration batches.
+This package owns Postgres memory tables, the Neo4j memory graph projection,
+and the multi-arm recall engine. It depends only on engine internals and
+configs - never on the plugin layer.
 """
 
-from .config import HindsightOptions
-from .service import HindsightService
-from .types import RecallResult, ReflectResult, RetainResult
+from src.engine.hindsight_components.config import HindsightOptions
+from src.engine.hindsight_components.types import (
+    DocumentMemoryState,
+    RecallCandidate,
+    RecallResult,
+    ReflectResult,
+    RetainPlan,
+    RetainResult,
+)
 
 __all__ = [
     "HindsightOptions",
-    "HindsightService",
+    "DocumentMemoryState",
+    "RecallCandidate",
     "RecallResult",
     "ReflectResult",
+    "RetainPlan",
     "RetainResult",
 ]

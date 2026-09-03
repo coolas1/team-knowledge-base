@@ -10,35 +10,28 @@ def test_appconfig_defaults():
     cfg = AppConfig()
     assert cfg.engine.impl == "graphrag"
     assert cfg.engine.config == "config/engine/graphrag"
-    assert cfg.agent.harness == "codex"
-    assert cfg.agent.skills == ["search_and_answer", "ingest_and_summarize"]
-    assert cfg.agent.memory == {"impl": None}
-    assert cfg.frontend.impl == "webapp"
-    assert cfg.webapp.engine_access == "inprocess"
-    assert cfg.hindsight.enabled is False
-    assert cfg.hindsight.retain_max_concurrent == 1
+    assert cfg.plugin.impl == "tkb"
+    assert cfg.engine.memory.enabled is False
+    assert cfg.engine.memory.retain_max_concurrent == 1
 
 
 def test_load_config_reads_app_yaml(tmp_path: Path):
     app_yaml = tmp_path / "app.yaml"
     app_yaml.write_text(
         "engine:\n  impl: graphrag\n  config: config/engine/graphrag\n"
-        "agent:\n  harness: codex\n  skills: [search_and_answer]\n"
-        "  memory: {impl: null}\nfrontend:\n  impl: webapp\n"
-        "webapp:\n  engine_access: mcp\n"
-        "hindsight:\n  enabled: true\n  retain_max_concurrent: 2\n"
+        "  memory:\n    enabled: true\n    retain_max_concurrent: 2\n"
+        "plugin:\n  impl: tkb\n"
     )
     cfg = load_config(app_yaml)
-    assert cfg.webapp.engine_access == "mcp"
-    assert cfg.agent.skills == ["search_and_answer"]
-    assert cfg.hindsight.enabled is True
-    assert cfg.hindsight.retain_max_concurrent == 2
+    assert cfg.plugin.impl == "tkb"
+    assert cfg.engine.memory.enabled is True
+    assert cfg.engine.memory.retain_max_concurrent == 2
 
 
-def test_hindsight_retain_concurrency_must_be_positive():
+def test_memory_retain_concurrency_must_be_positive():
     with pytest.raises(ValueError):
         AppConfig.model_validate(
-            {"hindsight": {"enabled": True, "retain_max_concurrent": 0}}
+            {"engine": {"memory": {"enabled": True, "retain_max_concurrent": 0}}}
         )
 
 
@@ -57,7 +50,7 @@ def test_infra_settings_postgres_dsn():
         postgres_db="d",
     )
     assert s.postgres_dsn == "postgresql+asyncpg://u:p@h:5433/d"
-    assert s.hindsight_graph_worker_enabled is False
+    assert s.hindsight_graph_worker_enabled is True
     assert s.hindsight_graph_worker_poll_seconds == 1.0
     assert s.hindsight_graph_worker_lease_seconds == 300
     assert s.hindsight_graph_worker_max_attempts == 10

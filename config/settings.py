@@ -34,9 +34,9 @@ class InfraSettings(BaseSettings):
     reranker_base_url: str = ""
     reranker_api_key: str = ""
 
-    # Disposable Neo4j projection worker. It remains opt-in so PostgreSQL-only
-    # Hindsight deployments keep their current runtime behaviour.
-    hindsight_graph_worker_enabled: bool = False
+    # Disposable Neo4j projection worker. Kill switch for deployments without
+    # Neo4j; the primary control is the engine.memory.graph_worker app flag.
+    hindsight_graph_worker_enabled: bool = True
     hindsight_graph_worker_poll_seconds: float = Field(default=1.0, gt=0)
     hindsight_graph_worker_lease_seconds: int = Field(default=300, ge=1)
     hindsight_graph_worker_max_attempts: int = Field(default=10, ge=1)

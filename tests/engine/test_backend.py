@@ -9,6 +9,7 @@ from src.engine.graphrag import backend as backend_mod
 from src.engine.graphrag.backend import (
     GraphRAGBackend,
     _remove_upload_directory,
+    _safe_filename,
     build,
 )
 
@@ -279,6 +280,24 @@ def test_remove_upload_directory_ignores_missing_directory(tmp_path):
     _remove_upload_directory(uuid.uuid4(), tmp_path / "uploads")
 
     assert tmp_path.exists()
+
+
+def test_safe_filename_strips_directory_components():
+    # Names carrying a relative path (e.g. a multipart filename) must collapse
+    # to a single component so the on-disk write never nests into a missing dir.
+    assert _safe_filename("research/coral-resilience-paper.pdf") == (
+        "coral-resilience-paper.pdf"
+    )
+    assert _safe_filename("a/b/c.md") == "c.md"
+
+
+def test_safe_filename_blocks_path_traversal():
+    # A caller-supplied name must never escape the per-doc upload directory.
+    assert _safe_filename("../etc/passwd") == "passwd"
+    assert _safe_filename("/etc/passwd") == "passwd"
+    assert _safe_filename("..") == "document"
+    assert _safe_filename("/") == "document"
+    assert _safe_filename("") == "document"
 
 
 def test_remove_upload_directory_unlinks_symlink_without_following(tmp_path):

@@ -2,7 +2,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.frontend.webapp.server import app as app_mod, deps
-from src.agent.engine_client import InProcessEngineClient
 from src.engine.interface import GraphData, GraphNode
 from tests.conftest import FakeKnowledgeBase
 
@@ -16,8 +15,7 @@ def client(monkeypatch):
     monkeypatch.setattr(deps, "shutdown", _noop)
     kb = FakeKnowledgeBase()
     kb.graph = GraphData(nodes=[GraphNode(name="Acme", type="Company")])
-    fake = InProcessEngineClient(kb)
-    app_mod.app.dependency_overrides[deps.get_engine] = lambda: fake
+    app_mod.app.dependency_overrides[deps.get_kb] = lambda: kb
     app_mod.app.dependency_overrides[deps.get_plugin] = lambda: None
     with TestClient(app_mod.app) as c:
         yield c

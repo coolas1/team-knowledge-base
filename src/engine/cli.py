@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from config.schema import load_config
-from src.engine.config import EngineConfig, build_engine
+from src.engine.config import build_engine, engine_config_from_app
 from src.engine.interface import KnowledgeBase
 
 
@@ -88,10 +88,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    app_cfg = load_config()
-    impl = args.engine_impl or app_cfg.engine.impl
-    config_dir = Path(args.config_dir) if args.config_dir else Path(app_cfg.engine.config)
-    kb = build_engine(EngineConfig(impl=impl, config_dir=config_dir))
+    ecfg = engine_config_from_app(load_config())
+    if args.engine_impl:
+        ecfg.impl = args.engine_impl
+    if args.config_dir:
+        ecfg.config_dir = Path(args.config_dir)
+    kb = build_engine(ecfg)
     return asyncio.run(_run(kb, args))
 
 

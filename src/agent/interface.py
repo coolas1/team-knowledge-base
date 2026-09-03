@@ -1,26 +1,26 @@
-"""Agent module contracts.
-
-Skills are harness-agnostic: callable in-process (by the webapp BFF) and
-wrappable by any harness plugin (codex first). Skills call an EngineClient,
-never engine internals. Memory is interface-only (impl deferred).
-"""
-
+"""Plugin contract: data + a loader (replaces the old AgentPlugin/Skill/
+EngineClient Protocols). Skills/Hooks are data/code the loader produces."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Awaitable, Callable, Protocol
+
+from src.engine.interface import KnowledgeBase, KnowledgeQuery
+
+if TYPE_CHECKING:
+    from src.agent.policy import HookPolicy
 
 
 class LlmClient(Protocol):
-    """Minimal LLM interface a skill uses for synthesis (answer/summary)."""
-
+    """Minimal LLM interface a skill uses for synthesis."""
     async def complete(self, prompt: str) -> str: ...
 
 
 @dataclass
 class SkillContext:
-    engine: "EngineClient"
+    kb: KnowledgeBase
     llm: LlmClient | None = None
+    query: KnowledgeQuery | None = None
     params: dict = field(default_factory=dict)
 
 
@@ -30,51 +30,30 @@ class SkillResult:
     output: dict
 
 
-class Skill(Protocol):
+@dataclass
+class LoadedSkill:
     name: str
     description: str
-
-    async def run(self, ctx: SkillContext) -> SkillResult: ...
-
-
-class EngineClient(Protocol):
-    """Uniform client over in-process / MCP transports. Skills call this,
-    never engine internals. All methods return JSON-ish dicts."""
-
-    async def recall(
-        self,
-        query: str,
-        top_k: int = 10,
-        mode: Literal["auto", "fast", "deep"] = "auto",
-        needs_answer: bool = False,
-    ) -> dict: ...
-    async def query(
-        self,
-        query: str,
-        strategy: Literal["auto", "recall", "reflect"] = "auto",
-        mode: Literal["fast", "deep"] = "deep",
-        top_k: int = 10,
-        needs_answer: bool = True,
-    ) -> dict: ...
-    async def ingest(self, name: str, data: bytes) -> dict: ...
-    async def edit_content(self, doc_id: str, content: str) -> dict: ...
-    async def reingest(self, doc_id: str) -> dict: ...
-    async def get_document(self, doc_id: str) -> dict: ...
-    async def get_graph(self, entity: str | None = None) -> dict: ...
-    async def get_neighbors(self, entity: str) -> dict: ...
-    async def list_documents(
-        self,
-        page: int = 1,
-        page_size: int = 20,
-        file_type: str | None = None,
-        status: str | None = None,
-    ) -> dict: ...
-    async def remove(self, doc_id: str) -> dict: ...
+    inputs: dict
+    run: Callable[[SkillContext], Awaitable[SkillResult]]
 
 
-class AgentPlugin(Protocol):
-    """What each harness implementation exposes."""
+@dataclass
+class McpSpec:
+    endpoint: str | None = None
 
-    harness: str
 
-    def skills(self) -> list[Skill]: ...
+@dataclass
+class PluginManifest:
+    name: str
+    version: str = "0.1.0"
+    mcp: McpSpec = field(default_factory=McpSpec)
+    skills: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LoadedPlugin:
+    manifest: PluginManifest
+    skills: dict[str, LoadedSkill]
+    hooks: "HookPolicy"
+    mcp: McpSpec | None = None

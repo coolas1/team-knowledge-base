@@ -1,5 +1,14 @@
 const BASE = '/api'
 
+export interface PipelineProgress {
+  stage: string
+  detail: string
+  current: number
+  total: number
+  started_at: number  // epoch seconds
+  updated_at: number
+}
+
 export interface Document {
   id: string
   title: string
@@ -15,6 +24,7 @@ export interface Document {
   memory_count?: number
   memory_link_count?: number
   chunk_count?: number
+  pipeline?: PipelineProgress
   created_at?: string
   updated_at?: string
 }

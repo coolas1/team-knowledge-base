@@ -6,7 +6,7 @@ from src.engine.hindsight_components.query import HindsightQueryService
 from src.engine.hindsight_components.types import RecallResult, ReflectResult
 from src.engine.interface import KnowledgeQueryRequest
 
-from .fakes import candidate
+from src.engine.hindsight_components.tests.fakes import candidate
 
 
 class FakeCore:
@@ -133,3 +133,20 @@ async def test_query_validates_input() -> None:
         await service.query(KnowledgeQueryRequest(query=" "))
     with pytest.raises(ValueError, match="top_k"):
         await service.query(KnowledgeQueryRequest(query="q", top_k=0))
+
+
+async def test_build_query_service_accepts_repository(monkeypatch):
+    """build_query_service should accept an optional repository parameter."""
+    from src.engine.hindsight_components.query import build_query_service
+    from src.engine.hindsight_components.tests.fakes import FakeRepository
+
+    repo = FakeRepository()
+
+    # Mock HindsightService so construction doesn't require external providers
+    monkeypatch.setattr(
+        "src.engine.hindsight_components.query.HindsightService",
+        lambda r, p, options=None: object(),
+    )
+
+    service = build_query_service(repository=repo)
+    assert service is not None

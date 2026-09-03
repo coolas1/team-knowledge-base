@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload  # noqa: F401  (kept for parity with original)
 
+from src.engine.components.analyzer import Analyzer
 from src.engine.components.extractors.registry import ExtractorRegistry
 from src.engine.components.store.models import (
     Chunk,
@@ -36,6 +37,8 @@ from src.engine.interface import (
     RecallRequest,
     RecallResult,
 )
+from src.engine.hindsight_components.enrich import MemoryStateEnricher
+from src.engine.hindsight_components.hook import build_retain_hook
 
 UPLOAD_DIR = Path("uploads")
 
@@ -50,6 +53,20 @@ def _remove_upload_directory(
         doc_dir.unlink()
     elif doc_dir.is_dir():
         shutil.rmtree(doc_dir)
+
+
+def _safe_filename(name: str) -> str:
+    """Collapse a caller-supplied name to a single path component.
+
+    Strips any directory or relative-path component so a multipart filename
+    cannot nest into an uncreated subdirectory (FileNotFoundError) or escape
+    the per-doc upload directory (path traversal). Falls back to "document"
+    when the name has no usable component.
+    """
+    base = Path(name).name
+    if base in ("", ".", ".."):
+        return "document"
+    return base
 
 
 def _to_ref(doc: Document, chunk_count: int = 0, overview: str | None = None) -> DocumentRef:
@@ -68,9 +85,20 @@ class GraphRAGBackend:
 
     capabilities = Capabilities(graph=True, partial_update=True, multimodal=True)
 
-    def __init__(self, neo4j: Neo4jClient, pipeline: Pipeline) -> None:
+    def __init__(
+        self,
+        neo4j: Neo4jClient,
+        pipeline: Pipeline,
+        state_enricher: MemoryStateEnricher | None = None,
+    ) -> None:
         self._neo4j = neo4j
         self._pipeline = pipeline
+        self._enricher = state_enricher
+
+    async def _enrich(self, ref: DocumentRef) -> DocumentRef:
+        if self._enricher is not None:
+            await self._enricher.enrich_ref(ref)
+        return ref
 
     # ── ingest / reingest / remove ───────────────────────────────
 
@@ -83,7 +111,7 @@ class GraphRAGBackend:
         doc_id = uuid.uuid4()
         doc_dir = UPLOAD_DIR / str(doc_id)
         doc_dir.mkdir(parents=True, exist_ok=True)
-        file_path = doc_dir / source.name
+        file_path = doc_dir / _safe_filename(source.name)
         file_path.write_bytes(data)
 
         async with async_session_factory() as session:
@@ -102,7 +130,7 @@ class GraphRAGBackend:
         asyncio.create_task(
             self._pipeline.process_file(doc_id, file_path, source.name, file_type)
         )
-        return ref
+        return await self._enrich(ref)
 
     async def edit_content(self, doc_id: str, content: str) -> DocumentRef:
         uid = uuid.UUID(doc_id)
@@ -120,7 +148,7 @@ class GraphRAGBackend:
             ref = _to_ref(doc)
 
         asyncio.create_task(self._pipeline.reindex_document(uid, content))
-        return ref
+        return await self._enrich(ref)
 
     async def reingest(self, doc_id: str) -> DocumentRef:
         uid = uuid.UUID(doc_id)
@@ -150,7 +178,7 @@ class GraphRAGBackend:
             asyncio.create_task(
                 self._pipeline.process_file(uid, file_path, title, file_type)
             )
-        return ref
+        return await self._enrich(ref)
 
     async def remove(self, doc_id: str) -> None:
         uid = uuid.UUID(doc_id)
@@ -254,19 +282,22 @@ class GraphRAGBackend:
             stmt = stmt.offset((page - 1) * page_size).limit(page_size)
             docs = (await session.execute(stmt)).scalars().all()
 
-            return {
-                "total": total, "page": page, "page_size": page_size,
-                "items": [
-                    {
-                        "id": str(d.id), "title": d.title, "file_type": d.file_type,
-                        "status": d.status,
-                        "overview": (d.overview or "")[:200],
-                        "created_at": d.created_at.isoformat() if d.created_at else None,
-                        "updated_at": d.updated_at.isoformat() if d.updated_at else None,
-                    }
-                    for d in docs
-                ],
-            }
+            items: list[dict[str, Any]] = [
+                {
+                    "id": str(d.id), "title": d.title, "file_type": d.file_type,
+                    "status": d.status,
+                    "overview": (d.overview or "")[:200],
+                    "created_at": d.created_at.isoformat() if d.created_at else None,
+                    "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+                }
+                for d in docs
+            ]
+        if self._enricher is not None:
+            await self._enricher.enrich_dicts(items)
+        return {
+            "total": total, "page": page, "page_size": page_size,
+            "items": items,
+        }
 
     async def get_document(self, doc_id: str) -> dict[str, Any] | None:
         uid = uuid.UUID(doc_id)
@@ -276,7 +307,7 @@ class GraphRAGBackend:
                 return None
             count_stmt = select(func.count(Chunk.id)).where(Chunk.doc_id == uid)
             chunk_count = (await session.execute(count_stmt)).scalar() or 0
-            return {
+            result: dict[str, Any] = {
                 "id": str(doc.id), "title": doc.title, "file_type": doc.file_type,
                 "raw_text": doc.raw_text, "overview": doc.overview,
                 "file_path": doc.file_path, "content_hash": doc.content_hash,
@@ -285,13 +316,27 @@ class GraphRAGBackend:
                 "created_at": doc.created_at.isoformat() if doc.created_at else None,
                 "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
             }
+        if self._enricher is not None:
+            await self._enricher.enrich_dict(result)
+        return result
 
 
 def build(config: EngineConfig) -> GraphRAGBackend:
     """Factory used by src.engine.config.build_engine."""
-    from src.engine.components.analyzer import Analyzer
 
     neo4j = Neo4jClient()
     analyzer = Analyzer(schema_path=config.config_dir / "entity_schema.yaml")
-    pipeline = Pipeline(neo4j, analyzer=analyzer, index_hook=config.index_hook)
-    return GraphRAGBackend(neo4j, pipeline)
+    index_hook = config.index_hook
+    enricher: MemoryStateEnricher | None = None
+    if config.memory is not None:
+        from src.engine.hindsight_components.repository import PostgresMemoryRepository
+
+        repository = PostgresMemoryRepository()
+        enricher = MemoryStateEnricher(repository)
+        if index_hook is None:
+            index_hook = build_retain_hook(
+                max_concurrent=config.memory.retain_max_concurrent,
+                repository=repository,
+            )
+    pipeline = Pipeline(neo4j, analyzer=analyzer, index_hook=index_hook)
+    return GraphRAGBackend(neo4j, pipeline, state_enricher=enricher)

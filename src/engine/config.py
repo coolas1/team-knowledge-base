@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from config.schema import AppConfig
 from src.engine.interface import DocumentIndexHook, KnowledgeBase
+
+
+@dataclass
+class MemorySettings:
+    retain_max_concurrent: int = 1
 
 
 @dataclass
@@ -13,6 +19,21 @@ class EngineConfig:
     impl: str
     config_dir: Path
     index_hook: DocumentIndexHook | None = None
+    memory: MemorySettings | None = None
+
+
+def engine_config_from_app(app: AppConfig) -> EngineConfig:
+    """Map AppConfig (engine.memory flags) onto EngineConfig."""
+    memory = (
+        MemorySettings(retain_max_concurrent=app.engine.memory.retain_max_concurrent)
+        if app.engine.memory.enabled
+        else None
+    )
+    return EngineConfig(
+        impl=app.engine.impl,
+        config_dir=Path(app.engine.config),
+        memory=memory,
+    )
 
 
 def build_engine(config: EngineConfig) -> KnowledgeBase:

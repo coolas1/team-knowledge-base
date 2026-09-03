@@ -1,0 +1,6 @@
+name: tkb
+version: 0.1.0
+mcp:
+  endpoint: http://localhost:8000/mcp
+skills: [search_and_answer, ingest_and_summarize, reflective_search]
+hooks: [before_remove, after_indexed]

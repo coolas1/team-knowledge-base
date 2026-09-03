@@ -2,8 +2,63 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import MDEditor from '@uiw/react-md-editor'
 import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react'
-import { ApiError, api, type Document } from '../api/client'
+import { ApiError, api, type Document, type PipelineProgress } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
+
+const STAGE_LABELS: Record<string, string> = {
+  extracting: '提取文本',
+  chunking: '文本分块',
+  overview: '生成摘要',
+  analyzing_chunks: '分析实体与关系',
+  embedding: '生成嵌入向量',
+  writing_postgres: '写入数据库',
+  writing_neo4j: '写入知识图谱',
+  done: '完成',
+  failed: '失败',
+}
+
+function PipelineBar({ pipeline, now }: { pipeline: PipelineProgress; now: number }) {
+  const pct = pipeline.total > 0 ? Math.round((pipeline.current / pipeline.total) * 100) : 0
+  const elapsed = Math.max(0, Math.floor(now / 1000 - pipeline.started_at))
+  const label = STAGE_LABELS[pipeline.stage] || pipeline.stage
+  const indeterminate = pipeline.total === 0
+
+  return (
+    <div style={{ padding: 16, background: '#f6f8fa', borderRadius: 8, marginBottom: 16 }}>
+      <style>{`
+        @keyframes pipeline-stripes {
+          from { background-position: 0 0; }
+          to { background-position: 28px 0; }
+        }
+      `}</style>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+        <span style={{ fontWeight: 600, fontSize: 14 }}>{label}</span>
+        <span style={{ fontSize: 12, color: '#999' }}>已用 {elapsed}s</span>
+      </div>
+      <div style={{ background: '#e8e8e8', borderRadius: 4, height: 8, overflow: 'hidden' }}>
+        <div style={
+          indeterminate
+            ? {
+                width: '100%',
+                background: 'repeating-linear-gradient(45deg, #1890ff 0, #1890ff 6px, #40a9ff 6px, #40a9ff 12px)',
+                backgroundSize: '28px 28px',
+                animation: 'pipeline-stripes 0.8s linear infinite',
+                height: '100%',
+              }
+            : {
+                width: `${pct}%`,
+                background: '#1890ff',
+                height: '100%',
+                transition: 'width 0.3s ease',
+              }
+        } />
+      </div>
+      <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+        {pipeline.detail || (indeterminate ? '' : `${pipeline.current}/${pipeline.total}`)}
+      </div>
+    </div>
+  )
+}
 
 export function DocumentDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -13,6 +68,7 @@ export function DocumentDetailPage() {
   const [editContent, setEditContent] = useState('')
   const [saving, setSaving] = useState(false)
   const [polling, setPolling] = useState(false)
+  const [now, setNow] = useState(Date.now())
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState('')
 
@@ -40,6 +96,13 @@ export function DocumentDetailPage() {
     const timer = setInterval(loadDoc, 2000)
     return () => clearInterval(timer)
   }, [polling, id])
+
+  // 每秒刷新已用时间（独立于 2s 轮询）
+  useEffect(() => {
+    if (!doc?.pipeline) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [doc?.pipeline])
 
   const handleSave = async () => {
     if (!id) return
@@ -84,6 +147,7 @@ export function DocumentDetailPage() {
   if (!doc) return <div style={{ padding: 24 }}>加载中...</div>
 
   const isMarkdown = doc.file_type === 'markdown'
+  const showProgress = doc.pipeline && (doc.status === 'pending' || doc.status === 'processing')
 
   return (
     <main style={{ flex: 1, overflow: 'auto', padding: 24 }}>
@@ -104,6 +168,11 @@ export function DocumentDetailPage() {
           删除
         </button>
       </div>
+
+      {/* Pipeline 进度条 */}
+      {showProgress && doc.pipeline && (
+        <PipelineBar pipeline={doc.pipeline} now={now} />
+      )}
 
       {/* 错误信息 */}
       {doc.status === 'failed' && (

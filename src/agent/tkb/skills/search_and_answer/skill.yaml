@@ -1,0 +1,4 @@
+name: search_and_answer
+description: Recall knowledge-base context for a query and synthesize an answer.
+inputs: { query: str, top_k: int }
+tools: [recall]

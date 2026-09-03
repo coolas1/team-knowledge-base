@@ -1,46 +1,35 @@
 """App config: validates config/app.yaml and selects implementations."""
-
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class MemoryCfg(BaseModel):
+    """Hindsight-as-capability flags on the single engine."""
+
+    enabled: bool = False
+    graph_worker: bool = True
+    retain_max_concurrent: int = Field(default=1, ge=1)
 
 
 class EngineCfg(BaseModel):
     impl: str = "graphrag"
     config: str = "config/engine/graphrag"
+    memory: MemoryCfg = Field(default_factory=MemoryCfg)
 
 
-class AgentCfg(BaseModel):
-    harness: str = "codex"
-    skills: list[str] = Field(
-        default_factory=lambda: ["search_and_answer", "ingest_and_summarize"]
-    )
-    memory: dict = Field(default_factory=lambda: {"impl": None})
-
-
-class FrontendCfg(BaseModel):
-    impl: str = "webapp"
-
-
-class WebappCfg(BaseModel):
-    engine_access: Literal["inprocess", "mcp"] = "inprocess"
-
-
-class HindsightCfg(BaseModel):
-    enabled: bool = False
-    retain_max_concurrent: int = Field(default=1, ge=1)
+class PluginCfg(BaseModel):
+    impl: str = "tkb"
 
 
 class AppConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     engine: EngineCfg = Field(default_factory=EngineCfg)
-    agent: AgentCfg = Field(default_factory=AgentCfg)
-    frontend: FrontendCfg = Field(default_factory=FrontendCfg)
-    webapp: WebappCfg = Field(default_factory=WebappCfg)
-    hindsight: HindsightCfg = Field(default_factory=HindsightCfg)
+    plugin: PluginCfg = Field(default_factory=PluginCfg)
 
 
 def load_config(path: Path | str | None = None) -> AppConfig:
