@@ -1,5 +1,5 @@
 """ConfiguredLlmClient: an LlmClient backed by the chat LLM configured via the
-LLM_* env vars in .env (provider/model/base_url/api_key). Used by the webapp BFF
+LLM_* env vars in .env (base_url/model/api_key). Used by the webapp BFF
 to synthesize answers/summaries when invoking plugin skills in-process.
 
 (Skills tolerate ctx.llm=None and fall back to returning raw context/overview.)
@@ -35,10 +35,14 @@ class ConfiguredLlmClient:
 
 
 def build_llm() -> ConfiguredLlmClient | None:
-    """Build a ConfiguredLlmClient from .env (LLM_*); None if provider is 'todo'."""
-    if settings.llm_provider == "todo":
+    """Build a ConfiguredLlmClient from .env (LLM_*); None when disabled.
+
+    Disabled = empty LLM_BASE_URL. Enabled with an empty LLM_MODEL raises
+    (a silent gpt-4o-mini fallback would target the wrong deployment).
+    """
+    if not settings.llm.enabled:
         return None
-    base_url = settings.llm_base_url or "https://api.openai.com/v1"
-    model = settings.llm_model or "gpt-4o-mini"
-    api_key = settings.llm_api_key
-    return ConfiguredLlmClient(base_url, model, api_key)
+    model = settings.llm.require_model()
+    return ConfiguredLlmClient(
+        settings.llm.base_url, model, settings.llm.api_key
+    )
