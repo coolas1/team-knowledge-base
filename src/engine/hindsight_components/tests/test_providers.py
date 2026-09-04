@@ -56,39 +56,25 @@ async def test_provider_reuses_existing_embedder() -> None:
 
 
 async def test_disabled_llm_is_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "llm_provider", "todo")
+    monkeypatch.setattr(settings.llm, "base_url", "")
+
+    class _NoNetwork:
+        def __init__(self, *a, **kw):
+            raise AssertionError("network call attempted while LLM disabled")
+
+    monkeypatch.setattr(provider_module.httpx, "AsyncClient", _NoNetwork)
     provider = ProjectHindsightProviders(FakeEmbedder())
 
-    with pytest.raises(RuntimeError, match="LLM_PROVIDER=todo"):
+    with pytest.raises(RuntimeError, match="LLM_BASE_URL is empty"):
         await provider.json("system", "user")
 
 
-async def test_local_ollama_uses_native_chat_api(
+async def test_llm_uses_openai_compatible_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "llm_provider", "ollama")
-    monkeypatch.setattr(settings, "ollama_base_url", "http://ollama.local:11434")
-    monkeypatch.setattr(settings, "llm_model", "qwen3:14b")
-    monkeypatch.setattr(provider_module.httpx, "AsyncClient", FakeClient)
-    FakeClient.response = {"message": {"content": '{"ok": true}'}}
-    provider = ProjectHindsightProviders(FakeEmbedder())
-
-    assert await provider.json("system", "user") == {"ok": True}
-    assert FakeClient.request is not None
-    url, payload, _ = FakeClient.request
-    assert url == "http://ollama.local:11434/api/chat"
-    assert payload["format"] == "json"
-    assert payload["think"] is False
-    assert payload["options"] == {"temperature": 0, "num_predict": 4096}
-
-
-async def test_network_model_uses_openai_compatible_api(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "llm_provider", "custom")
-    monkeypatch.setattr(settings, "llm_base_url", "https://llm.example/v1")
-    monkeypatch.setattr(settings, "llm_model", "remote-model")
-    monkeypatch.setattr(settings, "llm_api_key", "secret")
+    monkeypatch.setattr(settings.llm, "base_url", "https://llm.example/v1")
+    monkeypatch.setattr(settings.llm, "model", "remote-model")
+    monkeypatch.setattr(settings.llm, "api_key", "secret")
     monkeypatch.setattr(provider_module.httpx, "AsyncClient", FakeClient)
     FakeClient.response = {"choices": [{"message": {"content": "answer"}}]}
     provider = ProjectHindsightProviders(FakeEmbedder())
@@ -99,3 +85,14 @@ async def test_network_model_uses_openai_compatible_api(
     assert url == "https://llm.example/v1/chat/completions"
     assert payload["model"] == "remote-model"
     assert headers == {"Authorization": "Bearer secret"}
+
+
+async def test_enabled_llm_without_model_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.llm, "base_url", "https://llm.example/v1")
+    monkeypatch.setattr(settings.llm, "model", "")
+    provider = ProjectHindsightProviders(FakeEmbedder())
+
+    with pytest.raises(ValueError, match="LLM_MODEL"):
+        await provider.text("system", "user")
