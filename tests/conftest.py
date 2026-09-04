@@ -35,7 +35,7 @@ def pytest_collection_modifyitems(items):
 
 
 def _host_service_url(url: str) -> str:
-    """Translate a Compose-only Ollama hostname for host-side pytest."""
+    """Translate a Compose-internal service hostname for host-side pytest."""
     parsed = urlsplit(url)
     if parsed.hostname != "ollama":
         return url
@@ -51,14 +51,14 @@ def integration_host_config(monkeypatch):
     from config.settings import settings
     from src.engine.components.embedder import embedder
 
-    ollama_url = os.getenv("INTEGRATION_OLLAMA_BASE_URL") or _host_service_url(
-        settings.ollama_base_url
+    embedding_url = os.getenv("INTEGRATION_EMBEDDING_BASE_URL") or _host_service_url(
+        settings.embedding.base_url
     )
-    llm_url = _host_service_url(settings.llm_base_url)
-    monkeypatch.setattr(settings, "ollama_base_url", ollama_url)
-    monkeypatch.setattr(settings, "llm_base_url", llm_url)
-    monkeypatch.setattr(embedder, "_base_url", ollama_url.rstrip("/"))
-    return {"ollama_base_url": ollama_url, "llm_base_url": llm_url}
+    llm_url = _host_service_url(settings.llm.base_url)
+    monkeypatch.setattr(settings.embedding, "base_url", embedding_url)
+    monkeypatch.setattr(settings.llm, "base_url", llm_url)
+    monkeypatch.setattr(embedder, "_base_url", embedding_url.rstrip("/"))
+    return {"embedding_base_url": embedding_url, "llm_base_url": llm_url}
 
 
 @dataclass

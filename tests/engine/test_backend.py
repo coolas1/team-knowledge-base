@@ -338,7 +338,7 @@ async def test_ingest_recall_roundtrip(integration_host_config, monkeypatch):
     )
     from src.engine.interface import IngestSource, RecallRequest
 
-    assert settings.llm_provider != "todo", "live test requires a configured LLM"
+    assert settings.llm.base_url, "live test requires a configured LLM"
     await init_db()
     cfg = EngineConfig(impl="graphrag", config_dir=Path("config/engine/graphrag"))
     kb = build(cfg)

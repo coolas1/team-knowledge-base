@@ -77,23 +77,6 @@ class InfraSettings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = "neo4j"
 
-    ollama_base_url: str = "http://localhost:11434"
-
-    # Chat/analysis LLM (OpenAI-compatible or Ollama). provider="todo" disables it.
-    llm_provider: str = "todo"
-    llm_model: str = "gpt-4o-mini"
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_api_key: str = ""
-
-    # Reranker (search gatekeeper). provider: local|http|none.
-    #   local = CrossEncoder (needs the `reranker` extra / torch);
-    #   http  = external /v1/rerank API (Cohere/Jina/OpenAI-compatible);
-    #   none  = disabled (vector-only ranking, no torch).
-    reranker_provider: str = "none"
-    reranker_model: str = "BAAI/bge-reranker-v2-m3"
-    reranker_base_url: str = ""
-    reranker_api_key: str = ""
-
     # Disposable Neo4j projection worker. Kill switch for deployments without
     # Neo4j; the primary control is the engine.memory.graph_worker app flag.
     hindsight_graph_worker_enabled: bool = True

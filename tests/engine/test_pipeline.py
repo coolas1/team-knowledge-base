@@ -50,7 +50,7 @@ async def test_secondary_index_hook_failure_is_isolated():
 @pytest.mark.integration
 async def test_process_file_end_to_end(integration_host_config):
     # Requires: docker compose up postgres; Neo4j running; Ollama with
-    # nomic-embed-text; an LLM configured via .env (LLM_PROVIDER etc.).
+    # nomic-embed-text; an LLM configured via .env (LLM_BASE_URL etc.).
     from uuid import uuid4
 
     from sqlalchemy import func, select
@@ -64,7 +64,7 @@ async def test_process_file_end_to_end(integration_host_config):
     )
     from src.engine.graphrag.backend import GraphRAGBackend
 
-    assert settings.llm_provider != "todo", "live test requires a configured LLM"
+    assert settings.llm.base_url, "live test requires a configured LLM"
     await init_db()
     neo4j = Neo4jClient()
     pipe = Pipeline(neo4j, analyzer=Analyzer())
