@@ -117,7 +117,7 @@ def _build_prompt(text: str, title: str, schema: dict) -> str:
 
 
 class Analyzer:
-    """LLM 分析器，支持 Ollama 和 OpenAI 兼容 API。"""
+    """LLM 分析器，通过 OpenAI 兼容 API 调用。"""
 
     def __init__(self, schema_path: Path | None = None) -> None:
         self._schema_path = schema_path or _DEFAULT_SCHEMA_PATH
@@ -126,10 +126,9 @@ class Analyzer:
     async def analyze(self, text: str, title: str) -> AnalysisResult:
         """分析文档，返回 overview + 实体 + 关系。
 
-        如果 LLM 未配置（provider: todo），返回空结果占位。
+        如果 LLM 未配置（LLM_BASE_URL 为空），返回空结果占位。
         """
-        provider = settings.llm_provider
-        if provider == "todo":
+        if not settings.llm.enabled:
             # LLM 未配置，返回占位结果
             return AnalysisResult(
                 overview=f"[待 LLM 生成] {title}",
@@ -139,14 +138,7 @@ class Analyzer:
             )
 
         prompt = _build_prompt(text, title, self._schema)
-
-        if provider == "ollama":
-            raw = await self._call_ollama(prompt)
-        elif provider in ("openai", "custom"):
-            raw = await self._call_openai_compatible(prompt)
-        else:
-            return AnalysisResult(overview=f"[未知 provider: {provider}] {title}")
-
+        raw = await self._call_openai_compatible(prompt)
         return self._parse_response(raw)
 
     # ── chunk 级分析 ─────────────────────────────────────────────
@@ -155,19 +147,11 @@ class Analyzer:
         self, chunk_text: str, doc_title: str, chunk_index: int
     ) -> ChunkAnalysisResult:
         """对单个 chunk 做实体和关系抽取。"""
-        provider = settings.llm_provider
-        if provider == "todo":
+        if not settings.llm.enabled:
             return ChunkAnalysisResult(chunk_index=chunk_index)
 
         prompt = self._build_chunk_prompt(chunk_text, doc_title, self._schema)
-
-        if provider == "ollama":
-            raw = await self._call_ollama(prompt)
-        elif provider in ("openai", "custom"):
-            raw = await self._call_openai_compatible(prompt)
-        else:
-            return ChunkAnalysisResult(chunk_index=chunk_index)
-
+        raw = await self._call_openai_compatible(prompt)
         return self._parse_chunk_response(raw, chunk_index)
 
     # ── overview 级分析 ──────────────────────────────────────────
@@ -176,8 +160,7 @@ class Analyzer:
         self, text: str, title: str
     ) -> AnalysisResult:
         """文档级分析，仅提取 overview + file_relations。"""
-        provider = settings.llm_provider
-        if provider == "todo":
+        if not settings.llm.enabled:
             return AnalysisResult(
                 overview=f"[待 LLM 生成] {title}",
                 entities=[],
@@ -186,42 +169,14 @@ class Analyzer:
             )
 
         prompt = self._build_overview_prompt(title, text)
-
-        if provider == "ollama":
-            raw = await self._call_ollama(prompt)
-        elif provider in ("openai", "custom"):
-            raw = await self._call_openai_compatible(prompt)
-        else:
-            return AnalysisResult(overview=f"[未知 provider] {title}")
-
+        raw = await self._call_openai_compatible(prompt)
         return self._parse_overview_response(raw)
-
-    async def _call_ollama(self, prompt: str) -> str:
-        """通过 Ollama /api/generate 调用。"""
-        # Ollama's native API lives at /api/* and must not inherit the
-        # OpenAI-compatible LLM_BASE_URL (which commonly ends in /v1).
-        base_url = settings.ollama_base_url.rstrip("/")
-        model = settings.llm_model or "llama3"
-
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(
-                f"{base_url}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": "json",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["response"]
 
     async def _call_openai_compatible(self, prompt: str) -> str:
         """通过 OpenAI 兼容 API 调用。"""
-        base_url = (settings.llm_base_url or "https://api.openai.com/v1").rstrip("/")
-        model = settings.llm_model or "gpt-4o-mini"
-        api_key = settings.llm_api_key
+        base_url = settings.llm.base_url.rstrip("/")
+        model = settings.llm.require_model()
+        api_key = settings.llm.api_key
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(
