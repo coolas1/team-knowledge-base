@@ -43,6 +43,13 @@ http://localhost:8000
 docker compose exec ollama ollama pull nomic-embed-text
 ```
 
+并确认 `.env` 中 Embedding 指向 Compose 内的 Ollama：
+
+```dotenv
+EMBEDDING_BASE_URL=http://ollama:11434/v1
+EMBEDDING_MODEL=nomic-embed-text
+```
+
 当前机器已经安装该模型，无需重复下载。
 
 ## 3. 模型配置
@@ -52,7 +59,6 @@ docker compose exec ollama ollama pull nomic-embed-text
 当前 `.env` 使用 OpenAI-compatible API：
 
 ```dotenv
-LLM_PROVIDER=custom
 LLM_MODEL=供应商提供的模型名称
 LLM_BASE_URL=https://供应商地址/v1
 LLM_API_KEY=真实API密钥
@@ -75,7 +81,6 @@ docker compose exec ollama ollama pull qwen3:14b
 然后修改 `.env`：
 
 ```dotenv
-LLM_PROVIDER=ollama
 LLM_MODEL=qwen3:14b
 LLM_BASE_URL=http://ollama:11434/v1
 LLM_API_KEY=ollama

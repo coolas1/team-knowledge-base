@@ -28,7 +28,7 @@ Run from the repo root unless noted. Python tooling uses `uv`.
 
 1. Run `uv run ruff check` and `uv run pytest` before pushing.
 2. Backing services run via `docker compose up -d` (Postgres :5433, Neo4j :7687);
-   copy `.env.example` to `.env` and set `OLLAMA_BASE_URL` first.
+   copy `.env.example` to `.env` and set `EMBEDDING_BASE_URL` and `LLM_BASE_URL` first.
 3. The reranker is configurable via `RERANKER_PROVIDER`: `http` (external
    `/v1/rerank` API, default), `local` (torch — needs `--extra reranker`), or `none`.
 4. Memory capabilities (retain, reflective query, graph worker) toggle via
@@ -55,8 +55,8 @@ src/
 ```
 
 Backing services (`docker-compose.yml`): Postgres+pgvector (vectors, chunks) and
-Neo4j (entity/relation graph). Ollama is external (`OLLAMA_BASE_URL`). Config
-flows through `.env` → `config/settings.py` (pydantic-settings).
+Neo4j (entity/relation graph). Ollama is opt-in via the compose `ollama`
+profile. Config flows through `.env` → `config/settings.py` (pydantic-settings).
 
 ## Validity check
 

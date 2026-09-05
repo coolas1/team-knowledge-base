@@ -51,7 +51,7 @@ you want to restyle or present it. Generated files are stored in the
    ```
 2. Configure environment:
    ```bash
-   cp .env.example .env          # then edit, especially OLLAMA_BASE_URL
+   cp .env.example .env          # then edit, especially EMBEDDING_BASE_URL and LLM_BASE_URL
    ```
 3. Start backing services (Postgres+pgvector, Neo4j):
    ```bash
