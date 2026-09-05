@@ -221,6 +221,7 @@ services:
       dockerfile: Containerfile
       target: gateway
     environment:
+      RUNNER_HOST: 0.0.0.0
       RUNNER_TOKEN: ${PI_AGENT_RUNNER_TOKEN:-}
       RUNNER_JOB_IMAGE: team-kb-tool-job:latest
       RUNNER_PUBLIC_HTTP: ${RUNNER_PUBLIC_HTTP:-true}
