@@ -67,12 +67,13 @@ export interface AgentSessionList {
   items: AgentSession[]
 }
 
+export interface ToolActivity { activity?: string; jobId?: string; artifactId?: string; version?: number; errorSummary?: string }
 export type PiAgentEvent =
   | { type: 'message.start'; sessionId: string; name?: string }
   | { type: 'assistant.delta'; delta: string }
   | { type: 'assistant.thinking'; delta: string }
-  | { type: 'tool.start'; toolCallId: string; toolName: string; args: unknown }
-  | { type: 'tool.result'; toolCallId: string; toolName: string; isError: boolean; result?: unknown }
+  | ({ type: 'tool.start'; toolCallId: string; toolName: string; args: unknown } & ToolActivity)
+  | ({ type: 'tool.result'; toolCallId: string; toolName: string; isError: boolean; result?: unknown } & ToolActivity)
   | { type: 'citation'; docId: string; title: string }
   | { type: 'limit.reached'; limit: 'tool_calls' | 'time'; maximum: number }
   | { type: 'message.completed'; sessionId: string; answer: string; toolCalls: number }

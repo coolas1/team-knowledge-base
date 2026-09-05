@@ -154,6 +154,12 @@ services:
       PI_AGENT_CWD: /app
       PI_AGENT_DATA_DIR: /app/data
       PI_AGENT_SESSION_DIR: /app/data/sessions
+      PI_AGENT_TOOL_AUTHORING_ENABLED: ${PI_AGENT_TOOL_AUTHORING_ENABLED:-true}
+      PI_AGENT_RUNNER_URL: ${PI_AGENT_RUNNER_URL:-}
+      PI_AGENT_RUNNER_TOKEN: ${PI_AGENT_RUNNER_TOKEN:-}
+      PI_AGENT_TOOL_LIBRARY_DIR: /app/tool-library
+      PI_AGENT_MAX_CODE_JOBS: ${PI_AGENT_MAX_CODE_JOBS:-12}
+      PI_AGENT_MAX_BUILD_ATTEMPTS: ${PI_AGENT_MAX_BUILD_ATTEMPTS:-3}
       # Explicit PI_AGENT_* values win. When omitted, the runtime inherits the
       # already configured LLM_* API; disabled placeholders fall back to Ollama.
       LLM_PROVIDER: ${LLM_PROVIDER:-}
@@ -180,6 +186,34 @@ services:
       - "127.0.0.1:${PI_AGENT_PORT:-8010}:8010"
     volumes:
       - piagentdata:/app/data
+      - toolslibrary:/app/tool-library
+    restart: unless-stopped
+
+  tool-job:
+    profiles: [tool-images]
+    image: team-kb-tool-job:latest
+    build:
+      context: ./src/extensions/tool-runner
+      dockerfile: Containerfile
+      target: job
+    # Build-only image; the gateway creates disposable containers from its ID.
+    entrypoint: [node, -e, "process.exit(0)"]
+    network_mode: none
+
+  tool-runner:
+    profiles: [tool-authoring]
+    image: team-kb-tool-runner:latest
+    build:
+      context: ./src/extensions/tool-runner
+      dockerfile: Containerfile
+      target: gateway
+    environment:
+      RUNNER_TOKEN: ${PI_AGENT_RUNNER_TOKEN:-}
+      RUNNER_JOB_IMAGE: team-kb-tool-job:latest
+      RUNNER_PUBLIC_HTTP: ${RUNNER_PUBLIC_HTTP:-true}
+      PI_AGENT_TIMEZONE: ${PI_AGENT_TIMEZONE:-Asia/Shanghai}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
 volumes:
@@ -188,3 +222,4 @@ volumes:
   ollamadata:
   piagentdata:
   artifactsdata:
+  toolslibrary:

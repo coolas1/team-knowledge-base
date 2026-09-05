@@ -15,11 +15,13 @@ import {
 } from 'lucide-react'
 import { api, type AgentSession, type AgentSessionDetail, type PiAgentEvent } from '../api/client'
 import './AskPage.css'
+import { appendActivity, type ActivityRecord } from './tool-activity'
 
 interface ChatMessage {
   id: number
   role: 'user' | 'assistant'
   text: string
+  activities?: ActivityRecord[]
 }
 
 interface Citation {
@@ -131,6 +133,10 @@ export function AskPage() {
   }
 
   const handleEvent = (event: PiAgentEvent, assistantId: number) => {
+    if (event.type === 'tool.start' || event.type === 'tool.result') {
+      setMessages(current => current.map(message => message.id === assistantId
+        ? { ...message, activities: appendActivity(message.activities ?? [], event) } : message))
+    }
     if (event.type === 'message.start' && event.name) {
       setSessions((current) =>
         current.map((session) =>
@@ -424,6 +430,12 @@ export function AskPage() {
                   <div className="ask-message-author">
                     {message.role === 'assistant' ? '知识库助手' : '你'}
                   </div>
+                  {!!message.activities?.length && (
+                    <details className="ask-tool-activity" open={loading}>
+                      <summary>工具活动（{message.activities.length}）</summary>
+                      <ol>{message.activities.map(item => <li key={item.key} className={item.failed ? 'is-failed' : ''}>{item.label}</li>)}</ol>
+                    </details>
+                  )}
                   {message.role === 'assistant' ? (
                     message.text ? (
                       <div className="ask-markdown" data-color-mode="light">

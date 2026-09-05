@@ -21,6 +21,9 @@ import { TkbMcpClient } from "./mcp-client.js";
 import { buildModelServices, type ModelServices } from "./model.js";
 import { buildSkillReadTool } from "./skill-reader.js";
 import { enabledTkbTools } from "./tools.js";
+import { AUTHORING_NAMES, AUTHORING_PROMPT, AuthoringBudget, authoringActivity, buildAuthoringTools } from "./authoring.js";
+import { ToolLibrary } from "./tool-library.js";
+import { RunnerClient, type RunnerHealth } from "./runner-client.js";
 import {
   buildConversationMemoryExtension,
   extractCompletedConversationTurn,
@@ -36,24 +39,25 @@ const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent
 - 需要 Hindsight recall/reflect 时使用 tkb_query_knowledge。
 - 命中关键文档后可用 tkb_get_document 核对全文；不要获取完整图谱。
 - 证据不足时可以换一种查询方式，但不要重复相同查询。
-- 回答必须列出依据的文档标题和 doc_id；没有充分证据时明确说明“知识库中未找到充分依据”。
-- 工具返回错误或达到调用限制时，停止探索并依据已经获得的证据作答。
+- 知识库回答必须列出依据的文档标题和 doc_id；没有充分证据时明确说明“知识库中未找到充分依据”。
+- 达到调用限制时，停止探索并依据已经获得的证据作答；工具错误必须如实处理。
 - 用户要求生成 Word、PDF 或 PPT 时，先按需检索知识库并组织完整内容，再调用 tkb_generate_document。不要只输出 Markdown 代替文件。
 - PPT 内容用独占一行的 --- 分隔页面，每页以 Markdown 标题开头。工具会同时生成 PPTX 和 Slidev 源文件。
 - 生成成功后，在最终回答中使用工具返回的 download_url 给出 Markdown 下载链接；PPT 还要给出 slidev_url。`;
 
+export interface ToolActivity { activity?: string; jobId?: string; artifactId?: string; version?: number; errorSummary?: string }
 export type PiRuntimeEvent =
   | { type: "message.start"; sessionId: string; name?: string }
   | { type: "assistant.delta"; delta: string }
   | { type: "assistant.thinking"; delta: string }
-  | { type: "tool.start"; toolCallId: string; toolName: string; args: unknown }
-  | {
+  | ({ type: "tool.start"; toolCallId: string; toolName: string; args: unknown } & ToolActivity)
+  | ({
       type: "tool.result";
       toolCallId: string;
       toolName: string;
       isError: boolean;
       result?: unknown;
-    }
+    } & ToolActivity)
   | { type: "citation"; docId: string; title: string }
   | { type: "limit.reached"; limit: "tool_calls" | "time"; maximum: number }
   | {
@@ -88,6 +92,7 @@ export interface RuntimeConversationMemoryForgetResult {
 }
 
 export interface RuntimeHealth {
+  toolAuthoring?: { enabled: boolean; runner: RunnerHealth; library: { available: boolean } };
   status: "ok" | "degraded";
   model: { provider: string; id: string; baseUrl: string };
   mcp: ContractReport;
@@ -131,6 +136,7 @@ export class RuntimeLimitError extends Error {
 }
 
 interface ManagedSession {
+  authoringBudget: AuthoringBudget;
   session: AgentSession;
   budget: ExecutionBudget;
   lastAccess: number;
@@ -229,12 +235,15 @@ export class PiAgentRuntime implements AgentRuntimeApi {
   private contract?: ContractReport;
   private conversationMemoryStatus?: RuntimeHealth["conversationMemory"];
   private readonly skillsDir: string;
+  private library?: ToolLibrary;
+  private readonly runner: RunnerClient;
 
   constructor(
     readonly config: PiAgentConfig = loadPiAgentConfig(),
     readonly adapterConfig: TkbAdapterConfig = loadTkbAdapterConfig(),
   ) {
     this.mcpClient = new TkbMcpClient(adapterConfig);
+    this.runner = new RunnerClient(config.runnerUrl, config.runnerToken);
     this.skillsDir = fileURLToPath(new URL("../skills", import.meta.url));
   }
 
@@ -250,6 +259,8 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       throw new Error(`TKB MCP contract mismatch: ${formatContractErrors(this.contract)}`);
     }
     this.modelServices = await buildModelServices(this.config);
+    if (this.config.toolAuthoringEnabled) this.library = new ToolLibrary(this.config.toolLibraryDir);
+    const runnerHealth = await this.runner.health();
     this.resourceLoader = new DefaultResourceLoader({
       cwd: this.config.cwd,
       agentDir: this.config.dataDir,
@@ -260,8 +271,12 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       noContextFiles: true,
       extensionFactories: [
         buildConversationMemoryExtension(this.mcpClient, this.adapterConfig),
+        (pi) => { pi.on("tool_result", async (event) => {
+          if ((event.details as { limit?: string } | undefined)?.limit) return { isError: true };
+        }); },
       ],
-      systemPromptOverride: () => SYSTEM_PROMPT,
+      systemPromptOverride: () => SYSTEM_PROMPT + (this.config.toolAuthoringEnabled
+        ? AUTHORING_PROMPT + `\n执行环境状态：${JSON.stringify(runnerHealth)}\n` : ""),
     });
     await this.resourceLoader.reload();
   }
@@ -302,6 +317,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       mcp,
       loadedSessions: this.sessions.size,
       conversationMemory: this.conversationMemoryStatus,
+      toolAuthoring: { enabled: this.config.toolAuthoringEnabled, runner: await this.runner.health(), library: this.library?.health() ?? { available: false } },
     };
   }
 
@@ -347,6 +363,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
 
     managed.lastAccess = Date.now();
     managed.budget.reset();
+    managed.authoringBudget.reset();
     managed.active = {};
     const messageCountBeforePrompt = managed.session.messages.length;
     const citations = new Set<string>();
@@ -447,6 +464,8 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       managed.session.dispose();
     }
     this.sessions.clear();
+    this.library?.close();
+    this.library = undefined;
   }
 
   private ensureInitialized(): void {
@@ -458,10 +477,12 @@ export class PiAgentRuntime implements AgentRuntimeApi {
   private async buildManagedSession(manager: SessionManager): Promise<ManagedSession> {
     this.ensureInitialized();
     const budget = new ExecutionBudget(this.config.maxToolCalls);
+    const authoringBudget = new AuthoringBudget(this.config.maxCodeJobs, this.config.maxBuildAttempts);
     const tools = enforceToolBudget(
       [
         ...enabledTkbTools({ client: this.mcpClient, config: this.adapterConfig }),
         buildSkillReadTool(this.skillsDir),
+        ...(this.library ? buildAuthoringTools(this.library, this.runner, authoringBudget) : []),
       ],
       budget,
     );
@@ -477,7 +498,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       tools: tools.map((tool) => tool.name),
       customTools: tools,
     });
-    return { session, budget, lastAccess: Date.now() };
+    return { session, budget, authoringBudget, lastAccess: Date.now() };
   }
 
   private async enqueueCompletedTurn(
@@ -568,7 +589,8 @@ export class PiAgentRuntime implements AgentRuntimeApi {
         type: "tool.start",
         toolCallId: event.toolCallId,
         toolName: event.toolName,
-        args: event.args,
+        args: AUTHORING_NAMES.has(event.toolName) ? {} : event.args,
+        activity: authoringActivity(event.toolName),
       });
       return;
     }
@@ -579,9 +601,16 @@ export class PiAgentRuntime implements AgentRuntimeApi {
         toolName: event.toolName,
         isError: event.isError,
       };
-      if (this.config.exposeToolResults) toolResult.result = safeResult(event.result);
+      if (AUTHORING_NAMES.has(event.toolName)) {
+        const details = (event.result as { details?: ToolActivity }).details;
+        toolResult.activity = event.isError ? "failure" : details?.activity ?? authoringActivity(event.toolName);
+        if (typeof details?.jobId === "string" && /^[a-f0-9-]{36}$/.test(details.jobId)) toolResult.jobId = details.jobId;
+        if (typeof details?.artifactId === "string" && /^gen_[a-z0-9_]+$/.test(details.artifactId)) toolResult.artifactId = details.artifactId;
+        if (Number.isInteger(details?.version)) toolResult.version = details!.version;
+        if (event.isError) toolResult.errorSummary = "工具执行失败，Agent 已收到错误反馈";
+      } else if (this.config.exposeToolResults) toolResult.result = safeResult(event.result);
       await emit(toolResult);
-      for (const citation of extractCitations(event.result)) {
+      for (const citation of AUTHORING_NAMES.has(event.toolName) ? [] : extractCitations(event.result)) {
         if (citations.has(citation.docId)) continue;
         citations.add(citation.docId);
         await emit({ type: "citation", ...citation });

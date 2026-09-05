@@ -751,3 +751,7 @@
     animation: none;
   }
 }
+.ask-tool-activity { margin: 8px 0 12px; font-size: 13px; color: #526072; }
+.ask-tool-activity summary { cursor: pointer; }
+.ask-tool-activity li { margin: 4px 0; }
+.ask-tool-activity .is-failed { color: #b42318; }

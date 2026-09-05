@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import type { TkbAdapterConfig } from "./config.js";
 import { loadTkbAdapterConfig } from "./config.js";
 import { TkbMcpClient } from "./mcp-client.js";
+import { redact } from "./runner-client.js";
 
 type PiToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -27,17 +28,14 @@ async function executeMcpTool(
 ): Promise<PiToolResult> {
   try {
     const result = await client.callTool(mcpTool, args, { signal, timeoutMs });
+    if (result.isError) throw new Error(result.text || "MCP returned a tool error");
     return {
       content: [{ type: "text", text: result.text || "TKB MCP returned no content." }],
       details: { mcpTool, arguments: args },
       isError: result.isError,
     };
   } catch (error) {
-    return {
-      content: [{ type: "text", text: `TKB tool ${mcpTool} failed: ${errorMessage(error)}` }],
-      details: { mcpTool, arguments: args },
-      isError: true,
-    };
+    throw new Error(redact(`TKB tool ${mcpTool} failed: ${errorMessage(error)}`));
   }
 }
 

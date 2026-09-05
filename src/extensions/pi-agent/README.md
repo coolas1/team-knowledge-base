@@ -26,7 +26,31 @@ generate downloadable office documents.
 
 ## Start
 
-Requires Node.js 22.19 or newer and a running TKB Engine MCP service.
+Requires Node.js 24 or newer and a running TKB Engine MCP service.
+
+## Agent-authored tools
+
+The runtime can fill missing capabilities by writing and executing JavaScript,
+testing a parameterized implementation, and saving it to a shared versioned
+tool library. `execute_code`, `find_tools`, `publish_tool` and `call_tool` are
+the only new bootstrap tools; no date, calculator, conversion or web business
+implementation is registered in advance. Generated code executes exclusively
+in disposable job containers. Failed tools enter the SDK's error history so
+the Agent can repair them within the run budget.
+
+See [runner deployment and rollback](../tool-runner/README.md) for image builds,
+authentication, network profiles, isolation limits and the independent library
+volume. Without a configured runner, the existing TKB tools remain available
+and execution reports an unavailable backend. Search requires an accessible
+public endpoint or an administrator-configured search capability.
+
+After building both TypeScript packages and the job image, run
+`node scripts/authoring-smoke.mjs` from this package for live model acceptance.
+It uses the repository's private `.env`, an empty temporary tool library and
+the existing local MCP service. It creates no production sessions or shared
+tools. A JSON evidence file records generated source, test/version metadata,
+actual outputs and independent expected values; its path is printed at exit.
+Never publish that file if prompts or outputs have been changed to private data.
 
 ```bash
 npm ci

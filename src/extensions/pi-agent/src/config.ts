@@ -29,6 +29,12 @@ export type PiThinkingLevel =
   | "max";
 
 export interface PiAgentConfig {
+  toolAuthoringEnabled: boolean;
+  runnerUrl: string;
+  runnerToken: string;
+  toolLibraryDir: string;
+  maxCodeJobs: number;
+  maxBuildAttempts: number;
   host: string;
   port: number;
   dataDir: string;
@@ -144,6 +150,12 @@ export function loadPiAgentConfig(
     "qwen3:14b";
   return {
     host: env.PI_AGENT_HOST?.trim() || "127.0.0.1",
+    toolAuthoringEnabled: enabled(env.PI_AGENT_TOOL_AUTHORING_ENABLED, true),
+    runnerUrl: env.PI_AGENT_RUNNER_URL?.trim() || "",
+    runnerToken: env.PI_AGENT_RUNNER_TOKEN?.trim() || "",
+    toolLibraryDir: env.PI_AGENT_TOOL_LIBRARY_DIR?.trim() || `${dataDir}/tool-library`,
+    maxCodeJobs: requiredPositiveInteger(env.PI_AGENT_MAX_CODE_JOBS, 12, "PI_AGENT_MAX_CODE_JOBS", 100),
+    maxBuildAttempts: requiredPositiveInteger(env.PI_AGENT_MAX_BUILD_ATTEMPTS, 3, "PI_AGENT_MAX_BUILD_ATTEMPTS", 10),
     port: positiveInteger(env.PI_AGENT_PORT, 8010),
     dataDir,
     sessionDir: env.PI_AGENT_SESSION_DIR?.trim() || `${dataDir}/sessions`,
