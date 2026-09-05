@@ -12,16 +12,18 @@ print conversation content.
 ```text
 sessions=18
 compactedSessions=8
-sdkVisibleMessages=67
-recoveredVisibleMessages=67
+sdkVisibleMessages=90
+recoveredVisibleMessages=90
 recoveryErrors=0
 sourceFilesChanged=0
 ```
 
-The currently deployed older runtime has no transcript journals yet. The
-read-only inventory therefore reported 18 missing journals and 18 count
-mismatches before simulated recovery. This is the expected pre-deployment state;
-lazy recovery creates the journals after the updated runtime is deployed.
+Before deployment, the older runtime had no transcript journals, so the
+read-only inventory reported 18 missing journals and 18 count mismatches. After
+deploying the updated image, the first session-list request lazily recovered all
+18 journals. The post-deployment audit reports 90 SDK-visible messages, 90
+journal-visible messages, zero missing journals, zero count mismatches, and zero
+degraded journals.
 
 ## Fault injection and checks
 
