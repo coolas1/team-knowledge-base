@@ -34,7 +34,7 @@ class _FakeClient:
     async def post(self, url, json=None, headers=None):
         type(self).calls.append({"url": url, "json": json, "headers": headers})
         data = [
-            {"index": i, "embedding": [0.1] * 768}
+            {"index": i, "embedding": [float(i)] * 768}
             for i, _ in enumerate(json["input"])
         ]
         data.reverse()
@@ -50,6 +50,7 @@ async def test_embed_batch_posts_openai_embeddings_shape(monkeypatch):
     out = await e.embed_batch(["a", "b", "c"])
     assert len(out) == 3
     assert all(len(v) == 768 for v in out)
+    assert [v[0] for v in out] == [0.0, 1.0, 2.0]
     call = _FakeClient.calls[0]
     assert call["url"] == "http://embed.example/v1/embeddings"
     assert call["json"] == {"model": "embed-model", "input": ["a", "b", "c"]}
