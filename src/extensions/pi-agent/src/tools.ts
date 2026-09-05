@@ -3,14 +3,24 @@ import {
   type ExtensionAPI,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
+import { SearchFallbackBudget, type TurnDeadlineBudget } from "./budget.js";
 import type { TkbAdapterConfig } from "./config.js";
 import { loadTkbAdapterConfig } from "./config.js";
-import { TkbMcpClient } from "./mcp-client.js";
+import { McpAbortedError, McpTimeoutError, TkbMcpClient } from "./mcp-client.js";
+import { redact } from "./runner-client.js";
 
 type PiToolResult = {
   content: Array<{ type: "text"; text: string }>;
-  details: { mcpTool: string; arguments: Record<string, unknown> };
+  details: {
+    mcpTool: string;
+    arguments: Record<string, unknown>;
+    activity?: "degraded" | "fallback";
+    searchId?: string;
+    degraded?: boolean;
+    fallback?: boolean;
+  };
   isError: boolean;
 };
 
@@ -27,17 +37,14 @@ async function executeMcpTool(
 ): Promise<PiToolResult> {
   try {
     const result = await client.callTool(mcpTool, args, { signal, timeoutMs });
+    if (result.isError) throw new Error(result.text || "MCP returned a tool error");
     return {
       content: [{ type: "text", text: result.text || "TKB MCP returned no content." }],
       details: { mcpTool, arguments: args },
       isError: result.isError,
     };
   } catch (error) {
-    return {
-      content: [{ type: "text", text: `TKB tool ${mcpTool} failed: ${errorMessage(error)}` }],
-      details: { mcpTool, arguments: args },
-      isError: true,
-    };
+    throw new Error(redact(`TKB tool ${mcpTool} failed: ${errorMessage(error)}`));
   }
 }
 
@@ -98,6 +105,169 @@ const EMPTY_PARAMS = Type.Object({});
 export interface BuildToolsOptions {
   client?: TkbMcpClient;
   config?: TkbAdapterConfig;
+  turnDeadline?: TurnDeadlineBudget;
+  fallbackBudget?: SearchFallbackBudget;
+}
+
+function parsedObject(text: string): Record<string, unknown> | undefined {
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function deepFallbackReason(result: { text: string; isError: boolean }): string | undefined {
+  const payload = parsedObject(result.text);
+  const error = payload?.error as Record<string, unknown> | undefined;
+  const code = typeof error?.code === "string" ? error.code : undefined;
+  if (code === "deep_search_timeout" || code === "deep_search_unavailable") return code;
+  if (result.isError && /deep_search_(?:timeout|unavailable)/.test(result.text)) {
+    return result.text.includes("deep_search_timeout")
+      ? "deep_search_timeout"
+      : "deep_search_unavailable";
+  }
+  const trace = payload?.trace as Record<string, unknown> | undefined;
+  const sources = Array.isArray(payload?.sources) ? payload.sources : [];
+  if (trace?.degraded === true && sources.length === 0) return "degraded_without_evidence";
+  return undefined;
+}
+
+function fallbackPayload(
+  fastText: string,
+  searchId: string,
+  reason: string,
+): string {
+  const payload = parsedObject(fastText);
+  if (!payload) {
+    return JSON.stringify({
+      fallback_from: "deep",
+      fallback_reason: reason,
+      search_id: searchId,
+      evidence: fastText,
+    });
+  }
+  const trace =
+    payload.trace && typeof payload.trace === "object" && !Array.isArray(payload.trace)
+      ? (payload.trace as Record<string, unknown>)
+      : {};
+  return JSON.stringify({
+    ...payload,
+    fallback_from: "deep",
+    fallback_reason: reason,
+    trace: {
+      ...trace,
+      search_id: searchId,
+      degraded: true,
+      fallback: { from: "deep", reason },
+    },
+  });
+}
+
+function logDeepSearch(
+  searchId: string,
+  outcome: "success" | "degraded" | "fallback" | "cancelled" | "failed",
+  reason?: string,
+): void {
+  console.info(
+    JSON.stringify({
+      event: "pi.deep_search",
+      search_id: searchId,
+      outcome,
+      ...(reason ? { reason } : {}),
+    }),
+  );
+}
+
+async function executeDeepSearch(
+  client: TkbMcpClient,
+  args: Record<string, unknown>,
+  signal: AbortSignal | undefined,
+  config: TkbAdapterConfig,
+  turnDeadline: TurnDeadlineBudget | undefined,
+  fallbackBudget: SearchFallbackBudget | undefined,
+): Promise<PiToolResult> {
+  const searchId = randomUUID();
+  const deepArgs = { ...args, correlation_id: searchId };
+  let deepResult: { text: string; isError: boolean } | undefined;
+  let reason: string | undefined;
+  try {
+    const timeoutMs = turnDeadline
+      ? turnDeadline.effectiveTimeoutMs(config.deepToolTimeoutMs)
+      : config.deepToolTimeoutMs;
+    deepResult = await client.callTool("search_knowledge_deep", deepArgs, {
+      signal,
+      timeoutMs,
+    });
+    reason = deepFallbackReason(deepResult);
+    if (!reason && deepResult.isError) {
+      throw new Error(deepResult.text || "MCP returned a tool error");
+    }
+  } catch (error) {
+    if (error instanceof McpAbortedError || signal?.aborted) {
+      logDeepSearch(searchId, "cancelled");
+      throw new Error(redact(`TKB tool search_knowledge_deep failed: ${errorMessage(error)}`));
+    }
+    if (error instanceof McpTimeoutError) reason = "deep_search_timeout";
+    else throw new Error(redact(`TKB tool search_knowledge_deep failed: ${errorMessage(error)}`));
+  }
+
+  if (!reason && deepResult) {
+    const trace = parsedObject(deepResult.text)?.trace as Record<string, unknown> | undefined;
+    const degraded = trace?.degraded === true;
+    logDeepSearch(searchId, degraded ? "degraded" : "success");
+    return {
+      content: [{ type: "text", text: deepResult.text || "TKB MCP returned no content." }],
+      details: {
+        mcpTool: "search_knowledge_deep",
+        arguments: args,
+        searchId,
+        degraded,
+        ...(degraded ? { activity: "degraded" as const } : {}),
+      },
+      isError: false,
+    };
+  }
+
+  if (!reason || !fallbackBudget?.claim()) {
+    logDeepSearch(searchId, "failed", reason);
+    throw new Error(`TKB deep search ended with ${reason ?? "no usable evidence"}; fallback already used`);
+  }
+
+  try {
+    logDeepSearch(searchId, "degraded", reason);
+    const timeoutMs = turnDeadline
+      ? turnDeadline.effectiveTimeoutMs(config.defaultToolTimeoutMs)
+      : config.defaultToolTimeoutMs;
+    const fallback = await client.callTool("search_knowledge_fast", args, {
+      signal,
+      timeoutMs,
+    });
+    if (fallback.isError) throw new Error(fallback.text || "MCP returned a tool error");
+    logDeepSearch(searchId, "fallback", reason);
+    return {
+      content: [{ type: "text", text: fallbackPayload(fallback.text, searchId, reason) }],
+      details: {
+        mcpTool: "search_knowledge_fast",
+        arguments: args,
+        activity: "fallback",
+        searchId,
+        degraded: true,
+        fallback: true,
+      },
+      isError: false,
+    };
+  } catch (error) {
+    logDeepSearch(searchId, "failed", "fast_fallback_failed");
+    throw new Error(
+      redact(
+        `TKB deep search ${reason}; single fast fallback failed: ${errorMessage(error)}`,
+      ),
+    );
+  }
 }
 
 export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinition[] {
@@ -158,12 +328,13 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
         "Deep evidence search for cross-document comparison, multi-hop relationships, timelines, causes, and synthesis.",
       parameters: SEARCH_PARAMS,
       execute: (_id, params, signal) =>
-        executeMcpTool(
+        executeDeepSearch(
           client,
-          "search_knowledge_deep",
           { query: params.query, top_k: params.top_k ?? 10 },
           signal,
-          deep,
+          config,
+          options.turnDeadline,
+          options.fallbackBudget ?? new SearchFallbackBudget(),
         ),
     }),
     defineTool({

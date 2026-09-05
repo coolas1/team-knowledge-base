@@ -24,7 +24,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY scripts ./scripts
 RUN npm ci --omit=dev && npm run security \
-    && mkdir -p /app/data/sessions \
+    && mkdir -p /app/data/sessions /app/tool-library \
     && chown -R node:node /app
 
 COPY --from=build --chown=node:node /app/dist ./dist

@@ -155,9 +155,7 @@ async def test_conversation_memory_operations_validate_and_handle_disabled(fake_
 async def test_conversation_memory_operations_map_provider_failures(
     fake_kb, operation, message
 ):
-    mcp_mod.set_conversation_memory_service(
-        FakeConversationMemoryService(fail=True)
-    )
+    mcp_mod.set_conversation_memory_service(FakeConversationMemoryService(fail=True))
 
     with pytest.raises(RuntimeError, match=message) as error:
         await operation()
@@ -191,9 +189,7 @@ async def test_standalone_engine_mcp_manages_conversation_runtime(monkeypatch):
         "config.schema.load_config",
         lambda: AppConfig.model_validate({"hindsight": {"enabled": True}}),
     )
-    monkeypatch.setattr(
-        "src.engine.components.store.postgres.init_db", init_db
-    )
+    monkeypatch.setattr("src.engine.components.store.postgres.init_db", init_db)
     monkeypatch.setattr(
         "src.engine.config.build_engine", lambda config: FakeKnowledgeBase()
     )
@@ -206,9 +202,7 @@ async def test_standalone_engine_mcp_manages_conversation_runtime(monkeypatch):
     )
     monkeypatch.setattr(
         "src.engine.hindsight_components.conversation_service.build_conversation_memory_service",
-        lambda **kwargs: (
-            captured.update(service_build=kwargs) or conversation_service
-        ),
+        lambda **kwargs: captured.update(service_build=kwargs) or conversation_service,
     )
 
     def build_runtime(**kwargs):
@@ -362,6 +356,34 @@ async def test_search_tools_fix_recall_mode(tool, expected_mode, top_k):
     assert service.request.mode == expected_mode
     assert service.request.top_k == top_k
     assert service.request.needs_answer is False
+
+
+async def test_deep_search_returns_typed_timeout_payload():
+    from src.engine.hindsight_components.errors import DeepSearchTimeoutError
+
+    class FakeQueryService:
+        async def query(self, request):
+            raise DeepSearchTimeoutError(
+                request.correlation_id or "missing",
+                {
+                    "search_id": request.correlation_id,
+                    "outcome": "deep_search_timeout",
+                    "phase_outcomes": {},
+                },
+            )
+
+    mcp_mod.set_query_service(FakeQueryService())
+    try:
+        out = await mcp_mod.search_knowledge_deep(
+            "compare", correlation_id="pi-correlation"
+        )
+    finally:
+        mcp_mod._query_service = None
+
+    assert out["error"] == {
+        "code": "deep_search_timeout",
+        "search_id": "pi-correlation",
+    }
 
 
 async def test_get_document_missing_returns_error(fake_kb):

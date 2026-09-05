@@ -99,6 +99,17 @@ services:
       HINDSIGHT_GRAPH_WORKER_POLL_SECONDS: ${HINDSIGHT_GRAPH_WORKER_POLL_SECONDS:-1}
       HINDSIGHT_GRAPH_WORKER_LEASE_SECONDS: ${HINDSIGHT_GRAPH_WORKER_LEASE_SECONDS:-300}
       HINDSIGHT_GRAPH_WORKER_MAX_ATTEMPTS: ${HINDSIGHT_GRAPH_WORKER_MAX_ATTEMPTS:-10}
+      # Bounded deep-recall phases. The total stays below Pi's 60s tool limit.
+      HINDSIGHT_DEEP_TOTAL_TIMEOUT_SECONDS: ${HINDSIGHT_DEEP_TOTAL_TIMEOUT_SECONDS:-45}
+      HINDSIGHT_QUERY_ANALYSIS_TIMEOUT_SECONDS: ${HINDSIGHT_QUERY_ANALYSIS_TIMEOUT_SECONDS:-8}
+      HINDSIGHT_QUERY_EMBEDDING_TIMEOUT_SECONDS: ${HINDSIGHT_QUERY_EMBEDDING_TIMEOUT_SECONDS:-10}
+      HINDSIGHT_RETRIEVAL_ARM_TIMEOUT_SECONDS: ${HINDSIGHT_RETRIEVAL_ARM_TIMEOUT_SECONDS:-5}
+      HINDSIGHT_RERANK_TIMEOUT_SECONDS: ${HINDSIGHT_RERANK_TIMEOUT_SECONDS:-12}
+      HINDSIGHT_RERANK_CANDIDATE_LIMIT: ${HINDSIGHT_RERANK_CANDIDATE_LIMIT:-40}
+      HINDSIGHT_RERANK_TEXT_LIMIT_CHARS: ${HINDSIGHT_RERANK_TEXT_LIMIT_CHARS:-4000}
+      HINDSIGHT_RERANK_TOTAL_CHARS: ${HINDSIGHT_RERANK_TOTAL_CHARS:-60000}
+      HINDSIGHT_KEYWORD_CANDIDATE_LIMIT: ${HINDSIGHT_KEYWORD_CANDIDATE_LIMIT:-300}
+      HINDSIGHT_KEYWORD_INDEX_ENABLED: ${HINDSIGHT_KEYWORD_INDEX_ENABLED:-false}
       # Conversation memory is enabled only for this integrated deployment,
       # where the webapp exposes the matching private MCP contract.
       HINDSIGHT_CONVERSATION_MEMORY_ENABLED: ${HINDSIGHT_CONVERSATION_MEMORY_ENABLED:-true}
@@ -143,7 +154,7 @@ services:
       TKB_CONTRACT_STRICT: ${TKB_CONTRACT_STRICT:-true}
       TKB_CONNECT_TIMEOUT_MS: ${TKB_CONNECT_TIMEOUT_MS:-10000}
       TKB_TOOL_TIMEOUT_MS: ${TKB_TOOL_TIMEOUT_MS:-60000}
-      TKB_DEEP_TOOL_TIMEOUT_MS: ${TKB_DEEP_TOOL_TIMEOUT_MS:-300000}
+      TKB_DEEP_TOOL_TIMEOUT_MS: ${TKB_DEEP_TOOL_TIMEOUT_MS:-60000}
       TKB_CONVERSATION_MEMORY_ENABLED: ${TKB_CONVERSATION_MEMORY_ENABLED:-true}
       TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS: ${TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS:-5000}
       TKB_CONVERSATION_MEMORY_RECALL_LIMIT: ${TKB_CONVERSATION_MEMORY_RECALL_LIMIT:-5}
@@ -154,6 +165,13 @@ services:
       PI_AGENT_CWD: /app
       PI_AGENT_DATA_DIR: /app/data
       PI_AGENT_SESSION_DIR: /app/data/sessions
+      PI_AGENT_TRANSCRIPT_DIR: /app/data/transcripts
+      PI_AGENT_TOOL_AUTHORING_ENABLED: ${PI_AGENT_TOOL_AUTHORING_ENABLED:-true}
+      PI_AGENT_RUNNER_URL: ${PI_AGENT_RUNNER_URL:-}
+      PI_AGENT_RUNNER_TOKEN: ${PI_AGENT_RUNNER_TOKEN:-}
+      PI_AGENT_TOOL_LIBRARY_DIR: /app/tool-library
+      PI_AGENT_MAX_CODE_JOBS: ${PI_AGENT_MAX_CODE_JOBS:-12}
+      PI_AGENT_MAX_BUILD_ATTEMPTS: ${PI_AGENT_MAX_BUILD_ATTEMPTS:-3}
       # Explicit PI_AGENT_* values win. When omitted, the runtime inherits the
       # already configured LLM_* API; disabled placeholders fall back to Ollama.
       LLM_PROVIDER: ${LLM_PROVIDER:-}
@@ -173,13 +191,43 @@ services:
       PI_AGENT_CONTEXT_WINDOW: ${PI_AGENT_CONTEXT_WINDOW:-32768}
       PI_AGENT_MAX_OUTPUT_TOKENS: ${PI_AGENT_MAX_OUTPUT_TOKENS:-8192}
       PI_AGENT_MAX_TOOL_CALLS: ${PI_AGENT_MAX_TOOL_CALLS:-12}
-      PI_AGENT_MAX_RUN_SECONDS: ${PI_AGENT_MAX_RUN_SECONDS:-300}
+      PI_AGENT_MAX_RUN_SECONDS: ${PI_AGENT_MAX_RUN_SECONDS:-180}
+      PI_AGENT_TURN_RESERVE_SECONDS: ${PI_AGENT_TURN_RESERVE_SECONDS:-60}
       PI_AGENT_MAX_LOADED_SESSIONS: ${PI_AGENT_MAX_LOADED_SESSIONS:-50}
       PI_AGENT_MAX_REQUEST_BYTES: ${PI_AGENT_MAX_REQUEST_BYTES:-1048576}
     ports:
       - "127.0.0.1:${PI_AGENT_PORT:-8010}:8010"
     volumes:
       - piagentdata:/app/data
+      - toolslibrary:/app/tool-library
+    restart: unless-stopped
+
+  tool-job:
+    profiles: [tool-images]
+    image: team-kb-tool-job:latest
+    build:
+      context: ./src/extensions/tool-runner
+      dockerfile: Containerfile
+      target: job
+    # Build-only image; the gateway creates disposable containers from its ID.
+    entrypoint: [node, -e, "process.exit(0)"]
+    network_mode: none
+
+  tool-runner:
+    profiles: [tool-authoring]
+    image: team-kb-tool-runner:latest
+    build:
+      context: ./src/extensions/tool-runner
+      dockerfile: Containerfile
+      target: gateway
+    environment:
+      RUNNER_HOST: 0.0.0.0
+      RUNNER_TOKEN: ${PI_AGENT_RUNNER_TOKEN:-}
+      RUNNER_JOB_IMAGE: team-kb-tool-job:latest
+      RUNNER_PUBLIC_HTTP: ${RUNNER_PUBLIC_HTTP:-true}
+      PI_AGENT_TIMEZONE: ${PI_AGENT_TIMEZONE:-Asia/Shanghai}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
 volumes:
@@ -188,3 +236,4 @@ volumes:
   ollamadata:
   piagentdata:
   artifactsdata:
+  toolslibrary:

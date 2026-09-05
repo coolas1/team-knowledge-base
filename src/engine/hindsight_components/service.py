@@ -63,12 +63,14 @@ class HindsightService:
         mode: str = "deep",
         top_k: int | None = None,
         source_type: str | None = None,
+        search_id: str | None = None,
     ) -> RecallResult:
         return await self._recall.recall(
             query,
             mode=mode,
             top_k=top_k,
             source_type=source_type,
+            search_id=search_id,
         )
 
     async def reflect(

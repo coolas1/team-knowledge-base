@@ -121,6 +121,9 @@ export function createPiAgentHttpServer(
         if (typeof body.message !== "string" || body.message.trim() === "") {
           throw new HttpError(400, "message must be a non-empty string");
         }
+        if (body.clientMessageId !== undefined && typeof body.clientMessageId !== "string") {
+          throw new HttpError(400, "clientMessageId must be a string");
+        }
         response.writeHead(200, {
           "content-type": "text/event-stream; charset=utf-8",
           "cache-control": "no-cache, no-transform",
@@ -131,12 +134,21 @@ export function createPiAgentHttpServer(
         response.on("close", () => {
           if (!response.writableEnded) void runtime.cancel(sessionId);
         });
+        let terminalEventSent = false;
         try {
-          await runtime.streamMessage(sessionId, body.message, (event) =>
-            sendSse(response, event),
+          await runtime.streamMessage(
+            sessionId,
+            body.message,
+            (event) => {
+              if (event.type === "message.failed") terminalEventSent = true;
+              sendSse(response, event);
+            },
+            body.clientMessageId as string | undefined,
           );
         } catch (error) {
-          sendSse(response, { type: "message.failed", ...errorBody(error) });
+          if (!terminalEventSent) {
+            sendSse(response, { type: "message.failed", ...errorBody(error) });
+          }
         } finally {
           response.end();
         }

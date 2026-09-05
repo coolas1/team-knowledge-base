@@ -62,13 +62,11 @@ async def test_conversation_filter_is_applied_before_all_arm_rankings() -> None:
             self.file = candidate("file", "high ranking file", semantic=1.0)
             self.file.source_type = "graphrag-pipeline"
             self.conversation = candidate(
-                "conversation", "remembered preference", semantic=0.2
+                "conversation", "remembered preference", semantic=0.2, keyword=0.8
             )
             self.conversation.source_type = "conversation"
 
-        async def semantic_search(
-            self, embedding, limit, *, source_type=None
-        ):
+        async def semantic_search(self, embedding, limit, *, source_type=None):
             self.calls["semantic"] += 1
             self.source_filters.append(source_type)
             rows = [self.file, self.conversation]
@@ -80,9 +78,9 @@ async def test_conversation_filter_is_applied_before_all_arm_rankings() -> None:
             return [self.conversation] if source_type == "conversation" else [self.file]
 
     repository = SourceFilteringRepository()
-    result = await RecallEngine(
-        repository, FakeProviders(), HindsightOptions()
-    ).recall("preference", mode="fast", source_type="conversation")
+    result = await RecallEngine(repository, FakeProviders(), HindsightOptions()).recall(
+        "preference", mode="fast", source_type="conversation"
+    )
 
     assert [item.id for item in result.results] == ["conversation"]
     assert repository.source_filters == ["conversation", "conversation"]

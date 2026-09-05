@@ -29,10 +29,17 @@ export type PiThinkingLevel =
   | "max";
 
 export interface PiAgentConfig {
+  toolAuthoringEnabled: boolean;
+  runnerUrl: string;
+  runnerToken: string;
+  toolLibraryDir: string;
+  maxCodeJobs: number;
+  maxBuildAttempts: number;
   host: string;
   port: number;
   dataDir: string;
   sessionDir: string;
+  transcriptDir: string;
   cwd: string;
   provider: string;
   model: string;
@@ -48,6 +55,7 @@ export interface PiAgentConfig {
   maxOutputTokens: number;
   maxToolCalls: number;
   maxRunSeconds: number;
+  turnReserveSeconds: number;
   maxLoadedSessions: number;
   maxRequestBytes: number;
 }
@@ -96,7 +104,7 @@ export function loadTkbAdapterConfig(
     mcpUrl: env.TKB_MCP_URL?.trim() || "http://localhost:8000/mcp/",
     connectTimeoutMs: positiveInteger(env.TKB_CONNECT_TIMEOUT_MS, 10_000),
     defaultToolTimeoutMs: positiveInteger(env.TKB_TOOL_TIMEOUT_MS, 60_000),
-    deepToolTimeoutMs: positiveInteger(env.TKB_DEEP_TOOL_TIMEOUT_MS, 300_000),
+    deepToolTimeoutMs: positiveInteger(env.TKB_DEEP_TOOL_TIMEOUT_MS, 60_000),
     strictContract: enabled(env.TKB_CONTRACT_STRICT, true),
     enableLegacySearch: enabled(env.TKB_ENABLE_LEGACY_SEARCH),
     enableWriteTools: enabled(env.TKB_ENABLE_WRITE_TOOLS),
@@ -129,6 +137,11 @@ export function loadPiAgentConfig(
 ): PiAgentConfig {
   const cwd = env.PI_AGENT_CWD?.trim() || process.cwd();
   const dataDir = env.PI_AGENT_DATA_DIR?.trim() || `${cwd}/.pi-agent-data`;
+  const sessionDir = env.PI_AGENT_SESSION_DIR?.trim() || `${dataDir}/sessions`;
+  const transcriptDir = env.PI_AGENT_TRANSCRIPT_DIR?.trim() || `${dataDir}/transcripts`;
+  if (path.resolve(sessionDir) === path.resolve(transcriptDir)) {
+    throw new Error("PI_AGENT_TRANSCRIPT_DIR must differ from PI_AGENT_SESSION_DIR");
+  }
   const sharedProvider = env.LLM_PROVIDER?.trim();
   const inheritSharedModel =
     Boolean(sharedProvider) &&
@@ -144,9 +157,16 @@ export function loadPiAgentConfig(
     "qwen3:14b";
   return {
     host: env.PI_AGENT_HOST?.trim() || "127.0.0.1",
+    toolAuthoringEnabled: enabled(env.PI_AGENT_TOOL_AUTHORING_ENABLED, true),
+    runnerUrl: env.PI_AGENT_RUNNER_URL?.trim() || "",
+    runnerToken: env.PI_AGENT_RUNNER_TOKEN?.trim() || "",
+    toolLibraryDir: env.PI_AGENT_TOOL_LIBRARY_DIR?.trim() || `${dataDir}/tool-library`,
+    maxCodeJobs: requiredPositiveInteger(env.PI_AGENT_MAX_CODE_JOBS, 12, "PI_AGENT_MAX_CODE_JOBS", 100),
+    maxBuildAttempts: requiredPositiveInteger(env.PI_AGENT_MAX_BUILD_ATTEMPTS, 3, "PI_AGENT_MAX_BUILD_ATTEMPTS", 10),
     port: positiveInteger(env.PI_AGENT_PORT, 8010),
     dataDir,
-    sessionDir: env.PI_AGENT_SESSION_DIR?.trim() || `${dataDir}/sessions`,
+    sessionDir,
+    transcriptDir,
     cwd,
     provider,
     model,
@@ -175,8 +195,24 @@ export function loadPiAgentConfig(
     contextWindow: positiveInteger(env.PI_AGENT_CONTEXT_WINDOW, 32_768),
     maxOutputTokens: positiveInteger(env.PI_AGENT_MAX_OUTPUT_TOKENS, 8_192),
     maxToolCalls: positiveInteger(env.PI_AGENT_MAX_TOOL_CALLS, 12),
-    maxRunSeconds: positiveInteger(env.PI_AGENT_MAX_RUN_SECONDS, 300),
+    maxRunSeconds: positiveInteger(env.PI_AGENT_MAX_RUN_SECONDS, 180),
+    turnReserveSeconds: positiveInteger(env.PI_AGENT_TURN_RESERVE_SECONDS, 60),
     maxLoadedSessions: positiveInteger(env.PI_AGENT_MAX_LOADED_SESSIONS, 50),
     maxRequestBytes: positiveInteger(env.PI_AGENT_MAX_REQUEST_BYTES, 1_048_576),
   };
 }
+
+export function validateDeadlineHierarchy(
+  agent: PiAgentConfig,
+  adapter: TkbAdapterConfig,
+): void {
+  const maxRunMs = agent.maxRunSeconds * 1_000;
+  const reserveMs = agent.turnReserveSeconds * 1_000;
+  if (adapter.deepToolTimeoutMs + reserveMs >= maxRunMs) {
+    throw new Error(
+      "Invalid timeout hierarchy: TKB_DEEP_TOOL_TIMEOUT_MS + " +
+        "PI_AGENT_TURN_RESERVE_SECONDS must be less than PI_AGENT_MAX_RUN_SECONDS",
+    );
+  }
+}
+import path from "node:path";

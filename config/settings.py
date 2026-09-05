@@ -48,6 +48,18 @@ class InfraSettings(BaseSettings):
     hindsight_recall_min_score: float = Field(default=0.4, ge=0.0, le=1.0)
     hindsight_rerank_semantic_margin: float = Field(default=0.25, ge=0.0)
 
+    # Deep recall uses a total monotonic deadline plus shorter phase limits.
+    hindsight_deep_total_timeout_seconds: float = Field(default=45.0, gt=0)
+    hindsight_query_analysis_timeout_seconds: float = Field(default=8.0, gt=0)
+    hindsight_query_embedding_timeout_seconds: float = Field(default=10.0, gt=0)
+    hindsight_retrieval_arm_timeout_seconds: float = Field(default=5.0, gt=0)
+    hindsight_rerank_timeout_seconds: float = Field(default=12.0, gt=0)
+    hindsight_rerank_candidate_limit: int = Field(default=40, ge=1)
+    hindsight_rerank_text_limit_chars: int = Field(default=4_000, ge=1)
+    hindsight_rerank_total_chars: int = Field(default=60_000, ge=1)
+    hindsight_keyword_candidate_limit: int = Field(default=300, ge=1)
+    hindsight_keyword_index_enabled: bool = False
+
     # Automatic conversation memory remains separately gated from file-memory
     # retention so deployments can upgrade the engine contract before enabling it.
     hindsight_conversation_memory_enabled: bool = False
@@ -57,9 +69,7 @@ class InfraSettings(BaseSettings):
     hindsight_conversation_worker_max_attempts: int = Field(default=10, ge=1)
     hindsight_conversation_worker_max_concurrent: int = Field(default=1, ge=1)
     hindsight_conversation_worker_retry_seconds: float = Field(default=1.0, gt=0)
-    hindsight_conversation_worker_max_retry_seconds: float = Field(
-        default=300.0, gt=0
-    )
+    hindsight_conversation_worker_max_retry_seconds: float = Field(default=300.0, gt=0)
     hindsight_conversation_retention_context: str = Field(
         default="Completed team conversation turn", min_length=1
     )

@@ -1,0 +1,1107 @@
+{
+  "date": "2026-09-05",
+  "model": "deepseek-v4-flash-vision-exp",
+  "provider": "custom",
+  "cases": [
+    {
+      "id": "json_group",
+      "passed": true,
+      "artifact": {
+        "name": "gen_accept_group",
+        "description": "Accumulate amounts by team. Input {rows:[{team:string,amount:number}]}; returns an object keyed by team with summed amounts. Empty rows array returns {}.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "team": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "team",
+                  "amount"
+                ]
+              }
+            }
+          },
+          "required": [
+            "rows"
+          ]
+        },
+        "outputSchema": {
+          "type": "object"
+        },
+        "capabilities": [],
+        "tests": [
+          {
+            "input": {
+              "rows": [
+                {
+                  "team": "red",
+                  "amount": 3
+                },
+                {
+                  "team": "blue",
+                  "amount": 7
+                },
+                {
+                  "team": "red",
+                  "amount": -1
+                }
+              ]
+            },
+            "expected": {
+              "red": 2,
+              "blue": 7
+            }
+          },
+          {
+            "input": {
+              "rows": []
+            },
+            "expected": {}
+          },
+          {
+            "input": {
+              "rows": [
+                {
+                  "team": "a",
+                  "amount": -5
+                }
+              ]
+            },
+            "expected": {
+              "a": -5
+            }
+          }
+        ],
+        "code": "export default async function(input, host) {\n  const rows = input.rows || [];\n  const result = {};\n  for (const row of rows) {\n    const key = String(row.team);\n    result[key] = (result[key] || 0) + row.amount;\n  }\n  return result;\n}",
+        "version": 1,
+        "hash": "e4e769dd97ecc9061f7e037e18abefea59e26948536ae3611d5b70f0be7b62ec",
+        "versionHash": "062e4c5644b2b3af53ca83ade34694c45cee4544bde8316dff0f7f7999128962",
+        "runtime": "sha256:550a229d42dcdbc3500a40b06a87fc1c7e6b4ac7028504ff29000b1ebe88d17d",
+        "active": true
+      },
+      "independent": {
+        "input": {
+          "rows": [
+            {
+              "team": "unseen",
+              "amount": 2.25
+            },
+            {
+              "team": "other",
+              "amount": 4
+            },
+            {
+              "team": "unseen",
+              "amount": -0.5
+            }
+          ]
+        },
+        "expected": {
+          "unseen": 1.75,
+          "other": 4
+        },
+        "actual": {
+          "jobId": "786dffda-878f-4d55-9d8a-7939f6dfe87e",
+          "status": "succeeded",
+          "result": {
+            "unseen": 1.75,
+            "other": 4
+          },
+          "logs": "",
+          "runtime": "sha256:550a229d42dcdbc3500a40b06a87fc1c7e6b4ac7028504ff29000b1ebe88d17d"
+        }
+      },
+      "events": [
+        {
+          "type": "tool.start",
+          "toolName": "find_tools",
+          "toolCallId": "call_00_oImKEzX5aiuIWqn89wc47580",
+          "isError": null,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "read",
+          "toolCallId": "call_01_5BkYH7Vmf2vun0NvzUMI5707",
+          "isError": null,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "find_tools",
+          "toolCallId": "call_00_oImKEzX5aiuIWqn89wc47580",
+          "isError": false,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "read",
+          "toolCallId": "call_01_5BkYH7Vmf2vun0NvzUMI5707",
+          "isError": false,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_Imp9JuzvPJI9WpDPqZZQ6027",
+          "isError": null,
+          "activity": "execute",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_Imp9JuzvPJI9WpDPqZZQ6027",
+          "isError": false,
+          "activity": "execute",
+          "jobId": "1a84f294-1294-4415-aa9c-ac47c9d25acf",
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "publish_tool",
+          "toolCallId": "call_00_O6kg043GEvRWuH2vqG6M9237",
+          "isError": null,
+          "activity": "test",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "publish_tool",
+          "toolCallId": "call_00_O6kg043GEvRWuH2vqG6M9237",
+          "isError": false,
+          "activity": "save",
+          "jobId": null,
+          "artifactId": "gen_accept_group",
+          "version": 1
+        },
+        {
+          "type": "tool.start",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_IbI7x9VFmDHq8s6CDZNg2172",
+          "isError": null,
+          "activity": "reuse",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_IbI7x9VFmDHq8s6CDZNg2172",
+          "isError": false,
+          "activity": "reuse",
+          "jobId": "3f25599d-0886-472f-81a6-3f0a2c65ee07",
+          "artifactId": "gen_accept_group",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "id": "timezone",
+      "passed": true,
+      "artifact": {
+        "name": "gen_accept_date",
+        "description": "Convert an ISO instant or \"now\" to a YYYY-MM-DD date string in a given IANA time zone.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "instant": {
+              "type": "string"
+            },
+            "zone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "instant",
+            "zone"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "string"
+        },
+        "capabilities": [],
+        "tests": [
+          {
+            "input": {
+              "instant": "2026-09-04T16:30:00Z",
+              "zone": "Asia/Shanghai"
+            },
+            "expected": "2026-09-05"
+          },
+          {
+            "input": {
+              "instant": "2026-09-04T16:30:00Z",
+              "zone": "UTC"
+            },
+            "expected": "2026-09-04"
+          }
+        ],
+        "code": "export default async (input, host) => {\n  const instant = input.instant === \"now\" ? new Date() : new Date(input.instant);\n  if (Number.isNaN(instant.getTime())) throw new Error(\"invalid instant\");\n  const fmt = new Intl.DateTimeFormat(\"en-CA\", {\n    timeZone: input.zone,\n    year: \"numeric\",\n    month: \"2-digit\",\n    day: \"2-digit\",\n  });\n  const parts = fmt.formatToParts(instant);\n  const get = (t) => parts.find((p) => p.type === t).value;\n  return `${get(\"year\")}-${get(\"month\")}-${get(\"day\")}`;\n};",
+        "version": 1,
+        "hash": "5ea99657988c6385ce0e4b29db1b63311b020a3427607d37355ac37c4bc41af1",
+        "versionHash": "bc01a113732e45e98b95621535bab52d04df262ae3db9984cbca77ff550a14d9",
+        "runtime": "sha256:550a229d42dcdbc3500a40b06a87fc1c7e6b4ac7028504ff29000b1ebe88d17d",
+        "active": true
+      },
+      "independent": {
+        "input": {
+          "instant": "2020-12-31T23:30:00Z",
+          "zone": "Asia/Tokyo"
+        },
+        "expected": "2021-01-01",
+        "actual": {
+          "jobId": "013177d3-3e02-43dc-be32-887d129f8743",
+          "status": "succeeded",
+          "result": "2021-01-01",
+          "logs": "",
+          "runtime": "sha256:550a229d42dcdbc3500a40b06a87fc1c7e6b4ac7028504ff29000b1ebe88d17d"
+        }
+      },
+      "events": [
+        {
+          "type": "tool.start",
+          "toolName": "read",
+          "toolCallId": "call_00_jWNoN9MIFxJvq1hefYQ28329",
+          "isError": null,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "find_tools",
+          "toolCallId": "call_01_8G4rTZ6VE6NjY8I3UwND0851",
+          "isError": null,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "find_tools",
+          "toolCallId": "call_01_8G4rTZ6VE6NjY8I3UwND0851",
+          "isError": false,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "read",
+          "toolCallId": "call_00_jWNoN9MIFxJvq1hefYQ28329",
+          "isError": false,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_i328KfYD5rtFDr1vIAFB3503",
+          "isError": null,
+          "activity": "execute",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_i328KfYD5rtFDr1vIAFB3503",
+          "isError": false,
+          "activity": "execute",
+          "jobId": "0348fdfe-906d-4734-882d-6c6fc31473df",
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "publish_tool",
+          "toolCallId": "call_00_PSNt30SYFczwRtjraqFX2720",
+          "isError": null,
+          "activity": "test",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "publish_tool",
+          "toolCallId": "call_00_PSNt30SYFczwRtjraqFX2720",
+          "isError": false,
+          "activity": "save",
+          "jobId": null,
+          "artifactId": "gen_accept_date",
+          "version": 1
+        },
+        {
+          "type": "tool.start",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_eUb2wzTb9AaTWN8AHrc74651",
+          "isError": null,
+          "activity": "reuse",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_eUb2wzTb9AaTWN8AHrc74651",
+          "isError": false,
+          "activity": "reuse",
+          "jobId": "38f79c3e-7e26-4081-94b5-3b587b17657d",
+          "artifactId": "gen_accept_date",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "id": "calculation",
+      "passed": true,
+      "artifact": {
+        "name": "gen_accept_temperature",
+        "description": "Convert a Fahrenheit temperature to Celsius and return the numeric value.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "fahrenheit": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "fahrenheit"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "number"
+        },
+        "capabilities": [],
+        "tests": [
+          {
+            "input": {
+              "fahrenheit": 32
+            },
+            "expected": 0
+          },
+          {
+            "input": {
+              "fahrenheit": 212
+            },
+            "expected": 100
+          },
+          {
+            "input": {
+              "fahrenheit": -40
+            },
+            "expected": -40
+          },
+          {
+            "input": {
+              "fahrenheit": 77
+            },
+            "expected": 25
+          }
+        ],
+        "code": "export default async function (input, host) {\n  const f = input.fahrenheit;\n  if (typeof f !== \"number\" || !isFinite(f)) {\n    throw new Error(\"fahrenheit must be a finite number\");\n  }\n  return (f - 32) * 5 / 9;\n}\n",
+        "version": 1,
+        "hash": "96c5d527989832c03cbc34095c517913880c2aa7578969a20033c39a4b859c80",
+        "versionHash": "981200ca6c846afbeba797ad4fa4e45abad63fb09f0e612a41965a7e78b9fb61",
+        "runtime": "sha256:550a229d42dcdbc3500a40b06a87fc1c7e6b4ac7028504ff29000b1ebe88d17d",
+        "active": true
+      },
+      "independent": {
+        "input": {
+          "fahrenheit": -40
+        },
+        "expected": -40,
+        "actual": {
+          "jobId": "e40fd939-9f3d-4278-b957-bfaf0e177625",
+          "status": "succeeded",
+          "result": -40,
+          "logs": "",
+          "runtime": "sha256:550a229d42dcdbc3500a40b06a87fc1c7e6b4ac7028504ff29000b1ebe88d17d"
+        }
+      },
+      "events": [
+        {
+          "type": "tool.start",
+          "toolName": "find_tools",
+          "toolCallId": "call_00_R5FU6BKxFOYVB4MK66x61652",
+          "isError": null,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "read",
+          "toolCallId": "call_01_AqIxhx1g8W6IdewVDmVG9488",
+          "isError": null,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "find_tools",
+          "toolCallId": "call_00_R5FU6BKxFOYVB4MK66x61652",
+          "isError": false,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "read",
+          "toolCallId": "call_01_AqIxhx1g8W6IdewVDmVG9488",
+          "isError": true,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "read",
+          "toolCallId": "call_00_ryMw7n0uQrw3NJIH9e5q6989",
+          "isError": null,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "read",
+          "toolCallId": "call_00_ryMw7n0uQrw3NJIH9e5q6989",
+          "isError": true,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "read",
+          "toolCallId": "call_00_lZ3i07uEqbXIO1V6K6YI9838",
+          "isError": null,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "read",
+          "toolCallId": "call_00_lZ3i07uEqbXIO1V6K6YI9838",
+          "isError": false,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_GjkrGmvc16vF4ELeCtnj2491",
+          "isError": null,
+          "activity": "execute",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_GjkrGmvc16vF4ELeCtnj2491",
+          "isError": false,
+          "activity": "execute",
+          "jobId": "9f1517e9-937f-487e-b582-a242181e48c3",
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_246v4wFhcqCthyufSmIC2662",
+          "isError": null,
+          "activity": "execute",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_246v4wFhcqCthyufSmIC2662",
+          "isError": false,
+          "activity": "repair",
+          "jobId": "9da0924d-6e6d-4fc8-b179-b64d54eb9eab",
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "publish_tool",
+          "toolCallId": "call_00_L1ZOjaUFSkgq3QPDtY0R1903",
+          "isError": null,
+          "activity": "test",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "publish_tool",
+          "toolCallId": "call_00_L1ZOjaUFSkgq3QPDtY0R1903",
+          "isError": false,
+          "activity": "save",
+          "jobId": null,
+          "artifactId": "gen_accept_temperature",
+          "version": 1
+        },
+        {
+          "type": "tool.start",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_ET_YQnvRSjfeRSAIrFvEcoY2571",
+          "isError": null,
+          "activity": "reuse",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_ET_YQnvRSjfeRSAIrFvEcoY2571",
+          "isError": false,
+          "activity": "reuse",
+          "jobId": "8f9ae463-1a9b-4588-ab9a-c1f73fb1265c",
+          "artifactId": "gen_accept_temperature",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "id": "repair",
+      "passed": true,
+      "artifact": {
+        "name": "gen_accept_uppercase",
+        "description": "Uppercase every string in a provided array. Given {values: string[]}, returns an array with each string converted to uppercase.",
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "values"
+          ],
+          "properties": {
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "capabilities": [],
+        "tests": [
+          {
+            "input": {
+              "values": [
+                "hello",
+                "world"
+              ]
+            },
+            "expected": [
+              "HELLO",
+              "WORLD"
+            ]
+          },
+          {
+            "input": {
+              "values": [
+                "a",
+                "Bc",
+                "xyz"
+              ]
+            },
+            "expected": [
+              "A",
+              "BC",
+              "XYZ"
+            ]
+          },
+          {
+            "input": {
+              "values": []
+            },
+            "expected": []
+          },
+          {
+            "input": {
+              "values": [
+                "mixed",
+                "Case"
+              ]
+            },
+            "expected": [
+              "MIXED",
+              "CASE"
+            ]
+          }
+        ],
+        "code": "export default async (input) => {\n  const { values } = input;\n  if (!Array.isArray(values)) {\n    throw new Error(\"input.values must be an array\");\n  }\n  if (values.some((v) => typeof v !== \"string\")) {\n    throw new Error(\"input.values must only contain strings\");\n  }\n  return values.map((v) => v.toUpperCase());\n}",
+        "version": 1,
+        "hash": "844ab5e15902736c49e3763fce16f7496422289a729e797afffb211517590ef7",
+        "versionHash": "ccbd6d4d080bd012f1f9a8e5bfd941ffb7afaff73697ff43af26ff56cd5bc9d0",
+        "runtime": "sha256:550a229d42dcdbc3500a40b06a87fc1c7e6b4ac7028504ff29000b1ebe88d17d",
+        "active": true
+      },
+      "independent": {
+        "input": {
+          "values": [
+            "independent",
+            "XyZ",
+            ""
+          ]
+        },
+        "expected": [
+          "INDEPENDENT",
+          "XYZ",
+          ""
+        ],
+        "actual": {
+          "jobId": "4580c5e8-4a5c-45c2-82a4-28660650419b",
+          "status": "succeeded",
+          "result": [
+            "INDEPENDENT",
+            "XYZ",
+            ""
+          ],
+          "logs": "",
+          "runtime": "sha256:550a229d42dcdbc3500a40b06a87fc1c7e6b4ac7028504ff29000b1ebe88d17d"
+        }
+      },
+      "events": [
+        {
+          "type": "tool.start",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_D27RIsQFNXAfhXSxjEFq1338",
+          "isError": null,
+          "activity": "execute",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_D27RIsQFNXAfhXSxjEFq1338",
+          "isError": true,
+          "activity": "failure",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_51eiYeIFuVldRnGEDo2W3498",
+          "isError": null,
+          "activity": "execute",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_51eiYeIFuVldRnGEDo2W3498",
+          "isError": false,
+          "activity": "repair",
+          "jobId": "78ed75c9-f9d0-4a10-b272-24f4ad113baf",
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "publish_tool",
+          "toolCallId": "call_00_jwZYwnQyIllz0AEYKJgQ7739",
+          "isError": null,
+          "activity": "test",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "publish_tool",
+          "toolCallId": "call_00_jwZYwnQyIllz0AEYKJgQ7739",
+          "isError": false,
+          "activity": "save",
+          "jobId": null,
+          "artifactId": "gen_accept_uppercase",
+          "version": 1
+        },
+        {
+          "type": "tool.start",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_REMFkvMZc9gcOvi2ESgQ3446",
+          "isError": null,
+          "activity": "reuse",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_REMFkvMZc9gcOvi2ESgQ3446",
+          "isError": false,
+          "activity": "reuse",
+          "jobId": "dabcb710-e8cb-45f3-810f-9719f05c95c9",
+          "artifactId": "gen_accept_uppercase",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "id": "web",
+      "passed": true,
+      "artifact": {
+        "name": "gen_accept_title",
+        "description": "Fetch a public web page and return its <title> text as a plain string, using host.fetch and htmlparser2.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        },
+        "outputSchema": {
+          "type": "string"
+        },
+        "capabilities": [
+          "public_http"
+        ],
+        "tests": [
+          {
+            "input": {
+              "url": "https://example.com/"
+            },
+            "expected": "Example Domain"
+          },
+          {
+            "input": {
+              "url": ""
+            },
+            "expectError": "execution_failed"
+          },
+          {
+            "input": {
+              "url": "https://example.com/nonexistent-path-xyz"
+            },
+            "expectError": "execution_failed"
+          }
+        ],
+        "code": "import { Parser } from \"htmlparser2\";\n\nexport default async function (input, host) {\n  const url = input.url;\n  if (typeof url !== \"string\" || url.length === 0) {\n    throw new Error(\"input.url must be a non-empty string\");\n  }\n  let res;\n  try {\n    res = await host.fetch({ url, method: \"GET\" });\n  } catch (e) {\n    throw new Error(\"network error fetching \" + url + \": \" + e.message);\n  }\n  if (res.status !== 200) {\n    throw new Error(\"fetch failed: HTTP \" + res.status + \" for \" + url);\n  }\n  const html = res.text ?? \"\";\n  let title = null;\n  let inTitle = false;\n  let found = false;\n  const parser = new Parser({\n    onopentag(name) {\n      if (found) return;\n      if (name === \"title\") inTitle = true;\n    },\n    ontext(text) {\n      if (inTitle && !found) title = (title ?? \"\") + text;\n    },\n    onclosetag(name) {\n      if (name === \"title\") { inTitle = false; found = true; }\n    },\n  });\n  parser.write(html);\n  parser.end();\n  return (title ?? \"\").trim();\n}\n",
+        "version": 1,
+        "hash": "c7b47a9ad91e859cd529600b3a37c94ebce3e652a5661e026762071dac99608e",
+        "versionHash": "f496e5b3c38b3fa1cd475c64b189a0893a5eafcdc9dfc5d50c23fe5aa15843a7",
+        "runtime": "sha256:550a229d42dcdbc3500a40b06a87fc1c7e6b4ac7028504ff29000b1ebe88d17d",
+        "active": true
+      },
+      "independent": {
+        "input": {
+          "url": "https://example.com/"
+        },
+        "expected": "Example Domain",
+        "actual": {
+          "jobId": "84b0ba22-40a3-4116-91ac-d4c6a439e358",
+          "status": "succeeded",
+          "result": "Example Domain",
+          "logs": "",
+          "runtime": "sha256:550a229d42dcdbc3500a40b06a87fc1c7e6b4ac7028504ff29000b1ebe88d17d"
+        }
+      },
+      "events": [
+        {
+          "type": "tool.start",
+          "toolName": "read",
+          "toolCallId": "call_00_TM0ij38O4ok7Yom3WDPS3981",
+          "isError": null,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "find_tools",
+          "toolCallId": "call_01_gJ70ed9KKTWRfOJTyfGN3687",
+          "isError": null,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "find_tools",
+          "toolCallId": "call_01_gJ70ed9KKTWRfOJTyfGN3687",
+          "isError": false,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "read",
+          "toolCallId": "call_00_TM0ij38O4ok7Yom3WDPS3981",
+          "isError": false,
+          "activity": null,
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_gNqz5lzYWLtzHGhxGTUP4886",
+          "isError": null,
+          "activity": "execute",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_gNqz5lzYWLtzHGhxGTUP4886",
+          "isError": false,
+          "activity": "execute",
+          "jobId": "41cde61e-96ba-4030-a81a-9fe9bffa603e",
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_3VDywUPbCd8evfHUbth70936",
+          "isError": null,
+          "activity": "execute",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "execute_code",
+          "toolCallId": "call_00_3VDywUPbCd8evfHUbth70936",
+          "isError": true,
+          "activity": "failure",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "publish_tool",
+          "toolCallId": "call_00_ACs44hpYXaU5p8darMy13665",
+          "isError": null,
+          "activity": "test",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "publish_tool",
+          "toolCallId": "call_00_ACs44hpYXaU5p8darMy13665",
+          "isError": false,
+          "activity": "save",
+          "jobId": null,
+          "artifactId": "gen_accept_title",
+          "version": 1
+        },
+        {
+          "type": "tool.start",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_SfCuUwZs6Xbw0GEbql3n4013",
+          "isError": null,
+          "activity": "reuse",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_SfCuUwZs6Xbw0GEbql3n4013",
+          "isError": false,
+          "activity": "reuse",
+          "jobId": "bcffb9c7-6436-4cde-8a8b-28a2a1a92ee3",
+          "artifactId": "gen_accept_title",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "id": "restart_reuse",
+      "passed": true,
+      "artifact": null,
+      "independent": null,
+      "events": [
+        {
+          "type": "tool.start",
+          "toolName": "find_tools",
+          "toolCallId": "call_00_bUc9twRtNeKdqIVjcZKT4095",
+          "isError": null,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "find_tools",
+          "toolCallId": "call_00_bUc9twRtNeKdqIVjcZKT4095",
+          "isError": false,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "find_tools",
+          "toolCallId": "call_00_ov8BhZdoONSKKBRd3U9R6287",
+          "isError": null,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "find_tools",
+          "toolCallId": "call_01_8HEj2GHmtLfgYZRvML7X4127",
+          "isError": null,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "find_tools",
+          "toolCallId": "call_00_ov8BhZdoONSKKBRd3U9R6287",
+          "isError": false,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "find_tools",
+          "toolCallId": "call_01_8HEj2GHmtLfgYZRvML7X4127",
+          "isError": false,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "find_tools",
+          "toolCallId": "call_00_psZGiurhp8QyY9deoqvf2474",
+          "isError": null,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "find_tools",
+          "toolCallId": "call_00_psZGiurhp8QyY9deoqvf2474",
+          "isError": false,
+          "activity": "discover",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.start",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_ET_5Ki4UrjidQF2UArfWAgj2303",
+          "isError": null,
+          "activity": "reuse",
+          "jobId": null,
+          "artifactId": null,
+          "version": null
+        },
+        {
+          "type": "tool.result",
+          "toolName": "call_tool",
+          "toolCallId": "call_00_ET_5Ki4UrjidQF2UArfWAgj2303",
+          "isError": false,
+          "activity": "reuse",
+          "jobId": "0683d98e-fd02-4852-a02b-73d0c8aa5ef4",
+          "artifactId": "gen_accept_group",
+          "version": 1
+        }
+      ]
+    }
+  ]
+}

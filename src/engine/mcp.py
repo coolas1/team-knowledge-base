@@ -164,9 +164,7 @@ async def get_conversation_memory_status() -> dict[str, Any]:
     if _conversation_memory_service is None:
         return asdict(ConversationMemoryDiagnostics(enabled=False))
     try:
-        result = (
-            await _conversation_memory_service.conversation_memory_diagnostics()
-        )
+        result = await _conversation_memory_service.conversation_memory_diagnostics()
     except Exception as error:
         raise _conversation_operation_failed("status", error) from error
     return asdict(result)
@@ -213,6 +211,7 @@ async def query_knowledge(
     mode: Literal["fast", "deep"] = "deep",
     top_k: int = 10,
     needs_answer: bool = True,
+    correlation_id: str | None = None,
 ) -> dict[str, Any]:
     """通过 Hindsight 统一入口执行 recall 或 reflect。"""
     result = await _get_query_service().query(
@@ -222,6 +221,7 @@ async def query_knowledge(
             mode=mode,
             top_k=top_k,
             needs_answer=needs_answer,
+            correlation_id=correlation_id,
         )
     )
     return asdict(result)
@@ -248,19 +248,26 @@ async def search_knowledge_fast(
 async def search_knowledge_deep(
     query: str,
     top_k: int = 10,
+    correlation_id: str | None = None,
 ) -> dict[str, Any]:
     """深度知识检索。用于跨文档比较、多跳关系、时间线、原因分析和综合总结。
 
     只返回检索证据，不在服务端生成最终答案；调用此工具的模型应综合 sources、
     related_entities 和 based_on 回答。简单事实查询应优先使用 search_knowledge_fast。
     """
-    return await query_knowledge(
-        query,
-        strategy="recall",
-        mode="deep",
-        top_k=top_k,
-        needs_answer=False,
-    )
+    from src.engine.hindsight_components.errors import DeepSearchError
+
+    try:
+        return await query_knowledge(
+            query,
+            strategy="recall",
+            mode="deep",
+            top_k=top_k,
+            needs_answer=False,
+            correlation_id=correlation_id,
+        )
+    except DeepSearchError as error:
+        return error.as_payload()
 
 
 async def get_document(doc_id: str) -> dict[str, Any]:
@@ -475,9 +482,7 @@ async def startup_engine_mcp() -> None:
         _engine_worker_runtimes.append(
             build_conversation_worker_runtime(
                 poll_seconds=settings.hindsight_conversation_worker_poll_seconds,
-                max_concurrent=(
-                    settings.hindsight_conversation_worker_max_concurrent
-                ),
+                max_concurrent=(settings.hindsight_conversation_worker_max_concurrent),
                 lease_seconds=settings.hindsight_conversation_worker_lease_seconds,
                 max_attempts=settings.hindsight_conversation_worker_max_attempts,
                 retry_delay_seconds=(
@@ -486,9 +491,7 @@ async def startup_engine_mcp() -> None:
                 max_retry_delay_seconds=(
                     settings.hindsight_conversation_worker_max_retry_seconds
                 ),
-                retention_context=(
-                    settings.hindsight_conversation_retention_context
-                ),
+                retention_context=(settings.hindsight_conversation_retention_context),
             )
         )
     else:
