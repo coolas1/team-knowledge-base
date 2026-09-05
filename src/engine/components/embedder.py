@@ -19,9 +19,7 @@ class Embedder:
     ) -> None:
         self._base_url = (base_url or settings.embedding.base_url).rstrip("/")
         self._model = model or settings.embedding.model
-        self._api_key = (
-            settings.embedding.api_key if api_key is None else api_key
-        )
+        self._api_key = settings.embedding.api_key if api_key is None else api_key
 
     async def embed_text(self, text: str) -> list[float]:
         """嵌入单条文本。

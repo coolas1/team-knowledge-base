@@ -45,7 +45,12 @@ def test_embedding_settings_reads_prefixed_env_and_ignores_other_groups(monkeypa
 
 
 def test_reranker_settings_defaults(monkeypatch):
-    for var in ("RERANKER_PROVIDER", "RERANKER_BASE_URL", "RERANKER_MODEL", "RERANKER_API_KEY"):
+    for var in (
+        "RERANKER_PROVIDER",
+        "RERANKER_BASE_URL",
+        "RERANKER_MODEL",
+        "RERANKER_API_KEY",
+    ):
         monkeypatch.delenv(var, raising=False)
     s = RerankerSettings(_env_file=None)
     assert s.provider == "none"

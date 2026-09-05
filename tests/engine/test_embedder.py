@@ -60,9 +60,7 @@ async def test_embed_batch_posts_openai_embeddings_shape(monkeypatch):
 async def test_embed_batch_no_auth_header_without_key(monkeypatch):
     _FakeClient.calls = []
     monkeypatch.setattr(embedder_mod.httpx, "AsyncClient", _FakeClient)
-    e = embedder_mod.Embedder(
-        base_url="http://embed.example/v1", model="m", api_key=""
-    )
+    e = embedder_mod.Embedder(base_url="http://embed.example/v1", model="m", api_key="")
     await e.embed_batch(["a"])
     assert "Authorization" not in _FakeClient.calls[0]["headers"]
 
