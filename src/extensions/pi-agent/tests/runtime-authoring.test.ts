@@ -11,8 +11,13 @@ import { RunnerClient } from "../src/runner-client.js";
 
 afterEach(() => vi.restoreAllMocks());
 it("uses the real SDK loop for error history, safe SSE, publication and immediate reuse", async () => {
+  const logs: string[] = [];
+  vi.spyOn(console, "info").mockImplementation((value) => logs.push(String(value)));
   vi.spyOn(TkbMcpClient.prototype, "listTools").mockResolvedValue(Object.entries(ENGINE_MCP_CONTRACT).map(([name, c]) => ({ name, description: name, inputSchema: { type: "object", properties: Object.fromEntries(c.required.map(k => [k, { type: "string" }])), required: c.required } })));
   vi.spyOn(TkbMcpClient.prototype, "callTool").mockResolvedValue({ text: "provider failed", isError: true, content: [] } as never);
+  vi.spyOn(TkbMcpClient.prototype, "recallConversationMemory").mockResolvedValue({ memories: [], trace: {} });
+  const enqueueTurn = vi.spyOn(TkbMcpClient.prototype, "enqueueConversationTurn")
+    .mockResolvedValue({ document_id: "conversation-turn", status: "pending" });
   vi.spyOn(RunnerClient.prototype, "health").mockResolvedValue({ available: true, capabilities: [], runtime: "test" });
   vi.spyOn(RunnerClient.prototype, "run").mockImplementation(async job => ({ jobId: "12345678-1234-1234-1234-123456789abc", status: "succeeded", result: (job.input as { n: number }).n * 2, runtime: "test", logs: "" }));
   const params = { action: "publish", name: "gen_sdk_double", description: "Double a number", expectedVersion: 0, code: "export default input=>input.n*2 // PRIVATE_SOURCE", inputSchema: { type: "object", properties: { n: { type: "number" } }, required: ["n"] }, outputSchema: { type: "number" }, capabilities: [], tests: [{ input: { n: 2 }, expected: 4 }, { input: { n: 0 }, expected: 0 }] };
@@ -36,10 +41,17 @@ it("uses the real SDK loop for error history, safe SSE, publication and immediat
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
   const data = mkdtempSync(path.join(tmpdir(), "tkb-sdk-"));
-  const runtime = new PiAgentRuntime(loadPiAgentConfig({ PI_AGENT_DATA_DIR: data, PI_AGENT_PROVIDER: "test", PI_AGENT_MODEL: "test", PI_AGENT_BASE_URL: base, PI_AGENT_API_KEY: "test", PI_AGENT_REASONING: "false", PI_AGENT_EXPOSE_TOOL_RESULTS: "true" }), loadTkbAdapterConfig({}));
+  const config = loadPiAgentConfig({ PI_AGENT_DATA_DIR: data, PI_AGENT_PROVIDER: "test", PI_AGENT_MODEL: "test", PI_AGENT_BASE_URL: base, PI_AGENT_API_KEY: "test", PI_AGENT_REASONING: "false", PI_AGENT_EXPOSE_TOOL_RESULTS: "true" });
+  const adapter = loadTkbAdapterConfig({
+    TKB_CONVERSATION_MEMORY_ENABLED: "true",
+    TKB_CONTRACT_STRICT: "false",
+  });
+  const runtime = new PiAgentRuntime(config, adapter);
+  let resumed: PiAgentRuntime | undefined;
   try {
     await runtime.initialize(); const session = await runtime.createSession(); const events: PiRuntimeEvent[] = [];
-    await runtime.streamMessage(session.id, "Create and reuse a tool", e => { events.push(e); });
+    await runtime.streamMessage(session.id, "Create and reuse a tool", e => { events.push(e); }, "client-create");
+    expect(events[0]).toMatchObject({ type: "message.accepted", clientMessageId: "client-create" });
     const results = events.filter(e => e.type === "tool.result");
     expect(results.map(e => e.isError)).toEqual([true, true, true, false, false]);
     expect(results.at(-1)).toMatchObject({ activity: "reuse", artifactId: "gen_sdk_double", version: 1 });
@@ -50,13 +62,55 @@ it("uses the real SDK loop for error history, safe SSE, publication and immediat
     expect(JSON.stringify(requests[0].messages)).toContain("自主编写");
     expect(JSON.stringify(requests[0].messages)).toContain("agent-tool-authoring");
     expect(events.at(-1)).toMatchObject({ type: "message.completed", answer: "18" });
+    expect(enqueueTurn).toHaveBeenCalledOnce();
+    expect(enqueueTurn).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: session.id,
+      turnId: expect.any(String),
+      userText: "Create and reuse a tool",
+      assistantText: "18",
+    }), expect.any(Object));
+    const completedDetail = await runtime.getSession(session.id);
+    expect(completedDetail.messageCount).toBe(completedDetail.messages.length);
+    expect(completedDetail.messages.map(message => [message.role, message.status])).toEqual([
+      ["user", "completed"], ["assistant", "completed"],
+    ]);
+    const requestCount = requests.length;
+    const replayEvents: PiRuntimeEvent[] = [];
+    await runtime.streamMessage(session.id, "Create and reuse a tool", event => { replayEvents.push(event); }, "client-create");
+    expect(requests).toHaveLength(requestCount);
+    expect(replayEvents[0]).toMatchObject({ type: "message.accepted", replayed: true, status: "completed" });
+    expect(replayEvents.at(-1)).toMatchObject({ type: "message.completed", answer: "18" });
     // Repeated calls above the limit terminate the SDK loop rather than allowing another model retry.
     calls.splice(0, calls.length, ...Array.from({ length: 4 }, () => ({ name: "tkb_search_fast", arguments: { query: "failure" } }) as typeof calls[number]));
     step = 0; (managed.budget as any).maxToolCalls = 1;
-    await expect(runtime.streamMessage(session.id, "Try again", () => {})).rejects.toThrow("tool call limit");
+    await expect(runtime.streamMessage(session.id, "Try again", () => {}, "client-failed")).rejects.toThrow("tool call limit");
     expect(step).toBe(2);
     expect(managed.session.messages.at(-1).isError).toBe(true);
-  } finally { await runtime.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
+    const failedDetail = await runtime.getSession(session.id);
+    expect(failedDetail.messages.at(-1)).toMatchObject({
+      role: "user", text: "Try again", status: "failed", clientMessageId: "client-failed",
+    });
+    expect(enqueueTurn).toHaveBeenCalledOnce();
+    expect(JSON.stringify(logs)).not.toContain("Create and reuse a tool");
+    expect(JSON.stringify(logs)).not.toContain("Try again");
+
+    await runtime.close();
+    resumed = new PiAgentRuntime(config, adapter);
+    await resumed.initialize();
+    const restored = await resumed.getSession(session.id);
+    expect(restored.messages).toEqual(failedDetail.messages);
+    expect((await resumed.listSessions()).find(item => item.id === session.id)?.messageCount)
+      .toBe(restored.messages.length);
+    for (const line of logs) {
+      const record = JSON.parse(line) as Record<string, unknown>;
+      expect(Object.keys(record).sort()).toEqual(
+        expect.arrayContaining(["event", "session_id", "status"]),
+      );
+      expect(Object.keys(record).every((key) =>
+        ["event", "session_id", "turn_id", "status", "code"].includes(key),
+      )).toBe(true);
+    }
+  } finally { await runtime.close(); await resumed?.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
 }, 30000);
 
 it("streams deep-search fallback state through completion", async () => {

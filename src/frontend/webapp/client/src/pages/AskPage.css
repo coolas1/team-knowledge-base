@@ -431,6 +431,23 @@
   white-space: pre-wrap;
 }
 
+.ask-message-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+  color: #a15c00;
+  font-size: 12px;
+}
+
+.ask-message-state button {
+  border: 0;
+  padding: 0;
+  color: #2563eb;
+  background: transparent;
+  cursor: pointer;
+}
+
 .ask-markdown .wmde-markdown {
   padding: 0;
   color: var(--ask-ink);

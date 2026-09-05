@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,10 +34,15 @@ import { enabledTkbTools } from "./tools.js";
 import { AUTHORING_NAMES, AUTHORING_PROMPT, AuthoringBudget, authoringActivity, buildAuthoringTools } from "./authoring.js";
 import { ToolLibrary } from "./tool-library.js";
 import { RunnerClient, type RunnerHealth } from "./runner-client.js";
+import { buildConversationMemoryExtension } from "./conversation-memory.js";
 import {
-  buildConversationMemoryExtension,
-  extractCompletedConversationTurn,
-} from "./conversation-memory.js";
+  assertSafeTranscriptId,
+  TranscriptStore,
+  type AcceptedTurn,
+  type TranscriptSnapshot,
+  type TranscriptTurn,
+  type TurnStatus,
+} from "./transcript.js";
 
 const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent。
 
@@ -57,6 +63,15 @@ const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent
 
 export interface ToolActivity { activity?: string; jobId?: string; artifactId?: string; version?: number; errorSummary?: string }
 export type PiRuntimeEvent =
+  | {
+      type: "message.accepted";
+      sessionId: string;
+      turnId: string;
+      messageId: string;
+      clientMessageId: string;
+      status: TurnStatus;
+      replayed?: boolean;
+    }
   | { type: "message.start"; sessionId: string; name?: string }
   | { type: "assistant.delta"; delta: string }
   | { type: "assistant.thinking"; delta: string }
@@ -75,8 +90,21 @@ export type PiRuntimeEvent =
       sessionId: string;
       answer: string;
       toolCalls: number;
+      turnId?: string;
+      messageId?: string;
+      clientMessageId?: string;
       searchDegraded?: boolean;
       searchFallback?: boolean;
+    }
+  | {
+      type: "message.failed";
+      error: string;
+      code?: string;
+      sessionId?: string;
+      turnId?: string;
+      messageId?: string;
+      clientMessageId?: string;
+      status?: "failed" | "cancelled" | "interrupted";
     };
 
 export interface RuntimeSessionInfo {
@@ -86,11 +114,17 @@ export interface RuntimeSessionInfo {
   modified?: string;
   messageCount: number;
   streaming: boolean;
+  transcriptDiagnostic?: string;
 }
 
 export interface RuntimeConversationMessage {
   role: "user" | "assistant";
   text: string;
+  id?: string;
+  turnId?: string;
+  timestamp?: string;
+  status?: TurnStatus;
+  clientMessageId?: string;
 }
 
 export interface RuntimeSessionDetail extends RuntimeSessionInfo {
@@ -129,6 +163,7 @@ export interface AgentRuntimeApi {
     id: string,
     message: string,
     emit: (event: PiRuntimeEvent) => void | Promise<void>,
+    clientMessageId?: string,
   ): Promise<void>;
   cancel(id: string): Promise<boolean>;
   deleteSession(id: string): Promise<boolean>;
@@ -155,6 +190,9 @@ interface ManagedSession {
   fallbackBudget: SearchFallbackBudget;
   lastAccess: number;
   active?: {
+    clientMessageId: string;
+    turnId?: string;
+    acceptance?: Promise<AcceptedTurn>;
     reason?: "time" | "cancelled";
     searchDegraded?: boolean;
     searchFallback?: boolean;
@@ -255,6 +293,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
   private readonly skillsDir: string;
   private library?: ToolLibrary;
   private readonly runner: RunnerClient;
+  private readonly transcripts: TranscriptStore;
 
   constructor(
     readonly config: PiAgentConfig = loadPiAgentConfig(),
@@ -263,12 +302,14 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     validateDeadlineHierarchy(config, adapterConfig);
     this.mcpClient = new TkbMcpClient(adapterConfig);
     this.runner = new RunnerClient(config.runnerUrl, config.runnerToken);
+    this.transcripts = new TranscriptStore(config.transcriptDir);
     this.skillsDir = fileURLToPath(new URL("../skills", import.meta.url));
   }
 
   async initialize(): Promise<void> {
     await mkdir(this.config.dataDir, { recursive: true });
     await mkdir(this.config.sessionDir, { recursive: true });
+    await mkdir(this.config.transcriptDir, { recursive: true });
     this.contract = await validateEngineContract(
       this.mcpClient,
       undefined,
@@ -344,28 +385,50 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     this.ensureInitialized();
     await this.evictIfNeeded();
     const manager = SessionManager.create(this.config.cwd, this.config.sessionDir);
+    await this.transcripts.initialize(manager.getSessionId());
     const managed = await this.buildManagedSession(manager);
     this.sessions.set(managed.session.sessionId, managed);
     return this.describe(managed);
   }
 
   async listSessions(): Promise<RuntimeSessionInfo[]> {
-    const infos = await SessionManager.list(this.config.cwd, this.config.sessionDir);
-    return infos.map((info) => ({
-      id: info.id,
-      name: info.name ?? sessionTitleFrom(info.firstMessage),
-      created: info.created.toISOString(),
-      modified: info.modified.toISOString(),
-      messageCount: info.messageCount,
-      streaming: this.sessions.get(info.id)?.session.isStreaming ?? false,
-    }));
+    this.ensureInitialized();
+    const sdkInfos = await SessionManager.list(this.config.cwd, this.config.sessionDir);
+    const sdkById = new Map(sdkInfos.map((info) => [info.id, info]));
+    const ids = new Set([...sdkById.keys(), ...(await this.transcripts.listSessionIds())]);
+    const result: RuntimeSessionInfo[] = [];
+    for (const id of ids) {
+      const info = sdkById.get(id);
+      let snapshot = await this.transcripts.snapshot(id);
+      if (!snapshot && info) {
+        const manager = SessionManager.open(info.path, this.config.sessionDir, this.config.cwd);
+        snapshot = await this.transcripts.recover(id, manager.getBranch(), info.created.toISOString());
+        this.logTranscript(snapshot.diagnostic ? "recovery_degraded" : "recovered", id);
+      }
+      if (!snapshot) continue;
+      if (!this.sessions.get(id)?.active && !snapshot.diagnostic) {
+        snapshot = await this.transcripts.interruptUnfinished(id);
+      }
+      const firstUser = snapshot.messages.find((message) => message.role === "user")?.text ?? "";
+      result.push({
+        id,
+        name: info?.name ?? sessionTitleFrom(firstUser),
+        created: snapshot.createdAt,
+        modified: snapshot.modifiedAt,
+        messageCount: snapshot.messages.length,
+        streaming: this.sessions.get(id)?.session.isStreaming ?? false,
+        transcriptDiagnostic: snapshot.diagnostic?.code,
+      });
+    }
+    return result.sort((left, right) => Date.parse(right.modified ?? "") - Date.parse(left.modified ?? ""));
   }
 
   async getSession(id: string): Promise<RuntimeSessionDetail> {
     const managed = await this.loadSession(id);
+    const snapshot = await this.requireSnapshot(id);
     return {
-      ...this.describe(managed),
-      messages: conversationMessagesFrom(managed.session.messages),
+      ...(await this.describe(managed, snapshot)),
+      messages: snapshot.messages,
     };
   }
 
@@ -373,9 +436,23 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     id: string,
     message: string,
     emit: (event: PiRuntimeEvent) => void | Promise<void>,
+    requestedClientMessageId?: string,
   ): Promise<void> {
     if (!message.trim()) throw new Error("message must not be empty");
+    const clientMessageId = requestedClientMessageId?.trim() || randomUUID();
+    assertSafeTranscriptId(clientMessageId, "clientMessageId");
     const managed = await this.loadSession(id);
+
+    const existing = await this.findSubmission(id, clientMessageId);
+    if (existing) {
+      await this.emitReplay(id, existing, emit);
+      return;
+    }
+    if (managed.active?.clientMessageId === clientMessageId && managed.active.acceptance) {
+      const accepted = await managed.active.acceptance;
+      await this.emitReplay(id, accepted.turn, emit);
+      return;
+    }
     if (managed.session.isStreaming || managed.active) {
       throw new RuntimeConflictError(`session is already running: ${id}`);
     }
@@ -385,37 +462,48 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     managed.turnDeadline.reset();
     managed.fallbackBudget.reset();
     managed.authoringBudget.reset();
-    managed.active = {};
-    const messageCountBeforePrompt = managed.session.messages.length;
+    const acceptance = this.transcripts.accept(id, message, clientMessageId);
+    managed.active = { clientMessageId, acceptance };
+    let accepted: TranscriptTurn | undefined;
     const citations = new Set<string>();
-    if (!managed.session.sessionName) {
-      const firstUserMessage = conversationMessagesFrom(managed.session.messages).find(
-        (candidate) => candidate.role === "user",
-      )?.text;
-      const name = sessionTitleFrom(firstUserMessage ?? message);
-      if (name) managed.session.setSessionName(name);
-    }
-    await emit({
-      type: "message.start",
-      sessionId: id,
-      name: managed.session.sessionName,
-    });
-    const unsubscribe = managed.session.subscribe((event) => {
-      void this.forwardEvent(event, emit, citations, managed);
-    });
-    const timeout = setTimeout(() => {
-      if (managed.active) managed.active.reason = "time";
-      void emit({
-        type: "limit.reached",
-        limit: "time",
-        maximum: this.config.maxRunSeconds,
-      });
-      void managed.session.abort();
-    }, this.config.maxRunSeconds * 1_000);
+    let unsubscribe: () => void = () => {};
+    let timeout: ReturnType<typeof setTimeout> | undefined;
 
     try {
+      const result = await acceptance;
+      accepted = result.turn;
+      managed.active.turnId = accepted.id;
+      managed.active.acceptance = undefined;
+      await emit({
+        type: "message.accepted", sessionId: id, turnId: accepted.id,
+        messageId: accepted.userMessageId, clientMessageId, status: accepted.status,
+      });
+      this.logTranscript("accepted", id, accepted.id);
+      if ((managed.active.reason as "time" | "cancelled" | undefined) === "cancelled") {
+        throw new RuntimeLimitError("cancelled", "agent run was cancelled");
+      }
+      if (!managed.session.sessionName) {
+        const snapshot = await this.requireSnapshot(id);
+        const firstUserMessage = snapshot.messages.find((candidate) => candidate.role === "user")?.text;
+        const name = sessionTitleFrom(firstUserMessage ?? message);
+        if (name) managed.session.setSessionName(name);
+      }
+      await emit({ type: "message.start", sessionId: id, name: managed.session.sessionName });
+      await this.transcripts.append({
+        type: "turn.running", sessionId: id, turnId: accepted.id,
+        timestamp: new Date().toISOString(),
+      });
+      this.logTranscript("running", id, accepted.id);
+      unsubscribe = managed.session.subscribe((event) => {
+        void this.forwardEvent(event, emit, citations, managed);
+      });
+      timeout = setTimeout(() => {
+        if (managed.active) managed.active.reason = "time";
+        void emit({ type: "limit.reached", limit: "time", maximum: this.config.maxRunSeconds });
+        void managed.session.abort();
+      }, this.config.maxRunSeconds * 1_000);
       await managed.session.prompt(message);
-      if (managed.active.reason === "cancelled") {
+      if ((managed.active.reason as "time" | "cancelled" | undefined) === "cancelled") {
         throw new RuntimeLimitError("cancelled", "agent run was cancelled");
       }
       if (managed.active.reason === "time") {
@@ -424,20 +512,56 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       if (managed.budget.limitReached) {
         throw new RuntimeLimitError("tool_calls", "agent exceeded its tool call limit");
       }
-      await this.enqueueCompletedTurn(managed, messageCountBeforePrompt);
       const answer = [...managed.session.messages]
         .reverse()
         .find((candidate) => (candidate as { role?: unknown }).role === "assistant");
+      const answerText = textFromMessage(answer).trim();
+      if (!answerText) throw new Error("agent returned no answer");
+      const assistantMessageId = randomUUID();
+      await this.transcripts.append({
+        type: "assistant.completed", sessionId: id, turnId: accepted.id,
+        messageId: assistantMessageId, text: answerText, timestamp: new Date().toISOString(),
+      });
+      this.logTranscript("completed", id, accepted.id);
+      await this.enqueueCompletedTurn(id, accepted.id, accepted.userText, answerText);
       await emit({
         type: "message.completed",
         sessionId: id,
-        answer: textFromMessage(answer),
+        answer: answerText,
         toolCalls: managed.budget.toolCalls,
+        turnId: accepted.id,
+        messageId: assistantMessageId,
+        clientMessageId,
         searchDegraded: managed.active.searchDegraded,
         searchFallback: managed.active.searchFallback,
       });
+    } catch (error) {
+      if (accepted) {
+        const status = managed.active?.reason === "cancelled" ? "cancelled" : "failed";
+        const errorCode = managed.active?.reason === "time"
+          ? "time_limit"
+          : error instanceof RuntimeLimitError
+            ? error.limit
+            : "agent_failed";
+        await this.transcripts.append({
+          type: "turn.terminal", sessionId: id, turnId: accepted.id,
+          status, errorCode, timestamp: new Date().toISOString(),
+        }).catch(() => undefined);
+        this.logTranscript(status, id, accepted.id, errorCode);
+        await emit({
+          type: "message.failed",
+          error: status === "cancelled" ? "agent run was cancelled" : "agent run failed",
+          code: errorCode,
+          sessionId: id,
+          turnId: accepted.id,
+          messageId: accepted.userMessageId,
+          clientMessageId,
+          status,
+        });
+      }
+      throw error;
     } finally {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       unsubscribe();
       managed.active = undefined;
       managed.lastAccess = Date.now();
@@ -466,6 +590,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       }
       await rm(sessionFile, { force: true });
     }
+    await this.transcripts.delete(id);
     return true;
   }
 
@@ -542,24 +667,19 @@ export class PiAgentRuntime implements AgentRuntimeApi {
   }
 
   private async enqueueCompletedTurn(
-    managed: ManagedSession,
-    messageCountBeforePrompt: number,
+    sessionId: string,
+    turnId: string,
+    userText: string,
+    assistantText: string,
   ): Promise<void> {
     if (!this.adapterConfig.conversationMemoryEnabled) return;
-    if (managed.active?.reason) return;
-    const turn = extractCompletedConversationTurn(
-      managed.session.messages,
-      managed.session.sessionManager.getEntries(),
-      messageCountBeforePrompt,
-    );
-    if (!turn) return;
     try {
       await this.mcpClient.enqueueConversationTurn(
         {
-          sessionId: managed.session.sessionId,
-          turnId: turn.turnId,
-          userText: turn.userText,
-          assistantText: turn.assistantText,
+          sessionId,
+          turnId,
+          userText,
+          assistantText,
         },
         { timeoutMs: this.adapterConfig.defaultToolTimeoutMs },
       );
@@ -578,25 +698,91 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     const info = (await SessionManager.list(this.config.cwd, this.config.sessionDir)).find(
       (candidate) => candidate.id === id,
     );
-    if (!info) throw new RuntimeNotFoundError(`session not found: ${id}`);
+    const transcript = await this.transcripts.snapshot(id);
+    if (!info && !transcript) throw new RuntimeNotFoundError(`session not found: ${id}`);
     await this.evictIfNeeded();
-    const managed = await this.buildManagedSession(
-      SessionManager.open(info.path, this.config.sessionDir, this.config.cwd),
+    const manager = info
+      ? SessionManager.open(info.path, this.config.sessionDir, this.config.cwd)
+      : SessionManager.create(this.config.cwd, this.config.sessionDir, { id });
+    const recovered = transcript ?? await this.transcripts.recover(
+      id,
+      manager.getBranch(),
+      info?.created.toISOString(),
     );
+    if (!transcript) {
+      this.logTranscript(recovered.diagnostic ? "recovery_degraded" : "recovered", id);
+    }
+    if (!recovered.diagnostic) await this.transcripts.interruptUnfinished(id);
+    const managed = await this.buildManagedSession(manager);
     this.sessions.set(id, managed);
     return managed;
   }
 
-  private describe(managed: ManagedSession): RuntimeSessionInfo {
-    const firstUserMessage = conversationMessagesFrom(managed.session.messages).find(
-      (candidate) => candidate.role === "user",
-    )?.text;
+  private async describe(
+    managed: ManagedSession,
+    supplied?: TranscriptSnapshot,
+  ): Promise<RuntimeSessionInfo> {
+    const snapshot = supplied ?? await this.requireSnapshot(managed.session.sessionId);
+    const firstUserMessage = snapshot.messages.find((candidate) => candidate.role === "user")?.text;
     return {
       id: managed.session.sessionId,
       name: managed.session.sessionName ?? sessionTitleFrom(firstUserMessage ?? ""),
-      messageCount: managed.session.messages.length,
+      created: snapshot.createdAt,
+      modified: snapshot.modifiedAt,
+      messageCount: snapshot.messages.length,
       streaming: managed.session.isStreaming,
+      transcriptDiagnostic: snapshot.diagnostic?.code,
     };
+  }
+
+  private async requireSnapshot(id: string): Promise<TranscriptSnapshot> {
+    const snapshot = await this.transcripts.snapshot(id);
+    if (!snapshot) throw new RuntimeNotFoundError(`transcript not found: ${id}`);
+    return snapshot;
+  }
+
+  private async findSubmission(id: string, clientMessageId: string): Promise<TranscriptTurn | undefined> {
+    const snapshot = await this.requireSnapshot(id);
+    const turnId = snapshot.submissions[clientMessageId];
+    return turnId ? snapshot.turns.find((turn) => turn.id === turnId) : undefined;
+  }
+
+  private async emitReplay(
+    sessionId: string,
+    turn: TranscriptTurn,
+    emit: (event: PiRuntimeEvent) => void | Promise<void>,
+  ): Promise<void> {
+    await emit({
+      type: "message.accepted", sessionId, turnId: turn.id,
+      messageId: turn.userMessageId, clientMessageId: turn.clientMessageId,
+      status: turn.status, replayed: true,
+    });
+    this.logTranscript("replayed", sessionId, turn.id);
+    if (turn.status === "completed") {
+      const snapshot = await this.requireSnapshot(sessionId);
+      const assistant = [...snapshot.messages].reverse().find(
+        (message) => message.turnId === turn.id && message.role === "assistant",
+      );
+      await emit({
+        type: "message.completed", sessionId, answer: assistant?.text ?? turn.assistantText ?? "",
+        toolCalls: 0, turnId: turn.id, messageId: assistant?.id,
+        clientMessageId: turn.clientMessageId,
+      });
+    } else if (turn.status === "failed" || turn.status === "cancelled" || turn.status === "interrupted") {
+      await emit({
+        type: "message.failed", error: `turn ${turn.status}`,
+        code: turn.status, turnId: turn.id,
+      });
+    }
+  }
+
+  private logTranscript(status: string, sessionId: string, turnId?: string, code?: string): void {
+    console.info(JSON.stringify({
+      event: "session_transcript", session_id: sessionId,
+      ...(turnId ? { turn_id: turnId } : {}),
+      status,
+      ...(code ? { code } : {}),
+    }));
   }
 
   private async evictIfNeeded(): Promise<void> {

@@ -13,16 +13,18 @@ import {
   UserRound,
   X,
 } from 'lucide-react'
-import { api, type AgentSession, type AgentSessionDetail, type PiAgentEvent } from '../api/client'
+import { AgentStreamError, api, type AgentSession, type AgentSessionDetail, type PiAgentEvent } from '../api/client'
 import './AskPage.css'
-import { appendActivity, type ActivityRecord } from './tool-activity'
-
-interface ChatMessage {
-  id: number
-  role: 'user' | 'assistant'
-  text: string
-  activities?: ActivityRecord[]
-}
+import { appendActivity } from './tool-activity'
+import {
+  applyAcceptance,
+  applyCompletion,
+  applyFailure,
+  messagesFromDetail,
+  optimisticMessages,
+  reconcileMessages,
+  type ChatMessage,
+} from './session-transcript'
 
 interface Citation {
   docId: string
@@ -70,17 +72,11 @@ export function AskPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const sessionRef = useRef<string | undefined>(undefined)
   const controllerRef = useRef<AbortController | undefined>(undefined)
-  const nextMessageId = useRef(0)
+  const acceptedSubmissionsRef = useRef(new Set<string>())
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const restoreMessages = (detail: AgentSessionDetail) => {
-    setMessages(
-      (detail.messages || []).map((message) => ({
-        id: ++nextMessageId.current,
-        role: message.role,
-        text: message.text,
-      })),
-    )
+    setMessages(messagesFromDetail(detail))
   }
 
   useEffect(() => {
@@ -124,7 +120,7 @@ export function AskPage() {
     messagesEndRef.current?.scrollIntoView({ block: 'end' })
   }, [messages, loading])
 
-  const updateAssistant = (id: number, update: (text: string) => string) => {
+  const updateAssistant = (id: string, update: (text: string) => string) => {
     setMessages((current) =>
       current.map((message) =>
         message.id === id ? { ...message, text: update(message.text) } : message,
@@ -132,12 +128,16 @@ export function AskPage() {
     )
   }
 
-  const handleEvent = (event: PiAgentEvent, assistantId: number) => {
+  const handleEvent = (event: PiAgentEvent, assistantId: string, clientMessageId: string) => {
     if (event.type === 'tool.start' || event.type === 'tool.result') {
       setMessages(current => current.map(message => message.id === assistantId
         ? { ...message, activities: appendActivity(message.activities ?? [], event) } : message))
     }
-    if (event.type === 'message.start' && event.name) {
+    if (event.type === 'message.accepted') {
+      acceptedSubmissionsRef.current.add(event.clientMessageId)
+      setMessages((current) => applyAcceptance(current, event))
+      setStatus(event.replayed ? '已恢复已接受的请求' : '消息已保存')
+    } else if (event.type === 'message.start' && event.name) {
       setSessions((current) =>
         current.map((session) =>
           session.id === event.sessionId ? { ...session, name: event.name } : session,
@@ -158,7 +158,7 @@ export function AskPage() {
     } else if (event.type === 'limit.reached') {
       setStatus(`已达到 ${event.limit === 'time' ? '时间' : '工具调用'}限制`)
     } else if (event.type === 'message.completed') {
-      updateAssistant(assistantId, () => event.answer)
+      setMessages((current) => applyCompletion(current, event))
       setSessions((current) => {
         const activeId = sessionRef.current
         const active = current.find((session) => session.id === activeId)
@@ -171,20 +171,23 @@ export function AskPage() {
       setStatus(`回答完成 · 调用工具 ${event.toolCalls} 次`)
     } else if (event.type === 'message.failed') {
       setError(event.error)
+      setMessages((current) => applyFailure(
+        current,
+        clientMessageId,
+        acceptedSubmissionsRef.current.has(clientMessageId),
+        event.status ?? (event.code === 'cancelled' ? 'cancelled' : event.code === 'interrupted' ? 'interrupted' : 'failed'),
+      ))
     }
   }
 
-  const run = async () => {
-    const prompt = query.trim()
+  const run = async (retryText?: string) => {
+    const prompt = (retryText ?? query).trim()
     if (!prompt || loading || sessionLoading) return
 
-    const userId = ++nextMessageId.current
-    const assistantId = ++nextMessageId.current
-    setMessages((current) => [
-      ...current,
-      { id: userId, role: 'user', text: prompt },
-      { id: assistantId, role: 'assistant', text: '' },
-    ])
+    const clientMessageId = crypto.randomUUID()
+    const pending = optimisticMessages(prompt, clientMessageId)
+    const assistantId = pending[1].id
+    setMessages((current) => [...current, ...pending])
     setQuery('')
     setCitations([])
     setError('')
@@ -204,10 +207,19 @@ export function AskPage() {
       await api.streamAgentMessage(
         sessionRef.current,
         prompt,
-        (event) => handleEvent(event, assistantId),
+        (event) => handleEvent(event, assistantId, clientMessageId),
         controller.signal,
+        clientMessageId,
       )
     } catch (caught) {
+      const accepted = acceptedSubmissionsRef.current.has(clientMessageId)
+      const terminalStatus = caught instanceof AgentStreamError ? caught.event.status : undefined
+      setMessages((current) => applyFailure(
+        current,
+        clientMessageId,
+        accepted,
+        terminalStatus ?? (accepted ? 'failed' : 'unsaved'),
+      ))
       if (caught instanceof DOMException && caught.name === 'AbortError') {
         setStatus('已停止')
       } else {
@@ -217,6 +229,22 @@ export function AskPage() {
       }
     } finally {
       controllerRef.current = undefined
+      if (acceptedSubmissionsRef.current.has(clientMessageId) && sessionRef.current) {
+        const currentSessionId = sessionRef.current
+        try {
+          const detail = await api.getAgentSession(currentSessionId)
+          if (sessionRef.current === currentSessionId) {
+            setMessages((current) => reconcileMessages(current, detail))
+            setSessions((current) => sortSessions([
+              detail,
+              ...current.filter((session) => session.id !== detail.id),
+            ]))
+          }
+        } catch {
+          // The accepted local row stays visible until a later reconciliation.
+        }
+      }
+      acceptedSubmissionsRef.current.delete(clientMessageId)
       setLoading(false)
     }
   }
@@ -224,7 +252,11 @@ export function AskPage() {
   const stop = async () => {
     controllerRef.current?.abort()
     if (sessionRef.current) {
-      await api.cancelAgentSession(sessionRef.current).catch(() => undefined)
+      const sessionId = sessionRef.current
+      await api.cancelAgentSession(sessionId).catch(() => undefined)
+      await api.getAgentSession(sessionId)
+        .then((detail) => setMessages((current) => reconcileMessages(current, detail)))
+        .catch(() => undefined)
     }
     setStatus('已停止')
   }
@@ -448,7 +480,15 @@ export function AskPage() {
                       </div>
                     ) : null
                   ) : (
-                    <div className="ask-user-text">{message.text}</div>
+                    <>
+                      <div className="ask-user-text">{message.text}</div>
+                      {message.status && ['unsaved', 'failed', 'cancelled', 'interrupted'].includes(message.status) && (
+                        <div className="ask-message-state">
+                          <span>{message.status === 'unsaved' ? '未保存' : message.status === 'cancelled' ? '已取消' : message.status === 'interrupted' ? '执行中断' : '执行失败'}</span>
+                          <button type="button" disabled={busy} onClick={() => void run(message.text)}>重试</button>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </article>

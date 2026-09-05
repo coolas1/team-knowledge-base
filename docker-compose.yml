@@ -165,6 +165,7 @@ services:
       PI_AGENT_CWD: /app
       PI_AGENT_DATA_DIR: /app/data
       PI_AGENT_SESSION_DIR: /app/data/sessions
+      PI_AGENT_TRANSCRIPT_DIR: /app/data/transcripts
       PI_AGENT_TOOL_AUTHORING_ENABLED: ${PI_AGENT_TOOL_AUTHORING_ENABLED:-true}
       PI_AGENT_RUNNER_URL: ${PI_AGENT_RUNNER_URL:-}
       PI_AGENT_RUNNER_TOKEN: ${PI_AGENT_RUNNER_TOKEN:-}

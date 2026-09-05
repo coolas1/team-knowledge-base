@@ -113,6 +113,7 @@ the Pi model API adapter when required by a compatible provider.
 | `PI_AGENT_PORT` | `8010` | HTTP port |
 | `PI_AGENT_DATA_DIR` | `<cwd>/.pi-agent-data` | Runtime data root |
 | `PI_AGENT_SESSION_DIR` | `<data>/sessions` | Persistent session files |
+| `PI_AGENT_TRANSCRIPT_DIR` | `<data>/transcripts` | Durable visible transcript journals; must differ from the SDK session directory |
 | `PI_AGENT_MAX_TOOL_CALLS` | `12` | Hard tool-call limit per run |
 | `PI_AGENT_MAX_RUN_SECONDS` | `180` | Hard execution-time limit |
 | `PI_AGENT_TURN_RESERVE_SECONDS` | `60` | Time reserved for fallback and final answer synthesis |
@@ -149,12 +150,56 @@ without evidence can trigger one `tkb_search_fast` fallback in the same turn.
 - `DELETE /v1/sessions/:id/memory` explicitly forgets retained memory for that
   session without deleting its JSONL history
 - `POST /v1/sessions/:id/cancel`
-- `POST /v1/sessions/:id/messages` with `{ "message": "..." }`
+- `POST /v1/sessions/:id/messages` with `{ "message": "...", "clientMessageId": "optional-stable-id" }`
 
-The message endpoint streams typed SSE events for assistant deltas, tool
-status, citations, limits, completion, and failures. Model reasoning and raw
-tool payloads are suppressed by default; citations are still derived on the
-server. Disconnecting the client cancels the active run.
+The message endpoint syncs the user submission to its transcript journal before
+emitting `message.accepted` or starting the model. The accepted event contains
+stable session, turn, message, and client submission IDs. Repeating the same
+`clientMessageId` in one session replays the existing durable state and does not
+run the model again. Legacy clients can omit the ID and receive a generated one.
+Completion and failure events add the same identities and lifecycle status while
+retaining their existing fields.
+
+The endpoint also streams assistant deltas, tool status, citations and limits.
+Model reasoning and raw tool payloads are suppressed by default; citations are
+still derived on the server. Disconnecting the client cancels the active run.
+
+## Transcript durability and recovery
+
+SDK JSONL files below `PI_AGENT_SESSION_DIR` remain the append-only source for
+model context. Versioned adapter journals below `PI_AGENT_TRANSCRIPT_DIR` are
+the source for visible conversation history. Keep both directories on the same
+persistent `piagentdata` volume and writable by the Pi Agent container user.
+Context compaction can change what the model receives, but it cannot remove a
+message from the visible transcript.
+
+When an old session has no adapter journal, listing or opening it lazily projects
+the SDK's current active branch. Recovery includes visible user and assistant
+text around compaction entries, excludes abandoned branches and internal tool,
+reasoning, system and custom data, and never rewrites the SDK file. A torn
+journal remains readable through its valid prefix and exposes only a bounded
+`transcriptDiagnostic` code; writes stop until an operator repairs or rebuilds
+that journal.
+
+Run the count-only audit after building the package:
+
+```bash
+npm run audit:transcripts
+npm run audit:transcripts -- --verify-recovery
+```
+
+The JSON output reports session, compaction, visible-message, missing-journal,
+count-mismatch and degraded-journal counts. The verification form rebuilds all
+journals in an isolated temporary directory, compares count-only projections,
+and hashes every SDK source before and after to prove the source is unchanged.
+Runtime logs use the event name
+`session_transcript` with `session_id`, optional `turn_id`, lifecycle `status`
+and bounded `code`; message bodies and internal provider errors are omitted.
+
+For rollback, deploy the prior runtime and leave `PI_AGENT_TRANSCRIPT_DIR`
+unused. The SDK JSONL source was not migrated or rewritten, so no data restore
+is required. Keep the transcript directory for a later rollout; deleting it
+would discard accepted turns that failed before the SDK wrote a message.
 
 When conversation memory is enabled, completed visible user/assistant turns are
 queued for asynchronous retention. Recall is injected only into the current

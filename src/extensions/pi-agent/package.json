@@ -29,6 +29,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "smoke": "node dist/smoke.js",
+    "audit:transcripts": "node dist/transcript-audit.js",
     "security:local": "node scripts/security-gate.mjs --local",
     "security:audit": "npm audit --omit=dev --audit-level=high",
     "security": "npm run security:local && npm run security:audit",
@@ -50,5 +51,10 @@
   },
   "engines": {
     "node": ">=24.0.0"
+  },
+  "overrides": {
+    "fast-uri": "3.1.7",
+    "qs": "6.16.0",
+    "undici": "$undici"
   }
 }

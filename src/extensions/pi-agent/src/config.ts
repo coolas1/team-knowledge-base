@@ -39,6 +39,7 @@ export interface PiAgentConfig {
   port: number;
   dataDir: string;
   sessionDir: string;
+  transcriptDir: string;
   cwd: string;
   provider: string;
   model: string;
@@ -136,6 +137,11 @@ export function loadPiAgentConfig(
 ): PiAgentConfig {
   const cwd = env.PI_AGENT_CWD?.trim() || process.cwd();
   const dataDir = env.PI_AGENT_DATA_DIR?.trim() || `${cwd}/.pi-agent-data`;
+  const sessionDir = env.PI_AGENT_SESSION_DIR?.trim() || `${dataDir}/sessions`;
+  const transcriptDir = env.PI_AGENT_TRANSCRIPT_DIR?.trim() || `${dataDir}/transcripts`;
+  if (path.resolve(sessionDir) === path.resolve(transcriptDir)) {
+    throw new Error("PI_AGENT_TRANSCRIPT_DIR must differ from PI_AGENT_SESSION_DIR");
+  }
   const sharedProvider = env.LLM_PROVIDER?.trim();
   const inheritSharedModel =
     Boolean(sharedProvider) &&
@@ -159,7 +165,8 @@ export function loadPiAgentConfig(
     maxBuildAttempts: requiredPositiveInteger(env.PI_AGENT_MAX_BUILD_ATTEMPTS, 3, "PI_AGENT_MAX_BUILD_ATTEMPTS", 10),
     port: positiveInteger(env.PI_AGENT_PORT, 8010),
     dataDir,
-    sessionDir: env.PI_AGENT_SESSION_DIR?.trim() || `${dataDir}/sessions`,
+    sessionDir,
+    transcriptDir,
     cwd,
     provider,
     model,
@@ -208,3 +215,4 @@ export function validateDeadlineHierarchy(
     );
   }
 }
+import path from "node:path";

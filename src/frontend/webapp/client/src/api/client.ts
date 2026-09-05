@@ -57,7 +57,14 @@ export interface AgentSession {
 export interface AgentConversationMessage {
   role: 'user' | 'assistant'
   text: string
+  id?: string
+  turnId?: string
+  timestamp?: string
+  status?: AgentTurnStatus
+  clientMessageId?: string
 }
+
+export type AgentTurnStatus = 'accepted' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
 
 export interface AgentSessionDetail extends AgentSession {
   messages: AgentConversationMessage[]
@@ -69,6 +76,7 @@ export interface AgentSessionList {
 
 export interface ToolActivity { activity?: string; jobId?: string; artifactId?: string; version?: number; errorSummary?: string }
 export type PiAgentEvent =
+  | { type: 'message.accepted'; sessionId: string; turnId: string; messageId: string; clientMessageId: string; status: AgentTurnStatus; replayed?: boolean }
   | { type: 'message.start'; sessionId: string; name?: string }
   | { type: 'assistant.delta'; delta: string }
   | { type: 'assistant.thinking'; delta: string }
@@ -76,8 +84,8 @@ export type PiAgentEvent =
   | ({ type: 'tool.result'; toolCallId: string; toolName: string; isError: boolean; result?: unknown } & ToolActivity)
   | { type: 'citation'; docId: string; title: string }
   | { type: 'limit.reached'; limit: 'tool_calls' | 'time'; maximum: number }
-  | { type: 'message.completed'; sessionId: string; answer: string; toolCalls: number }
-  | { type: 'message.failed'; error: string; code?: string }
+  | { type: 'message.completed'; sessionId: string; answer: string; toolCalls: number; turnId?: string; messageId?: string; clientMessageId?: string; searchDegraded?: boolean; searchFallback?: boolean }
+  | { type: 'message.failed'; error: string; code?: string; sessionId?: string; turnId?: string; messageId?: string; clientMessageId?: string; status?: 'failed' | 'cancelled' | 'interrupted' }
 
 export class ApiError extends Error {
   constructor(
@@ -89,6 +97,13 @@ export class ApiError extends Error {
   ) {
     super(message)
     this.name = 'ApiError'
+  }
+}
+
+export class AgentStreamError extends Error {
+  constructor(readonly event: Extract<PiAgentEvent, { type: 'message.failed' }>) {
+    super(event.error)
+    this.name = 'AgentStreamError'
   }
 }
 
@@ -293,22 +308,23 @@ export const api = {
     message: string,
     onEvent: (event: PiAgentEvent) => void,
     signal?: AbortSignal,
+    clientMessageId?: string,
   ) {
     const res = await fetch(
       `${BASE}/agent/sessions/${encodeURIComponent(sessionId)}/messages`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, ...(clientMessageId ? { clientMessageId } : {}) }),
         signal,
       },
     )
     if (!res.ok) throw await responseError(res)
-    let failure: string | undefined
+    let failure: Extract<PiAgentEvent, { type: 'message.failed' }> | undefined
     await readSseEvents(res, (event) => {
       onEvent(event)
-      if (event.type === 'message.failed') failure = event.error
+      if (event.type === 'message.failed') failure = event
     })
-    if (failure) throw new Error(failure)
+    if (failure) throw new AgentStreamError(failure)
   },
 }

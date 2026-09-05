@@ -74,6 +74,7 @@ describe("loadPiAgentConfig", () => {
     expect(config.maxRunSeconds).toBe(180);
     expect(config.turnReserveSeconds).toBe(60);
     expect(config.sessionDir).toBe("C:/tkb/.pi-agent-data/sessions");
+    expect(config.transcriptDir).toBe("C:/tkb/.pi-agent-data/transcripts");
     expect(config.exposeThinking).toBe(false);
     expect(config.exposeToolResults).toBe(false);
   });
@@ -128,6 +129,15 @@ describe("loadPiAgentConfig", () => {
     expect(config.provider).toBe("ollama");
     expect(config.model).toBe("qwen3:14b");
     expect(config.modelBaseUrl).toBe("http://localhost:11434/v1");
+  });
+
+  it("accepts a transcript directory override and rejects the SDK session directory", () => {
+    expect(loadPiAgentConfig({ PI_AGENT_TRANSCRIPT_DIR: "C:/durable/transcripts" }).transcriptDir)
+      .toBe("C:/durable/transcripts");
+    expect(() => loadPiAgentConfig({
+      PI_AGENT_SESSION_DIR: "C:/same",
+      PI_AGENT_TRANSCRIPT_DIR: "C:/same",
+    })).toThrow("PI_AGENT_TRANSCRIPT_DIR");
   });
 
   it("rejects a deep-tool timeout that consumes the answer reserve", () => {

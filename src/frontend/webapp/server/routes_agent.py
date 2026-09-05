@@ -1,4 +1,5 @@
 """BFF agent-skill routes: invoke harness-agnostic skills in-process."""
+
 from __future__ import annotations
 
 import json
@@ -9,7 +10,7 @@ from collections.abc import AsyncIterator
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.agent.interface import EngineClient, LlmClient, SkillContext
 from src.frontend.webapp.server import deps
@@ -24,6 +25,7 @@ class AskRequest(BaseModel):
 
 class AgentMessageRequest(BaseModel):
     message: str
+    client_message_id: str | None = Field(default=None, alias="clientMessageId")
 
 
 _SESSION_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -103,7 +105,9 @@ async def ask(
     llm: LlmClient | None = Depends(deps.get_llm),
 ):
     skill = _find_skill("search_and_answer")
-    ctx = SkillContext(engine=engine, llm=llm, params={"query": body.query, "top_k": body.top_k})
+    ctx = SkillContext(
+        engine=engine, llm=llm, params={"query": body.query, "top_k": body.top_k}
+    )
     result = await skill.run(ctx)
     return result.output
 
@@ -153,7 +157,14 @@ async def stream_agent_message(session_id: str, body: AgentMessageRequest):
         request = client.build_request(
             "POST",
             f"{_pi_agent_url()}/v1/sessions/{session_id}/messages",
-            json={"message": body.message},
+            json={
+                "message": body.message,
+                **(
+                    {"clientMessageId": body.client_message_id}
+                    if body.client_message_id
+                    else {}
+                ),
+            },
         )
         response = await client.send(request, stream=True)
     except httpx.RequestError as exc:
@@ -188,6 +199,8 @@ async def ingest_summarize(
         raise HTTPException(400, "文件名不能为空")
     data = await file.read()
     skill = _find_skill("ingest_and_summarize")
-    ctx = SkillContext(engine=engine, llm=llm, params={"name": file.filename, "data": data})
+    ctx = SkillContext(
+        engine=engine, llm=llm, params={"name": file.filename, "data": data}
+    )
     result = await skill.run(ctx)
     return result.output
