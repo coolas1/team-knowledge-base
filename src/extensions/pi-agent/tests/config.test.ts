@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { loadPiAgentConfig, loadTkbAdapterConfig } from "../src/config.js";
+import {
+  loadPiAgentConfig,
+  loadTkbAdapterConfig,
+  validateDeadlineHierarchy,
+} from "../src/config.js";
+import { PiAgentRuntime } from "../src/runtime.js";
 
 describe("loadTkbAdapterConfig", () => {
   it("uses safe defaults", () => {
@@ -16,6 +21,7 @@ describe("loadTkbAdapterConfig", () => {
     expect(config.conversationMemoryRetentionContext).toBe(
       "Completed team conversation turn",
     );
+    expect(config.deepToolTimeoutMs).toBe(60_000);
   });
 
   it("accepts explicit timeouts and feature switches", () => {
@@ -65,7 +71,8 @@ describe("loadPiAgentConfig", () => {
     expect(config.provider).toBe("ollama");
     expect(config.modelApiKey).toBe("ollama");
     expect(config.maxToolCalls).toBe(12);
-    expect(config.maxRunSeconds).toBe(300);
+    expect(config.maxRunSeconds).toBe(180);
+    expect(config.turnReserveSeconds).toBe(60);
     expect(config.sessionDir).toBe("C:/tkb/.pi-agent-data/sessions");
     expect(config.exposeThinking).toBe(false);
     expect(config.exposeToolResults).toBe(false);
@@ -121,5 +128,18 @@ describe("loadPiAgentConfig", () => {
     expect(config.provider).toBe("ollama");
     expect(config.model).toBe("qwen3:14b");
     expect(config.modelBaseUrl).toBe("http://localhost:11434/v1");
+  });
+
+  it("rejects a deep-tool timeout that consumes the answer reserve", () => {
+    const agent = loadPiAgentConfig({
+      PI_AGENT_MAX_RUN_SECONDS: "120",
+      PI_AGENT_TURN_RESERVE_SECONDS: "60",
+    });
+    const adapter = loadTkbAdapterConfig({ TKB_DEEP_TOOL_TIMEOUT_MS: "60000" });
+
+    expect(() => validateDeadlineHierarchy(agent, adapter)).toThrow(
+      /TKB_DEEP_TOOL_TIMEOUT_MS.*PI_AGENT_TURN_RESERVE_SECONDS.*PI_AGENT_MAX_RUN_SECONDS/,
+    );
+    expect(() => new PiAgentRuntime(agent, adapter)).toThrow(/Invalid timeout hierarchy/);
   });
 });

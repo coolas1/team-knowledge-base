@@ -21,7 +21,12 @@ from .types import RecallCandidate, RecallResult, ReflectResult
 
 class CoreQueryService(Protocol):
     async def recall(
-        self, query: str, *, mode: str = "deep", top_k: int | None = None
+        self,
+        query: str,
+        *,
+        mode: str = "deep",
+        top_k: int | None = None,
+        search_id: str | None = None,
     ) -> RecallResult: ...
 
     async def reflect(
@@ -43,9 +48,13 @@ class HindsightQueryService:
         self._validate(request)
         strategy = self._resolve_strategy(request)
         if strategy == "recall":
-            recalled = await self._core.recall(
-                request.query, mode=request.mode, top_k=request.top_k
-            )
+            recall_kwargs = {
+                "mode": request.mode,
+                "top_k": request.top_k,
+            }
+            if request.correlation_id is not None:
+                recall_kwargs["search_id"] = request.correlation_id
+            recalled = await self._core.recall(request.query, **recall_kwargs)
             grouped: defaultdict[str, list[dict]] = defaultdict(list)
             for item in recalled.results:
                 grouped[item.memory_type].append(item.as_evidence())
@@ -165,11 +174,23 @@ class HindsightQueryService:
 def build_query_service() -> HindsightQueryService:
     from config.settings import settings
 
-    repository = PostgresMemoryRepository()
+    repository = PostgresMemoryRepository(
+        keyword_index_enabled=settings.hindsight_keyword_index_enabled,
+        keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
+    )
     options = HindsightOptions(
         recall_min_semantic=settings.hindsight_recall_min_semantic,
         recall_min_score=settings.hindsight_recall_min_score,
         rerank_semantic_margin=settings.hindsight_rerank_semantic_margin,
+        deep_total_timeout_seconds=settings.hindsight_deep_total_timeout_seconds,
+        query_analysis_timeout_seconds=settings.hindsight_query_analysis_timeout_seconds,
+        query_embedding_timeout_seconds=settings.hindsight_query_embedding_timeout_seconds,
+        retrieval_arm_timeout_seconds=settings.hindsight_retrieval_arm_timeout_seconds,
+        rerank_timeout_seconds=settings.hindsight_rerank_timeout_seconds,
+        rerank_candidate_limit=settings.hindsight_rerank_candidate_limit,
+        rerank_text_limit_chars=settings.hindsight_rerank_text_limit_chars,
+        rerank_total_chars=settings.hindsight_rerank_total_chars,
+        keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
     )
     core = HindsightService(repository, ProjectHindsightProviders(), options)
     return HindsightQueryService(core)

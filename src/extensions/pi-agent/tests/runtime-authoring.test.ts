@@ -58,3 +58,122 @@ it("uses the real SDK loop for error history, safe SSE, publication and immediat
     expect(managed.session.messages.at(-1).isError).toBe(true);
   } finally { await runtime.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
 }, 30000);
+
+it("streams deep-search fallback state through completion", async () => {
+  vi.spyOn(TkbMcpClient.prototype, "listTools").mockResolvedValue(
+    Object.entries(ENGINE_MCP_CONTRACT).map(([name, contract]) => ({
+      name,
+      description: name,
+      inputSchema: {
+        type: "object",
+        properties: Object.fromEntries(
+          contract.required.map((key) => [key, { type: "string" }]),
+        ),
+        required: contract.required,
+      },
+    })),
+  );
+  vi.spyOn(TkbMcpClient.prototype, "callTool").mockImplementation(
+    async (name) => {
+      if (name === "search_knowledge_deep") {
+        return {
+          text: JSON.stringify({
+            sources: [],
+            trace: { degraded: true },
+            error: { code: "deep_search_timeout" },
+          }),
+          isError: false,
+        };
+      }
+      if (name === "search_knowledge_fast") {
+        return {
+          text: JSON.stringify({
+            sources: [{ doc_id: "doc-1", title: "Status", chunk_text: "on track" }],
+            trace: {},
+          }),
+          isError: false,
+        };
+      }
+      throw new Error(`unexpected tool: ${name}`);
+    },
+  );
+  vi.spyOn(RunnerClient.prototype, "health").mockResolvedValue({
+    available: false,
+    capabilities: [],
+    runtime: "test",
+  });
+
+  let step = 0;
+  const server = createServer(async (_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const delta =
+      step++ === 0
+        ? {
+            role: "assistant",
+            tool_calls: [
+              {
+                index: 0,
+                id: "call_deep",
+                type: "function",
+                function: {
+                  name: "tkb_search_deep",
+                  arguments: JSON.stringify({ query: "compare" }),
+                },
+              },
+            ],
+          }
+        : { role: "assistant", content: "Used degraded fallback evidence." };
+    res.write(
+      `data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", created: 1, model: "test", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`,
+    );
+    res.end(
+      `data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", created: 1, model: "test", choices: [{ index: 0, delta: {}, finish_reason: step === 1 ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`,
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
+  const data = mkdtempSync(path.join(tmpdir(), "tkb-deep-fallback-"));
+  const runtime = new PiAgentRuntime(
+    loadPiAgentConfig({
+      PI_AGENT_DATA_DIR: data,
+      PI_AGENT_PROVIDER: "test",
+      PI_AGENT_MODEL: "test",
+      PI_AGENT_BASE_URL: base,
+      PI_AGENT_API_KEY: "test",
+      PI_AGENT_REASONING: "false",
+      PI_AGENT_TOOL_AUTHORING_ENABLED: "false",
+    }),
+    loadTkbAdapterConfig({}),
+  );
+  try {
+    await runtime.initialize();
+    const session = await runtime.createSession();
+    const events: PiRuntimeEvent[] = [];
+    await runtime.streamMessage(session.id, "Compare project status", (event) => {
+      events.push(event);
+    });
+
+    const lifecycle = events.filter((event) =>
+      ["tool.start", "tool.result", "message.completed"].includes(event.type),
+    );
+    expect(lifecycle.map((event) => event.type)).toEqual([
+      "tool.start",
+      "tool.result",
+      "message.completed",
+    ]);
+    expect(lifecycle[1]).toMatchObject({
+      type: "tool.result",
+      toolName: "tkb_search_deep",
+      activity: "fallback",
+      isError: false,
+    });
+    expect(lifecycle[2]).toMatchObject({
+      type: "message.completed",
+      searchDegraded: true,
+      searchFallback: true,
+    });
+  } finally {
+    await runtime.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}, 30000);

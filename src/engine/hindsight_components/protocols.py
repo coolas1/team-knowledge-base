@@ -9,7 +9,9 @@ from .types import RecallCandidate, ReflectionContext, RetainPlan
 
 
 class HindsightProviders(Protocol):
-    async def embed(self, texts: list[str]) -> list[list[float]]: ...
+    async def embed(
+        self, texts: list[str], *, timeout: float | None = None
+    ) -> list[list[float]]: ...
 
     async def json(
         self, system: str, user: str, *, timeout: float = 600

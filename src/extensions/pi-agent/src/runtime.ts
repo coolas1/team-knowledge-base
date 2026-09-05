@@ -9,9 +9,18 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { ExecutionBudget, enforceToolBudget } from "./budget.js";
+import {
+  ExecutionBudget,
+  enforceToolBudget,
+  SearchFallbackBudget,
+  TurnDeadlineBudget,
+} from "./budget.js";
 import type { PiAgentConfig, TkbAdapterConfig } from "./config.js";
-import { loadPiAgentConfig, loadTkbAdapterConfig } from "./config.js";
+import {
+  loadPiAgentConfig,
+  loadTkbAdapterConfig,
+  validateDeadlineHierarchy,
+} from "./config.js";
 import {
   formatContractErrors,
   type ContractReport,
@@ -41,6 +50,7 @@ const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent
 - 证据不足时可以换一种查询方式，但不要重复相同查询。
 - 知识库回答必须列出依据的文档标题和 doc_id；没有充分证据时明确说明“知识库中未找到充分依据”。
 - 达到调用限制时，停止探索并依据已经获得的证据作答；工具错误必须如实处理。
+- 深度检索返回 degraded 或 fallback 标记时，继续使用现有证据作答，并在答案中说明检索发生了降级或快速兜底。
 - 用户要求生成 Word、PDF 或 PPT 时，先按需检索知识库并组织完整内容，再调用 tkb_generate_document。不要只输出 Markdown 代替文件。
 - PPT 内容用独占一行的 --- 分隔页面，每页以 Markdown 标题开头。工具会同时生成 PPTX 和 Slidev 源文件。
 - 生成成功后，在最终回答中使用工具返回的 download_url 给出 Markdown 下载链接；PPT 还要给出 slidev_url。`;
@@ -65,6 +75,8 @@ export type PiRuntimeEvent =
       sessionId: string;
       answer: string;
       toolCalls: number;
+      searchDegraded?: boolean;
+      searchFallback?: boolean;
     };
 
 export interface RuntimeSessionInfo {
@@ -139,8 +151,14 @@ interface ManagedSession {
   authoringBudget: AuthoringBudget;
   session: AgentSession;
   budget: ExecutionBudget;
+  turnDeadline: TurnDeadlineBudget;
+  fallbackBudget: SearchFallbackBudget;
   lastAccess: number;
-  active?: { reason?: "time" | "cancelled" };
+  active?: {
+    reason?: "time" | "cancelled";
+    searchDegraded?: boolean;
+    searchFallback?: boolean;
+  };
 }
 
 function safeResult(value: unknown): unknown {
@@ -242,6 +260,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     readonly config: PiAgentConfig = loadPiAgentConfig(),
     readonly adapterConfig: TkbAdapterConfig = loadTkbAdapterConfig(),
   ) {
+    validateDeadlineHierarchy(config, adapterConfig);
     this.mcpClient = new TkbMcpClient(adapterConfig);
     this.runner = new RunnerClient(config.runnerUrl, config.runnerToken);
     this.skillsDir = fileURLToPath(new URL("../skills", import.meta.url));
@@ -363,6 +382,8 @@ export class PiAgentRuntime implements AgentRuntimeApi {
 
     managed.lastAccess = Date.now();
     managed.budget.reset();
+    managed.turnDeadline.reset();
+    managed.fallbackBudget.reset();
     managed.authoringBudget.reset();
     managed.active = {};
     const messageCountBeforePrompt = managed.session.messages.length;
@@ -412,6 +433,8 @@ export class PiAgentRuntime implements AgentRuntimeApi {
         sessionId: id,
         answer: textFromMessage(answer),
         toolCalls: managed.budget.toolCalls,
+        searchDegraded: managed.active.searchDegraded,
+        searchFallback: managed.active.searchFallback,
       });
     } finally {
       clearTimeout(timeout);
@@ -477,10 +500,20 @@ export class PiAgentRuntime implements AgentRuntimeApi {
   private async buildManagedSession(manager: SessionManager): Promise<ManagedSession> {
     this.ensureInitialized();
     const budget = new ExecutionBudget(this.config.maxToolCalls);
+    const turnDeadline = new TurnDeadlineBudget(
+      this.config.maxRunSeconds,
+      this.config.turnReserveSeconds,
+    );
+    const fallbackBudget = new SearchFallbackBudget();
     const authoringBudget = new AuthoringBudget(this.config.maxCodeJobs, this.config.maxBuildAttempts);
     const tools = enforceToolBudget(
       [
-        ...enabledTkbTools({ client: this.mcpClient, config: this.adapterConfig }),
+        ...enabledTkbTools({
+          client: this.mcpClient,
+          config: this.adapterConfig,
+          turnDeadline,
+          fallbackBudget,
+        }),
         buildSkillReadTool(this.skillsDir),
         ...(this.library ? buildAuthoringTools(this.library, this.runner, authoringBudget) : []),
       ],
@@ -498,7 +531,14 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       tools: tools.map((tool) => tool.name),
       customTools: tools,
     });
-    return { session, budget, authoringBudget, lastAccess: Date.now() };
+    return {
+      session,
+      budget,
+      authoringBudget,
+      turnDeadline,
+      fallbackBudget,
+      lastAccess: Date.now(),
+    };
   }
 
   private async enqueueCompletedTurn(
@@ -608,7 +648,17 @@ export class PiAgentRuntime implements AgentRuntimeApi {
         if (typeof details?.artifactId === "string" && /^gen_[a-z0-9_]+$/.test(details.artifactId)) toolResult.artifactId = details.artifactId;
         if (Number.isInteger(details?.version)) toolResult.version = details!.version;
         if (event.isError) toolResult.errorSummary = "工具执行失败，Agent 已收到错误反馈";
-      } else if (this.config.exposeToolResults) toolResult.result = safeResult(event.result);
+      } else {
+        const details = (
+          event.result as {
+            details?: ToolActivity & { degraded?: boolean; fallback?: boolean };
+          }
+        ).details;
+        if (details?.activity) toolResult.activity = details.activity;
+        if (details?.degraded && managed.active) managed.active.searchDegraded = true;
+        if (details?.fallback && managed.active) managed.active.searchFallback = true;
+        if (this.config.exposeToolResults) toolResult.result = safeResult(event.result);
+      }
       await emit(toolResult);
       for (const citation of AUTHORING_NAMES.has(event.toolName) ? [] : extractCitations(event.result)) {
         if (citations.has(citation.docId)) continue;

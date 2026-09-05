@@ -114,7 +114,9 @@ the Pi model API adapter when required by a compatible provider.
 | `PI_AGENT_DATA_DIR` | `<cwd>/.pi-agent-data` | Runtime data root |
 | `PI_AGENT_SESSION_DIR` | `<data>/sessions` | Persistent session files |
 | `PI_AGENT_MAX_TOOL_CALLS` | `12` | Hard tool-call limit per run |
-| `PI_AGENT_MAX_RUN_SECONDS` | `300` | Hard execution-time limit |
+| `PI_AGENT_MAX_RUN_SECONDS` | `180` | Hard execution-time limit |
+| `PI_AGENT_TURN_RESERVE_SECONDS` | `60` | Time reserved for fallback and final answer synthesis |
+| `TKB_DEEP_TOOL_TIMEOUT_MS` | `60000` | Maximum deep-search MCP time before bounded fallback |
 | `PI_AGENT_MAX_REQUEST_BYTES` | `1048576` | Maximum JSON request size |
 | `PI_AGENT_EXPOSE_THINKING` | `false` | Include model reasoning deltas in SSE (local debugging only) |
 | `PI_AGENT_EXPOSE_TOOL_RESULTS` | `false` | Include raw tool payloads in SSE (local debugging only) |
@@ -130,6 +132,11 @@ the Pi model API adapter when required by a compatible provider.
 
 When deployed beside the current Compose services, use
 `TKB_MCP_URL=http://webapp:8000/mcp/`.
+
+The runtime rejects configurations where `TKB_DEEP_TOOL_TIMEOUT_MS` plus
+`PI_AGENT_TURN_RESERVE_SECONDS` is greater than or equal to
+`PI_AGENT_MAX_RUN_SECONDS`. A deep search that times out or returns degraded
+without evidence can trigger one `tkb_search_fast` fallback in the same turn.
 
 ## HTTP/SSE API
 

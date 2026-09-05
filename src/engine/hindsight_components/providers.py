@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any, Protocol
@@ -40,8 +41,13 @@ class ProjectHindsightProviders:
     def __init__(self, embedding_provider: EmbeddingProvider = embedder) -> None:
         self._embedding_provider = embedding_provider
 
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        return await self._embedding_provider.embed_batch(texts)
+    async def embed(
+        self, texts: list[str], *, timeout: float | None = None
+    ) -> list[list[float]]:
+        if timeout is None:
+            return await self._embedding_provider.embed_batch(texts)
+        async with asyncio.timeout(timeout):
+            return await self._embedding_provider.embed_batch(texts)
 
     async def json(
         self, system: str, user: str, *, timeout: float = 600

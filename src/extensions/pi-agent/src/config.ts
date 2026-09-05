@@ -54,6 +54,7 @@ export interface PiAgentConfig {
   maxOutputTokens: number;
   maxToolCalls: number;
   maxRunSeconds: number;
+  turnReserveSeconds: number;
   maxLoadedSessions: number;
   maxRequestBytes: number;
 }
@@ -102,7 +103,7 @@ export function loadTkbAdapterConfig(
     mcpUrl: env.TKB_MCP_URL?.trim() || "http://localhost:8000/mcp/",
     connectTimeoutMs: positiveInteger(env.TKB_CONNECT_TIMEOUT_MS, 10_000),
     defaultToolTimeoutMs: positiveInteger(env.TKB_TOOL_TIMEOUT_MS, 60_000),
-    deepToolTimeoutMs: positiveInteger(env.TKB_DEEP_TOOL_TIMEOUT_MS, 300_000),
+    deepToolTimeoutMs: positiveInteger(env.TKB_DEEP_TOOL_TIMEOUT_MS, 60_000),
     strictContract: enabled(env.TKB_CONTRACT_STRICT, true),
     enableLegacySearch: enabled(env.TKB_ENABLE_LEGACY_SEARCH),
     enableWriteTools: enabled(env.TKB_ENABLE_WRITE_TOOLS),
@@ -187,8 +188,23 @@ export function loadPiAgentConfig(
     contextWindow: positiveInteger(env.PI_AGENT_CONTEXT_WINDOW, 32_768),
     maxOutputTokens: positiveInteger(env.PI_AGENT_MAX_OUTPUT_TOKENS, 8_192),
     maxToolCalls: positiveInteger(env.PI_AGENT_MAX_TOOL_CALLS, 12),
-    maxRunSeconds: positiveInteger(env.PI_AGENT_MAX_RUN_SECONDS, 300),
+    maxRunSeconds: positiveInteger(env.PI_AGENT_MAX_RUN_SECONDS, 180),
+    turnReserveSeconds: positiveInteger(env.PI_AGENT_TURN_RESERVE_SECONDS, 60),
     maxLoadedSessions: positiveInteger(env.PI_AGENT_MAX_LOADED_SESSIONS, 50),
     maxRequestBytes: positiveInteger(env.PI_AGENT_MAX_REQUEST_BYTES, 1_048_576),
   };
+}
+
+export function validateDeadlineHierarchy(
+  agent: PiAgentConfig,
+  adapter: TkbAdapterConfig,
+): void {
+  const maxRunMs = agent.maxRunSeconds * 1_000;
+  const reserveMs = agent.turnReserveSeconds * 1_000;
+  if (adapter.deepToolTimeoutMs + reserveMs >= maxRunMs) {
+    throw new Error(
+      "Invalid timeout hierarchy: TKB_DEEP_TOOL_TIMEOUT_MS + " +
+        "PI_AGENT_TURN_RESERVE_SECONDS must be less than PI_AGENT_MAX_RUN_SECONDS",
+    );
+  }
 }

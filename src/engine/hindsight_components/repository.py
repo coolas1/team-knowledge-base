@@ -9,8 +9,8 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select, text
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import Text, bindparam, delete, func, or_, select, text
+from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.components.store.models import Document
@@ -50,12 +50,22 @@ SessionFactory = Callable[[], Any]
 class PostgresMemoryRepository:
     """Own only Hindsight memory rows while reusing TKB documents/sessions."""
 
-    def __init__(self, session_factory: SessionFactory | None = None) -> None:
+    def __init__(
+        self,
+        session_factory: SessionFactory | None = None,
+        *,
+        keyword_index_enabled: bool = False,
+        keyword_candidate_limit: int = 300,
+    ) -> None:
         if session_factory is None:
             from src.engine.components.store.postgres import async_session_factory
 
             session_factory = async_session_factory
         self._session_factory = session_factory
+        if keyword_candidate_limit < 1:
+            raise ValueError("keyword_candidate_limit must be greater than zero")
+        self._keyword_index_enabled = keyword_index_enabled
+        self._keyword_candidate_limit = keyword_candidate_limit
 
     async def replace_document(self, plan: RetainPlan) -> None:
         document_id = uuid.UUID(plan.document_id)
@@ -270,6 +280,7 @@ class PostgresMemoryRepository:
                 memory_index=draft.memory_index,
                 memory_type=draft.memory_type,
                 text=draft.text,
+                lexical_tokens=lexical_tokens(draft.text),
                 source_text=draft.source_text,
                 context=draft.context,
                 embedding=draft.embedding,
@@ -529,31 +540,78 @@ class PostgresMemoryRepository:
     async def keyword_search(
         self, query: str, limit: int, *, source_type: str | None = None
     ) -> list[RecallCandidate]:
+        query_tokens = list(dict.fromkeys(lexical_tokens(query)))
+        if not query_tokens:
+            return []
         async with self._session_factory() as session:
+            conditions = (
+                MemoryUnit.state == "active",
+                Document.status == "indexed",
+                *self._recall_source_conditions(source_type),
+            )
+            base = (
+                select(MemoryUnit.id, MemoryUnit.text)
+                .join(Document, Document.id == MemoryUnit.document_id)
+                .where(*conditions)
+            )
+            params: dict[str, Any] = {}
+            if self._keyword_index_enabled:
+                token = func.unnest(MemoryUnit.lexical_tokens).column_valued("token")
+                overlap_score = (
+                    select(func.count(func.distinct(token)))
+                    .where(
+                        token
+                        == func.any(
+                            bindparam("keyword_query_tokens", type_=ARRAY(Text))
+                        )
+                    )
+                    .correlate(MemoryUnit)
+                    .scalar_subquery()
+                )
+                base = (
+                    base.add_columns(overlap_score.label("lexical_overlap"))
+                    .where(
+                        MemoryUnit.lexical_tokens.is_not(None),
+                        MemoryUnit.lexical_tokens.overlap(query_tokens),
+                    )
+                    .order_by(overlap_score.desc(), MemoryUnit.id)
+                    .limit(self._keyword_candidate_limit)
+                )
+                params["keyword_query_tokens"] = query_tokens
+            result = (
+                await session.execute(base, params)
+                if params
+                else await session.execute(base)
+            )
+            raw_rows = list(result.all())
+            scores = self._bm25(query, [str(row[1]) for row in raw_rows])
+            ranked_ids = sorted(
+                (
+                    (memory_id, score)
+                    for (memory_id, _text, *_), score in zip(
+                        raw_rows, scores, strict=True
+                    )
+                    if score > 0
+                ),
+                key=lambda item: (-item[1], str(item[0])),
+            )[:limit]
+            if not ranked_ids:
+                return []
+            score_by_id = dict(ranked_ids)
             rows = list(
                 (
                     await session.execute(
                         select(MemoryUnit, Document)
                         .join(Document, Document.id == MemoryUnit.document_id)
-                        .where(
-                            MemoryUnit.state == "active",
-                            Document.status == "indexed",
-                            *self._recall_source_conditions(source_type),
-                        )
+                        .where(MemoryUnit.id.in_(score_by_id))
                     )
                 ).all()
             )
-        scores = self._bm25(query, [unit.text for unit, _ in rows])
-        ranked = sorted(
-            (
-                self._candidate(unit, document, keyword_score=score)
-                for (unit, document), score in zip(rows, scores, strict=True)
-                if score > 0
-            ),
-            key=lambda item: item.keyword_score or 0,
-            reverse=True,
-        )
-        return ranked[:limit]
+        candidates = {
+            unit.id: self._candidate(unit, document, keyword_score=score_by_id[unit.id])
+            for unit, document in rows
+        }
+        return [candidates[memory_id] for memory_id, _score in ranked_ids]
 
     async def graph_search(
         self,
@@ -774,9 +832,7 @@ class PostgresMemoryRepository:
             )
             .exists()
         )
-        conditions = [
-            or_(Document.file_type != "conversation", completed_conversation)
-        ]
+        conditions = [or_(Document.file_type != "conversation", completed_conversation)]
         if source_type is not None:
             conditions.append(
                 MemoryUnit.metadata_json["source_type"].astext == source_type

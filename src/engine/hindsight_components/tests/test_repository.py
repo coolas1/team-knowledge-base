@@ -29,6 +29,40 @@ def test_bm25_ranks_matching_english_and_chinese_documents() -> None:
     assert chinese[2] > chinese[0]
 
 
+def test_bounded_prefilter_preserves_frozen_multilingual_top_results() -> None:
+    documents = [
+        "TKB deep search timeout handling",
+        "TKB deployment notes",
+        "知识库深度检索超时处理",
+        "知识库部署说明",
+        "unrelated lunch menu",
+        "无关的午餐菜单",
+    ]
+    for query in ("TKB search timeout", "知识库检索超时"):
+        legacy_scores = PostgresMemoryRepository._bm25(query, documents)
+        legacy = sorted(
+            range(len(documents)), key=lambda index: legacy_scores[index], reverse=True
+        )
+        query_terms = set(lexical_tokens(query))
+        candidates = [
+            index
+            for index, document in enumerate(documents)
+            if query_terms.intersection(lexical_tokens(document))
+        ][:300]
+        candidate_scores = PostgresMemoryRepository._bm25(
+            query, [documents[index] for index in candidates]
+        )
+        indexed = [
+            item[0]
+            for item in sorted(
+                zip(candidates, candidate_scores, strict=True),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+        ]
+        assert indexed[0] == legacy[0]
+
+
 def test_candidate_mapping_preserves_provenance_and_scores() -> None:
     memory_id = uuid.uuid4()
     document_id = uuid.uuid4()
@@ -110,6 +144,43 @@ async def test_all_retrieval_arms_filter_source_and_incomplete_conversations() -
     assert all("conversation_memory_sources" in str(item) for item in compiled)
     assert all("metadata_json" in str(item) for item in compiled)
     assert all("conversation" in item.params.values() for item in compiled)
+
+
+async def test_indexed_keyword_search_limits_materialized_candidates() -> None:
+    class EmptyResult:
+        def all(self):
+            return []
+
+    class Session:
+        def __init__(self) -> None:
+            self.statement = None
+            self.params = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, statement, params):
+            self.statement = statement
+            self.params = params
+            return EmptyResult()
+
+    session = Session()
+    repository = PostgresMemoryRepository(
+        lambda: session,
+        keyword_index_enabled=True,
+        keyword_candidate_limit=300,
+    )
+    assert await repository.keyword_search("TKB 知识库", 50) == []
+
+    compiled = session.statement.compile(dialect=postgresql.dialect())
+    sql = str(compiled).lower()
+    assert "lexical_tokens &&" in sql
+    assert "unnest(memory_units.lexical_tokens)" in sql
+    assert 300 in compiled.params.values()
+    assert session.params["keyword_query_tokens"] == ["tkb", "知识", "识库"]
 
 
 def test_normalization_tokens_and_advisory_lock_are_stable() -> None:

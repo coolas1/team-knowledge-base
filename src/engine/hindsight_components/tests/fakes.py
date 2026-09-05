@@ -117,7 +117,9 @@ class FakeProviders:
         self.json_calls: list[str] = []
         self.json_users: list[str] = []
 
-    async def embed(self, texts: list[str]) -> list[list[float]]:
+    async def embed(
+        self, texts: list[str], *, timeout: float | None = None
+    ) -> list[list[float]]:
         return [[1.0, 0.0] for _ in texts]
 
     async def json(
