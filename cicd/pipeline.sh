@@ -56,18 +56,27 @@ die() { log "FAILED: $*"; exit 1; }
 # systemd user units get a minimal PATH; make the pipeline self-sufficient.
 export PATH="$HOME/.local/bin:$TKB_NODE22_BIN:/usr/local/bin:/usr/bin:/bin"
 
-# deploy.env doubles as the pipeline's environment file: compose variable
-# substitution values plus the proxy settings git/uv/npm/podman need. Export
-# only well-formed KEY=VALUE lines (never eval the file).
+# deploy.env holds compose substitution values plus the proxy settings
+# git/uv/npm/podman need. Only the PROXY keys are exported into this
+# environment: exporting app config (LLM_MODEL etc.) would leak into the
+# gate's test processes (pydantic-settings reads real env vars) and change
+# test behavior. Compose receives the full file via --env-file.
 if [[ -f "$deploy_env" ]]; then
   while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
-    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
-    export "$line"
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
+    case "${BASH_REMATCH[1]}" in
+      *_proxy|*_PROXY) export "$line" ;;
+    esac
   done < "$deploy_env"
 fi
 
-health_url="http://127.0.0.1:${APP_PORT:-8000}/health"
+# Health-check port comes from deploy.env too, read without exporting.
+app_port=""
+if [[ -f "$deploy_env" ]]; then
+  app_port="$(grep -E '^APP_PORT=' "$deploy_env" | tail -1 | cut -d= -f2-)"
+fi
+health_url="http://127.0.0.1:${app_port:-8000}/health"
 
 for tool in git uv podman curl npm node; do
   command -v "$tool" >/dev/null 2>&1 || die "required tool not found: $tool"

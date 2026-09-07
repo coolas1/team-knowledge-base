@@ -14,11 +14,15 @@ home="/var/tmp/team-kb-cicd"
 mkdir -p "$home"
 
 # deploy.env carries the proxy settings the initial clone needs (the
-# pipeline sources it too, for the same reason).
+# pipeline sources them too, for the same reason). Only PROXY keys are
+# exported — see the comment in pipeline.sh for why app config must not
+# leak into the environment.
 while IFS= read -r line; do
   [[ "$line" =~ ^[[:space:]]*# ]] && continue
-  [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
-  export "$line"
+  [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
+  case "${BASH_REMATCH[1]}" in
+    *_proxy|*_PROXY) export "$line" ;;
+  esac
 done < "$home/deploy.env"
 
 if [[ ! -d "$home/repo/.git" ]]; then

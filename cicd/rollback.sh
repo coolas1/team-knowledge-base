@@ -29,14 +29,21 @@ die() { log "FAILED: $*"; exit 1; }
 
 export PATH="$HOME/.local/bin:$TKB_NODE22_BIN:/usr/local/bin:/usr/bin:/bin"
 
+# Only PROXY keys from deploy.env are exported (see pipeline.sh for why).
 if [[ -f "$deploy_env" ]]; then
   while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
-    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
-    export "$line"
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
+    case "${BASH_REMATCH[1]}" in
+      *_proxy|*_PROXY) export "$line" ;;
+    esac
   done < "$deploy_env"
 fi
-health_url="http://127.0.0.1:${APP_PORT:-8000}/health"
+app_port=""
+if [[ -f "$deploy_env" ]]; then
+  app_port="$(grep -E '^APP_PORT=' "$deploy_env" | tail -1 | cut -d= -f2-)"
+fi
+health_url="http://127.0.0.1:${app_port:-8000}/health"
 
 [[ $# -eq 1 ]] || { echo "usage: rollback.sh <sha>" >&2; exit 2; }
 [[ -d "$repo_dir/.git" ]] || die "disposable clone missing at $repo_dir"
