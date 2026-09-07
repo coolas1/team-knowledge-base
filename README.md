@@ -16,6 +16,18 @@ reranking. Query it through a CLI, an MCP server, or a web UI.
   and a FastAPI BFF + React SPA.
 - **Containerized** — single-stage Containerfile; compose for backing services.
 
+## Agent document generation
+
+The conversation Agent can generate downloadable Word (`.docx`), PDF, and
+PowerPoint (`.pptx`) files. Ask for the desired format and content in the chat;
+the Agent retrieves knowledge when needed, calls the `generate_document` MCP
+tool, and returns a link under `/api/artifacts/{id}/download`.
+
+PowerPoint requests also produce an editable Slidev Markdown file. Use `---` on
+its own line to separate slides, then run the downloaded source with Slidev if
+you want to restyle or present it. Generated files are stored in the
+`artifactsdata` Compose volume so Webapp container rebuilds do not remove them.
+
 ## Installation
 
 ### Prerequisites

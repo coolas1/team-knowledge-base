@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from src.engine.hindsight_components.hook import HindsightRetainHook
+from src.engine.hindsight_components.types import RetainInput
 
 
 class FakeRepository:
@@ -29,10 +30,10 @@ class FakeRepository:
 class FakeService:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
-        self.retained: list[dict] = []
+        self.retained: list[RetainInput] = []
 
-    async def retain(self, **kwargs):
-        self.retained.append(kwargs)
+    async def retain(self, retain_input: RetainInput):
+        self.retained.append(retain_input)
         if self.fail:
             raise RuntimeError("LLM unavailable")
 
@@ -51,13 +52,13 @@ async def test_hook_retains_text_from_primary_pipeline() -> None:
 
     assert repository.states == [("document-1", "retaining", None)]
     assert service.retained == [
-        {
-            "document_id": "document-1",
-            "title": "week.md",
-            "content": "weekly report",
-            "file_type": "markdown",
-            "source_type": "graphrag-pipeline",
-        }
+        RetainInput(
+            document_id="document-1",
+            title="week.md",
+            content="weekly report",
+            file_type="markdown",
+            source_type="graphrag-pipeline",
+        )
     ]
 
 
@@ -85,7 +86,7 @@ async def test_hook_limits_retain_concurrency() -> None:
     maximum = 0
 
     class ConcurrentService(FakeService):
-        async def retain(self, **kwargs):
+        async def retain(self, retain_input: RetainInput):
             nonlocal active, maximum
             active += 1
             maximum = max(maximum, active)

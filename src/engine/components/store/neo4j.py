@@ -390,7 +390,7 @@ class Neo4jClient:
                 labels = record["labels"]
                 # 过滤掉 Neo4j 内部 label
                 entity_type = next(
-                    (l for l in labels if l != "Document"), "Unknown"
+                    (label for label in labels if label != "Document"), "Unknown"
                 )
                 results.append(
                     GraphQueryResult(
@@ -440,7 +440,9 @@ class Neo4jClient:
 
             node = record["n"]
             labels = record["labels"]
-            entity_type = next((l for l in labels if l != "Document"), "Unknown")
+            entity_type = next(
+                (label for label in labels if label != "Document"), "Unknown"
+            )
 
             return GraphQueryResult(
                 name=node.get("name", ""),
@@ -467,7 +469,7 @@ class Neo4jClient:
                 node = record["e"]
                 labels = record["labels"]
                 entity_type = next(
-                    (l for l in labels if l not in ("Document",)), "Entity"
+                    (label for label in labels if label not in ("Document",)), "Entity"
                 )
                 results.append(
                     GraphQueryResult(
@@ -504,7 +506,7 @@ class Neo4jClient:
                     for s in sources
                 ):
                     entity_type = next(
-                        (l for l in labels if l not in ("Document",)), "Entity"
+                        (label for label in labels if label not in ("Document",)), "Entity"
                     )
                     results.append(
                         GraphQueryResult(
@@ -537,7 +539,7 @@ class Neo4jClient:
             for r in node_records:
                 labels = r["labels"]
                 entity_type = next(
-                    (l for l in labels if l != "Document"), "Unknown"
+                    (label for label in labels if label != "Document"), "Unknown"
                 )
                 sources_raw = r["sources"] or "[]"
                 nodes.append({

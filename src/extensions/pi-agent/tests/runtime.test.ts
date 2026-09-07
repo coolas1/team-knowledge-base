@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { conversationMessagesFrom, extractCitations } from "../src/runtime.js";
+import {
+  conversationMessagesFrom,
+  extractCitations,
+  sessionTitleFrom,
+} from "../src/runtime.js";
 
 describe("Pi runtime result handling", () => {
+  it("builds concise session titles from the first user message", () => {
+    expect(sessionTitleFrom("请帮我总结一下本周项目进展？")).toBe("总结一下本周项目进展");
+    expect(sessionTitleFrom("  # 比较第一季度和第二季度的销售表现、主要差异以及背后的原因  ")).toBe(
+      "比较第一季度和第二季度的销售表现、主要差异以及背…",
+    );
+    expect(sessionTitleFrom("   ")).toBeUndefined();
+  });
+
   it("exposes only visible user and assistant text from session history", () => {
     expect(
       conversationMessagesFrom([

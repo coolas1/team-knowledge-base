@@ -41,11 +41,14 @@ class ReflectiveSearchSkill:
         sources = result.get("sources", [])
         answer = result.get("answer")
         if not answer:
-            context = _format_sources(sources)
-            if ctx.llm is not None and needs_answer:
-                answer = await ctx.llm.complete(_answer_prompt(query, context))
+            if not sources:
+                answer = "知识库中未找到与该问题相关的内容。"
             else:
-                answer = context
+                context = _format_sources(sources)
+                if ctx.llm is not None and needs_answer:
+                    answer = await ctx.llm.complete(_answer_prompt(query, context))
+                else:
+                    answer = context
 
         return SkillResult(
             name=self.name,

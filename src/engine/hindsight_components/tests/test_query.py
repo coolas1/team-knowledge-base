@@ -86,6 +86,28 @@ async def test_auto_uses_recall_for_raw_context() -> None:
     assert result.trace["mode"] == "deep"
 
 
+async def test_query_serializes_conversation_provenance_in_source_metadata() -> None:
+    core = FakeCore()
+    core.item.source_type = "conversation"
+    core.item.session_id = "session-1"
+    core.item.turn_id = "turn-1"
+    core.item.metadata.update(
+        {
+            "source_type": "conversation",
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+        }
+    )
+
+    result = await HindsightQueryService(core).query(
+        KnowledgeQueryRequest(query="remembered preference", strategy="recall")
+    )
+
+    assert result.sources[0].metadata["source_type"] == "conversation"
+    assert result.sources[0].metadata["session_id"] == "session-1"
+    assert result.based_on["world"][0]["turn_id"] == "turn-1"
+
+
 async def test_explicit_strategy_overrides_answer_purpose() -> None:
     core = FakeCore()
     service = HindsightQueryService(core)

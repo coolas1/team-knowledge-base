@@ -14,6 +14,29 @@ export interface McpCallResult {
   isError: boolean;
 }
 
+export interface ConversationMemoryRecallResult {
+  memories: Array<{
+    memory_id: string;
+    text: string;
+    memory_type: string;
+    document_id: string;
+    session_id: string;
+    turn_id: string;
+    score: number;
+    metadata: Record<string, unknown>;
+  }>;
+  trace: Record<string, unknown>;
+}
+
+export interface ConversationMemoryStatus {
+  enabled: boolean;
+  pending: number;
+  processing: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+}
+
 export interface McpClientLike {
   connect(transport: unknown): Promise<void>;
   listTools(): Promise<{
@@ -138,6 +161,78 @@ export class TkbMcpClient {
         return { text: resultText(result), isError: result.isError === true };
       },
     );
+  }
+
+  async recallConversationMemory(
+    query: string,
+    options: {
+      topK: number;
+      mode?: "fast" | "deep";
+      signal?: AbortSignal;
+      timeoutMs?: number;
+    },
+  ): Promise<ConversationMemoryRecallResult> {
+    return this.callJsonTool(
+      "recall_conversation_memory",
+      { query, top_k: options.topK, mode: options.mode ?? "fast" },
+      options,
+    );
+  }
+
+  async enqueueConversationTurn(
+    input: {
+      sessionId: string;
+      turnId: string;
+      userText: string;
+      assistantText: string;
+    },
+    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  ): Promise<{ document_id: string; status: string }> {
+    return this.callJsonTool(
+      "enqueue_conversation_turn",
+      {
+        session_id: input.sessionId,
+        turn_id: input.turnId,
+        user_text: input.userText,
+        assistant_text: input.assistantText,
+      },
+      options,
+    );
+  }
+
+  async forgetConversationMemory(
+    sessionId: string,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  ): Promise<{
+    session_id: string;
+    cancelled_jobs: number;
+    deleted_documents: number;
+  }> {
+    return this.callJsonTool(
+      "forget_conversation_memory",
+      { session_id: sessionId },
+      options,
+    );
+  }
+
+  async getConversationMemoryStatus(
+    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  ): Promise<ConversationMemoryStatus> {
+    return this.callJsonTool("get_conversation_memory_status", {}, options);
+  }
+
+  private async callJsonTool<T>(
+    toolName: string,
+    args: Record<string, unknown>,
+    options: { signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<T> {
+    const result = await this.callTool(toolName, args, options);
+    if (result.isError) throw new Error(`${toolName} returned an MCP error`);
+    try {
+      return JSON.parse(result.text) as T;
+    } catch (error) {
+      throw new Error(`${toolName} returned invalid JSON`, { cause: error });
+    }
   }
 
   private async withConnectedClient<T>(

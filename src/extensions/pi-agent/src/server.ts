@@ -103,6 +103,10 @@ export function createPiAgentHttpServer(
         json(response, 200, await runtime.getSession(sessionId));
         return;
       }
+      if (method === "DELETE" && parts[3] === "memory" && parts.length === 4) {
+        json(response, 200, await runtime.forgetSessionMemory(sessionId));
+        return;
+      }
       if (method === "DELETE" && parts.length === 3) {
         const deleted = await runtime.deleteSession(sessionId);
         json(response, deleted ? 200 : 404, { deleted, sessionId });

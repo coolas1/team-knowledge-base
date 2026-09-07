@@ -14,15 +14,21 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload  # noqa: F401  (kept for parity with original)
 
 from src.engine.components.analyzer import Analyzer
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import ExtractorRegistry, registry
-from src.engine.components.store.models import Chunk, Document, DocumentChange
+from src.engine.components.store.models import (
+    Chunk,
+    Document,
+    DocumentChange,
+    is_public_document,
+    public_document_filter,
+)
 from src.engine.components.store.neo4j import Neo4jClient
-from src.engine.components.store.postgres import async_session_factory, init_db
+from src.engine.components.store.postgres import async_session_factory
 from src.engine.config import EngineConfig
 from src.engine.graphrag.pipeline import Pipeline, VersionParent
 from src.engine.graphrag._version_match import find_version_candidate
@@ -63,9 +69,10 @@ def _to_ref(doc: Document, chunk_count: int = 0, overview: str | None = None) ->
         status=doc.status,
         overview=overview if overview is not None else (doc.overview or ""),
         error_msg=doc.error_msg,
-        version_group=str(doc.version_group),
-        version_number=doc.version_number,
-        is_current=doc.is_current,
+        # getattr 容错：tests 用 SimpleNamespace 伪造部分字段的 Document
+        version_group=str(getattr(doc, "version_group", "") or ""),
+        version_number=getattr(doc, "version_number", 1),
+        is_current=getattr(doc, "is_current", True),
     )
 
 
@@ -203,21 +210,47 @@ class GraphRAGBackend:
             ref = dataclasses.replace(ref, version_match=version_match.to_dict())
         return ref
 
+    async def edit_content(self, doc_id: str, content: str) -> DocumentRef:
+        """编辑保存（兼容入口）：保留可见性检查后委托版本化编辑。
+
+        编辑不再原地覆盖，而是生成下一版本（历史保留 + 自动 diff）。
+        """
+        uid = uuid.UUID(doc_id)
+        async with async_session_factory() as session:
+            doc = await session.get(Document, uid)
+            if not doc or not is_public_document(doc):
+                raise ValueError(f"文档不存在: {doc_id}")
+        return await self.edit_document(doc_id, content)
+
     async def reingest(self, doc_id: str) -> DocumentRef:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc):
                 raise ValueError(f"文档不存在: {doc_id}")
             new_text = doc.raw_text or ""
+            file_path = Path(doc.file_path) if doc.file_path else None
             title = doc.title
+            file_type = doc.file_type
+            if not new_text and (file_path is None or not file_path.is_file()):
+                raise ValueError("原始文件不存在，请重新上传文件")
+            await session.execute(
+                update(Document)
+                .where(Document.id == uid)
+                .values(status="pending", error_msg=None)
+            )
+            await session.commit()
+            await session.refresh(doc)
+            ref = _to_ref(doc)
 
-        await self._pipeline.reindex_document(uid, new_text)
-
-        async with async_session_factory() as session:
-            doc = await session.get(Document, uid)
-            assert doc is not None
-            return _to_ref(doc)
+        if new_text:
+            asyncio.create_task(self._pipeline.reindex_document(uid, new_text))
+        else:
+            assert file_path is not None
+            asyncio.create_task(
+                self._pipeline.process_file(uid, file_path, title, file_type)
+            )
+        return ref
 
     async def edit_document(self, doc_id: str, new_text: str) -> DocumentRef:
         """版本化编辑：编辑保存 = 生成新版本，旧版保留在版本链中。
@@ -288,7 +321,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc):
                 return
             await self._pipeline.before_remove(doc_id)
             _remove_upload_directory(uid)
@@ -439,8 +472,8 @@ class GraphRAGBackend:
         return GraphData(
             nodes=[GraphNode(name=n["name"], type=n["type"], description=n.get("description", ""),
                              sources=n.get("sources", [])) for n in raw.get("nodes", [])],
-            links=[GraphLink(source=l["source"], target=l["target"], type=l["type"],
-                             description=l.get("description", "")) for l in raw.get("links", [])],
+            links=[GraphLink(source=link["source"], target=link["target"], type=link["type"],
+                             description=link.get("description", "")) for link in raw.get("links", [])],
         )
 
     async def get_neighbors(self, entity: str) -> GraphData:
@@ -461,13 +494,17 @@ class GraphRAGBackend:
         status: str | None = None,
     ) -> dict[str, Any]:
         async with async_session_factory() as session:
-            stmt = select(Document).order_by(Document.created_at.desc())
+            stmt = (
+                select(Document)
+                .where(public_document_filter())
+                .order_by(Document.created_at.desc())
+            )
             if file_type:
                 stmt = stmt.where(Document.file_type == file_type)
             if status:
                 stmt = stmt.where(Document.status == status)
 
-            count_stmt = select(func.count(Document.id))
+            count_stmt = select(func.count(Document.id)).where(public_document_filter())
             if file_type:
                 count_stmt = count_stmt.where(Document.file_type == file_type)
             if status:
@@ -484,9 +521,9 @@ class GraphRAGBackend:
                         "id": str(d.id), "title": d.title, "file_type": d.file_type,
                         "status": d.status,
                         "overview": (d.overview or "")[:200],
-                        "version_group": str(d.version_group),
-                        "version_number": d.version_number,
-                        "is_current": d.is_current,
+                        "version_group": str(getattr(d, "version_group", "") or ""),
+                        "version_number": getattr(d, "version_number", 1),
+                        "is_current": getattr(d, "is_current", True),
                         "created_at": d.created_at.isoformat() if d.created_at else None,
                         "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                     }
@@ -651,7 +688,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc):
                 return None
             count_stmt = select(func.count(Chunk.id)).where(Chunk.doc_id == uid)
             chunk_count = (await session.execute(count_stmt)).scalar() or 0

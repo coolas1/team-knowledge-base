@@ -34,7 +34,9 @@ class SearchAndAnswerSkill:
         top_k = int(ctx.params.get("top_k", 10))
         recall = await ctx.engine.recall(query, top_k=top_k)
         context = _format_context(recall)
-        if ctx.llm is not None:
+        if not recall.get("chunks"):
+            answer = "知识库中未找到与该问题相关的内容。"
+        elif ctx.llm is not None:
             answer = await ctx.llm.complete(_answer_prompt(query, context))
         else:
             answer = context

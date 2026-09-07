@@ -33,13 +33,28 @@ RUN set -eux; \
     curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" \
       | tar -xz --strip-components=1 -C /usr/local
 
-RUN pip install --no-cache-dir uv
+# PyPI is not reachable in every deployment environment. Use Astral's pinned
+# standalone installer so the build does not depend on `pip install uv`.
+RUN curl -LsSf https://astral.sh/uv/0.12.5/install.sh -o /tmp/uv-installer.sh \
+ && UV_UNMANAGED_INSTALL=/usr/local/bin sh /tmp/uv-installer.sh \
+ && rm /tmp/uv-installer.sh
 
 WORKDIR /app
 
-# Python deps (heavy: torch) - cached unless pyproject/uv.lock change.
+# Python deps (the optional reranker extra, and therefore torch, is omitted).
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+# Use a reachable PyPI mirror in this deployment environment. The frozen lock
+# file still fixes the exact dependency graph and artifact hashes. The lock
+# records absolute PyPI artifact URLs, so remap those hosts inside the image.
+RUN sed -i \
+    -e 's#https://pypi.org/simple#https://mirrors.aliyun.com/pypi/simple#g' \
+    -e 's#https://files.pythonhosted.org/packages#https://mirrors.aliyun.com/pypi/packages#g' \
+    uv.lock
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple \
+    UV_CONCURRENT_DOWNLOADS=1 \
+    UV_HTTP_TIMEOUT=600 \
+    uv sync --frozen --no-dev --no-install-project
 
 # App source + config.
 COPY src/ ./src/

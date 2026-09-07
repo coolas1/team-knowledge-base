@@ -44,6 +44,7 @@ class FakeRepository:
             "graph": 0,
             "temporal": 0,
         }
+        self.source_filters: list[str | None] = []
         self.a = candidate("memory-a", "Alice works on coral", semantic=0.9, graph=0.8)
         self.b = candidate(
             "memory-b", "Survey happened in 2024", keyword=0.8, temporal=0.7
@@ -62,19 +63,32 @@ class FakeRepository:
         return [("existing-memory", 0.9)]
 
     async def semantic_search(
-        self, embedding: list[float], limit: int
+        self,
+        embedding: list[float],
+        limit: int,
+        *,
+        source_type: str | None = None,
     ) -> list[RecallCandidate]:
         self.calls["semantic"] += 1
+        self.source_filters.append(source_type)
         return [self.a, self.b]
 
-    async def keyword_search(self, query: str, limit: int) -> list[RecallCandidate]:
+    async def keyword_search(
+        self, query: str, limit: int, *, source_type: str | None = None
+    ) -> list[RecallCandidate]:
         self.calls["keyword"] += 1
+        self.source_filters.append(source_type)
         return [self.b, self.a]
 
     async def graph_search(
-        self, entities: list[str], limit: int
+        self,
+        entities: list[str],
+        limit: int,
+        *,
+        source_type: str | None = None,
     ) -> list[RecallCandidate]:
         self.calls["graph"] += 1
+        self.source_filters.append(source_type)
         return [self.a]
 
     async def temporal_search(
@@ -82,8 +96,11 @@ class FakeRepository:
         start: datetime | None,
         end: datetime | None,
         limit: int,
+        *,
+        source_type: str | None = None,
     ) -> list[RecallCandidate]:
         self.calls["temporal"] += 1
+        self.source_filters.append(source_type)
         return [self.b]
 
     async def entity_states(self, memory_ids: list[str]) -> dict[str, Any]:
@@ -98,6 +115,7 @@ class FakeRepository:
 class FakeProviders:
     def __init__(self) -> None:
         self.json_calls: list[str] = []
+        self.json_users: list[str] = []
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         return [[1.0, 0.0] for _ in texts]
@@ -106,6 +124,7 @@ class FakeProviders:
         self, system: str, user: str, *, timeout: float = 600
     ) -> dict[str, Any]:
         self.json_calls.append(system)
+        self.json_users.append(user)
         if system.startswith("You extract exhaustive"):
             return {
                 "facts": [

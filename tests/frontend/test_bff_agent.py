@@ -39,7 +39,7 @@ def test_agent_ask(client):
     res = client.post("/api/agent/ask", json={"query": "where is Acme?"})
     assert res.status_code == 200
     out = res.json()
-    assert out["answer"] == "ANSWER FROM LLM"
+    assert out["answer"] == "知识库中未找到与该问题相关的内容。"
     assert out["query"] == "where is Acme?"
 
 
@@ -63,6 +63,22 @@ def test_agent_session_proxy(client, monkeypatch):
 
     assert response.status_code == 201
     assert response.json()["id"] == "session-1"
+
+
+def test_agent_session_memory_forget_proxy(client, monkeypatch):
+    def handler(request):
+        assert request.method == "DELETE"
+        assert request.url.path == "/v1/sessions/session-1/memory"
+        return httpx.Response(
+            200,
+            json={"sessionId": "session-1", "cancelledJobs": 1, "deletedDocuments": 2},
+        )
+
+    _mock_pi(monkeypatch, handler)
+    response = client.delete("/api/agent/sessions/session-1/memory")
+
+    assert response.status_code == 200
+    assert response.json()["deletedDocuments"] == 2
 
 
 def test_agent_message_proxy_streams_sse(client, monkeypatch):

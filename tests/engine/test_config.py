@@ -61,6 +61,14 @@ def test_infra_settings_postgres_dsn():
     assert s.hindsight_graph_worker_poll_seconds == 1.0
     assert s.hindsight_graph_worker_lease_seconds == 300
     assert s.hindsight_graph_worker_max_attempts == 10
+    assert s.hindsight_conversation_memory_enabled is False
+    assert s.hindsight_conversation_recall_limit == 20
+    assert s.hindsight_conversation_worker_poll_seconds == 1.0
+    assert s.hindsight_conversation_worker_lease_seconds == 300
+    assert s.hindsight_conversation_worker_max_attempts == 10
+    assert s.hindsight_conversation_worker_max_concurrent == 1
+    assert s.hindsight_conversation_worker_retry_seconds == 1.0
+    assert s.hindsight_conversation_worker_max_retry_seconds == 300.0
 
 
 def test_graph_worker_settings_must_be_positive():
@@ -70,3 +78,21 @@ def test_graph_worker_settings_must_be_positive():
         InfraSettings(hindsight_graph_worker_lease_seconds=0)
     with pytest.raises(ValueError):
         InfraSettings(hindsight_graph_worker_max_attempts=0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("hindsight_conversation_recall_limit", 0),
+        ("hindsight_conversation_worker_poll_seconds", 0),
+        ("hindsight_conversation_worker_lease_seconds", 0),
+        ("hindsight_conversation_worker_max_attempts", 0),
+        ("hindsight_conversation_worker_max_concurrent", 0),
+        ("hindsight_conversation_worker_retry_seconds", 0),
+        ("hindsight_conversation_worker_max_retry_seconds", 0),
+        ("hindsight_conversation_retention_context", ""),
+    ],
+)
+def test_conversation_memory_settings_reject_invalid_limits(field, value):
+    with pytest.raises(ValueError):
+        InfraSettings(_env_file=None, **{field: value})

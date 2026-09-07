@@ -9,12 +9,13 @@ from typing import Protocol
 from .providers import ProjectHindsightProviders
 from .repository import PostgresMemoryRepository
 from .service import HindsightService
+from .types import RetainInput
 
 logger = logging.getLogger(__name__)
 
 
 class RetainService(Protocol):
-    async def retain(self, **kwargs): ...
+    async def retain(self, retain_input: RetainInput): ...
 
 
 class RetainRepository(Protocol):
@@ -55,11 +56,13 @@ class HindsightRetainHook:
         try:
             async with self._semaphore:
                 await self._service.retain(
-                    document_id=document_id,
-                    title=title,
-                    content=content,
-                    file_type=file_type,
-                    source_type="graphrag-pipeline",
+                    RetainInput(
+                        document_id=document_id,
+                        title=title,
+                        content=content,
+                        file_type=file_type,
+                        source_type="graphrag-pipeline",
+                    )
                 )
         except Exception as error:
             logger.exception("Hindsight retain failed for %s", document_id)

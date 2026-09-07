@@ -2,6 +2,10 @@ import pytest
 
 from src.engine.interface import (
     Capabilities,
+    ConversationForgetRequest,
+    ConversationMemoryDiagnostics,
+    ConversationMemoryRecallRequest,
+    ConversationTurn,
     GraphData,
     GraphLink,
     GraphNode,
@@ -79,3 +83,25 @@ def test_knowledge_query_defaults_to_answer_oriented_auto_strategy():
     assert request.mode == "deep"
     assert request.needs_answer is True
     assert result.sources[0].memory_id == "memory-1"
+
+
+def test_conversation_memory_contracts_are_optional_and_bounded_by_defaults():
+    recall = ConversationMemoryRecallRequest(query="preferred style")
+    turn = ConversationTurn(
+        session_id="session-1",
+        turn_id="turn-1",
+        user_text="Remember blue",
+        assistant_text="Understood",
+    )
+    forget = ConversationForgetRequest(session_id="session-1")
+    diagnostics = ConversationMemoryDiagnostics(enabled=False)
+
+    assert recall.top_k == 5
+    assert recall.mode == "fast"
+    assert turn.user_text == "Remember blue"
+    assert forget.session_id == "session-1"
+    assert diagnostics.pending == 0
+
+    from tests.conftest import FakeKnowledgeBase
+
+    assert not hasattr(FakeKnowledgeBase(), "enqueue_conversation_turn")

@@ -71,6 +71,13 @@ class ReflectEngine:
                 }
             )
 
+        if not evidence:
+            return ReflectResult(
+                text="知识库中未找到与该问题相关的内容。",
+                based_on={},
+                tool_trace=tool_trace,
+            )
+
         embeddings = await self._providers.embed([query])
         if not embeddings:
             raise ValueError("embedding provider returned no reflection embedding")

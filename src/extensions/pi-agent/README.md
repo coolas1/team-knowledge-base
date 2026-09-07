@@ -6,7 +6,7 @@ and provides an HTTP/SSE API for later BFF or UI integration.
 
 ## Safe defaults
 
-The model receives these read-only TKB tools by default:
+The model receives these TKB tools by default:
 
 - `tkb_query_knowledge`
 - `tkb_search_fast`
@@ -14,13 +14,15 @@ The model receives these read-only TKB tools by default:
 - `tkb_get_document`
 - `tkb_query_graph`
 - `tkb_list_documents`
+- `tkb_generate_document` (Word, PDF, PPTX + Slidev source)
 
 Legacy search, document writes, and full-graph output remain opt-in. Pi's
 built-in shell and file-editing tools are not enabled. The only local read tool
 is restricted to Markdown files under this package's `skills` directory.
 
 The bundled skills guide the model to choose Fast or Deep retrieval, perform
-Reflect before Recall for reflective research, and cite retrieved sources.
+Reflect before Recall for reflective research, cite retrieved sources, and
+generate downloadable office documents.
 
 ## Start
 
@@ -96,6 +98,11 @@ the Pi model API adapter when required by a compatible provider.
 | `TKB_ENABLE_LEGACY_SEARCH` | `false` | Enable legacy `tkb_search` |
 | `TKB_ENABLE_WRITE_TOOLS` | `false` | Enable upload and remove tools |
 | `TKB_ENABLE_FULL_GRAPH` | `false` | Enable full-graph output |
+| `TKB_CONVERSATION_MEMORY_ENABLED` | `false` | Enable automatic shared-team conversation recall and retention |
+| `TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS` | `5000` | Timeout for pre-response conversation recall |
+| `TKB_CONVERSATION_MEMORY_RECALL_LIMIT` | `5` | Maximum recalled conversation memories per turn |
+| `TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS` | `6000` | Maximum injected historical-context size |
+| `TKB_CONVERSATION_MEMORY_RETENTION_CONTEXT` | `Completed team conversation turn` | Label used by the engine retention worker |
 
 When deployed beside the current Compose services, use
 `TKB_MCP_URL=http://webapp:8000/mcp/`.
@@ -108,6 +115,8 @@ When deployed beside the current Compose services, use
 - `GET /v1/sessions/:id` returns the session summary plus filtered
   `user`/`assistant` text messages
 - `DELETE /v1/sessions/:id`
+- `DELETE /v1/sessions/:id/memory` explicitly forgets retained memory for that
+  session without deleting its JSONL history
 - `POST /v1/sessions/:id/cancel`
 - `POST /v1/sessions/:id/messages` with `{ "message": "..." }`
 
@@ -116,11 +125,21 @@ status, citations, limits, completion, and failures. Model reasoning and raw
 tool payloads are suppressed by default; citations are still derived on the
 server. Disconnecting the client cancels the active run.
 
+When conversation memory is enabled, completed visible user/assistant turns are
+queued for asynchronous retention. Recall is injected only into the current
+system prompt as bounded, untrusted historical evidence and is never persisted
+as a visible message. The feature uses one shared team scope, so retained
+conversation facts can be recalled by other sessions. Normal session deletion
+does not forget memory; call the explicit memory DELETE endpoint when that is
+intended. Queue counts and failures are exposed through `/health` without
+returning retained content. Memory failures fail open so normal chat remains
+available.
+
 The Webapp image also runs a production dependency security gate. Its single
 tracked exception is React Router's RSC-only `GHSA-qwww-vcr4-c8h2`: this Vite
 SPA does not use RSC, SSR, or Server Actions, and no unaffected React Router
 release is currently published. Any other high or critical advisory blocks the
 image build.
 
-At startup the runtime validates all ten current Engine MCP tools. Only the
+At startup the runtime validates all eleven current Engine MCP tools. Only the
 curated subset is exposed to the model unless an opt-in flag is set.

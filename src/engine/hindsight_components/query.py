@@ -12,6 +12,7 @@ from src.engine.interface import (
     KnowledgeSource,
 )
 
+from .config import HindsightOptions
 from .providers import ProjectHindsightProviders
 from .repository import PostgresMemoryRepository
 from .service import HindsightService
@@ -102,6 +103,9 @@ class HindsightQueryService:
             score=item.final_score,
             metadata={
                 **dict(item.metadata),
+                "source_type": item.source_type,
+                **({"session_id": item.session_id} if item.session_id else {}),
+                **({"turn_id": item.turn_id} if item.turn_id else {}),
                 "scores": {
                     "final": item.final_score,
                     "reranker": item.reranker_score,
@@ -137,6 +141,11 @@ class HindsightQueryService:
                 seen.add(memory_id)
                 metadata = item.get("metadata", {})
                 metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+                metadata.setdefault("source_type", item.get("source_type", "upload"))
+                if item.get("session_id"):
+                    metadata.setdefault("session_id", item["session_id"])
+                if item.get("turn_id"):
+                    metadata.setdefault("turn_id", item["turn_id"])
                 scores = item.get("scores", {})
                 scores = scores if isinstance(scores, Mapping) else {}
                 sources.append(
@@ -154,6 +163,13 @@ class HindsightQueryService:
 
 
 def build_query_service() -> HindsightQueryService:
+    from config.settings import settings
+
     repository = PostgresMemoryRepository()
-    core = HindsightService(repository, ProjectHindsightProviders())
+    options = HindsightOptions(
+        recall_min_semantic=settings.hindsight_recall_min_semantic,
+        recall_min_score=settings.hindsight_recall_min_score,
+        rerank_semantic_margin=settings.hindsight_rerank_semantic_margin,
+    )
+    core = HindsightService(repository, ProjectHindsightProviders(), options)
     return HindsightQueryService(core)

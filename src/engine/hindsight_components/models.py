@@ -216,6 +216,64 @@ class HindsightDocumentState(Base):
     __table_args__ = (Index("idx_hindsight_document_state_status", "status"),)
 
 
+class ConversationMemorySource(Base):
+    """Internal conversation document plus its durable retention queue state."""
+
+    __tablename__ = "conversation_memory_sources"
+
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    session_id: Mapped[str] = mapped_column(Text, nullable=False)
+    turn_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default="pending"
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    error_msg: Mapped[str | None] = mapped_column(Text)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+        onupdate=_utcnow,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "turn_id", name="uq_conversation_memory_session_turn"
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')",
+            name="ck_conversation_memory_source_status",
+        ),
+        Index(
+            "idx_conversation_memory_ready",
+            "status",
+            "available_at",
+            "document_id",
+        ),
+        Index("idx_conversation_memory_session", "session_id", "document_id"),
+    )
+
+
 class HindsightGraphOutbox(Base):
     """Durable PostgreSQL event for rebuilding the disposable Neo4j projection.
 

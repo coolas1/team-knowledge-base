@@ -120,6 +120,67 @@ class KnowledgeQueryResult:
     trace: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationMemoryRecallRequest:
+    query: str
+    top_k: int = 5
+    mode: Literal["fast", "deep"] = "fast"
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationMemoryItem:
+    memory_id: str
+    text: str
+    memory_type: str
+    document_id: str
+    session_id: str
+    turn_id: str
+    score: float = 0.0
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationMemoryRecallResult:
+    memories: list[ConversationMemoryItem] = field(default_factory=list)
+    trace: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationTurn:
+    session_id: str
+    turn_id: str
+    user_text: str
+    assistant_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationEnqueueResult:
+    document_id: str
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationForgetRequest:
+    session_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationForgetResult:
+    session_id: str
+    cancelled_jobs: int = 0
+    deleted_documents: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationMemoryDiagnostics:
+    enabled: bool
+    pending: int = 0
+    processing: int = 0
+    completed: int = 0
+    failed: int = 0
+    cancelled: int = 0
+
+
 @dataclass
 class GraphNode:
     name: str
@@ -149,6 +210,7 @@ class KnowledgeBase(Protocol):
     capabilities: Capabilities
 
     async def ingest(self, source: IngestSource) -> DocumentRef: ...
+    async def edit_content(self, doc_id: str, content: str) -> DocumentRef: ...
     async def reingest(self, doc_id: str) -> DocumentRef: ...
     async def edit_document(self, doc_id: str, new_text: str) -> DocumentRef: ...
     async def propose_edit(self, doc_id: str, edit_request: str) -> dict: ...
@@ -196,3 +258,23 @@ class KnowledgeQuery(Protocol):
     """Optional high-level recall/reflect query capability."""
 
     async def query(self, request: KnowledgeQueryRequest) -> KnowledgeQueryResult: ...
+
+
+class ConversationMemory(Protocol):
+    """Optional internal capability for automatic conversation memory."""
+
+    async def recall_conversation_memory(
+        self, request: ConversationMemoryRecallRequest
+    ) -> ConversationMemoryRecallResult: ...
+
+    async def enqueue_conversation_turn(
+        self, turn: ConversationTurn
+    ) -> ConversationEnqueueResult: ...
+
+    async def forget_conversation_memory(
+        self, request: ConversationForgetRequest
+    ) -> ConversationForgetResult: ...
+
+    async def conversation_memory_diagnostics(
+        self,
+    ) -> ConversationMemoryDiagnostics: ...

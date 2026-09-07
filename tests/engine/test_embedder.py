@@ -1,5 +1,3 @@
-import pytest
-
 from src.engine.components import embedder as embedder_mod
 
 

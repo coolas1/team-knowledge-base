@@ -16,6 +16,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 EMBEDDING_DIM = 768  # nomic-embed-text, 可通过配置切换
+INTERNAL_DOCUMENT_FILE_TYPES = frozenset({"conversation"})
 
 
 class Base(DeclarativeBase):
@@ -85,6 +86,16 @@ class Document(Base):
         Index("idx_documents_version_group", "version_group"),
         Index("idx_documents_is_current", "is_current"),
     )
+
+
+def public_document_filter():
+    """SQL predicate shared by APIs that expose user-uploaded documents."""
+
+    return Document.file_type.not_in(INTERNAL_DOCUMENT_FILE_TYPES)
+
+
+def is_public_document(document: Document) -> bool:
+    return document.file_type not in INTERNAL_DOCUMENT_FILE_TYPES
 
 
 class Chunk(Base):

@@ -32,13 +32,23 @@ class MemoryRepository(Protocol):
     ) -> list[tuple[str, float]]: ...
 
     async def semantic_search(
-        self, embedding: list[float], limit: int
+        self,
+        embedding: list[float],
+        limit: int,
+        *,
+        source_type: str | None = None,
     ) -> list[RecallCandidate]: ...
 
-    async def keyword_search(self, query: str, limit: int) -> list[RecallCandidate]: ...
+    async def keyword_search(
+        self, query: str, limit: int, *, source_type: str | None = None
+    ) -> list[RecallCandidate]: ...
 
     async def graph_search(
-        self, entities: list[str], limit: int
+        self,
+        entities: list[str],
+        limit: int,
+        *,
+        source_type: str | None = None,
     ) -> list[RecallCandidate]: ...
 
     async def temporal_search(
@@ -46,6 +56,8 @@ class MemoryRepository(Protocol):
         start: datetime | None,
         end: datetime | None,
         limit: int,
+        *,
+        source_type: str | None = None,
     ) -> list[RecallCandidate]: ...
 
     async def entity_states(self, memory_ids: list[str]) -> dict[str, Any]: ...

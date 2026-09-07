@@ -26,6 +26,7 @@ from src.frontend.webapp.server.routes_search import router as search_router
 from src.frontend.webapp.server.routes_graph import router as graph_router
 from src.frontend.webapp.server.routes_query import router as query_router
 from src.frontend.webapp.server.routes_agent import router as agent_router
+from src.frontend.webapp.server.routes_artifacts import router as artifacts_router
 from src.frontend.webapp.server.routes_config import router as config_router
 
 # Where the built SPA (vite build output) lives. Set SPA_DIST in the container;
@@ -56,6 +57,7 @@ api.include_router(search_router)
 api.include_router(query_router)
 api.include_router(graph_router)
 api.include_router(agent_router)
+api.include_router(artifacts_router)
 api.include_router(config_router)
 app.include_router(api)
 app.mount("/mcp", build_mcp_app(), name="mcp")

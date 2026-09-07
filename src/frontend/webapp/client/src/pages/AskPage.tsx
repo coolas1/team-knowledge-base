@@ -131,7 +131,13 @@ export function AskPage() {
   }
 
   const handleEvent = (event: PiAgentEvent, assistantId: number) => {
-    if (event.type === 'assistant.delta') {
+    if (event.type === 'message.start' && event.name) {
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === event.sessionId ? { ...session, name: event.name } : session,
+        ),
+      )
+    } else if (event.type === 'assistant.delta') {
       updateAssistant(assistantId, (text) => text + event.delta)
     } else if (event.type === 'tool.start') {
       setStatus(`正在调用 ${event.toolName}`)
