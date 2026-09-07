@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 
 from neo4j import AsyncGraphDatabase
+from neo4j.exceptions import Neo4jError
 
 from config.settings import settings
+
+logger = logging.getLogger(__name__)
+
+# 瞬态错误（死锁/锁超时等）重试参数。
+TRANSIENT_RETRY_ATTEMPTS = 3
+TRANSIENT_RETRY_BASE_DELAY = 0.5  # 秒，指数退避基数
+
+
+def _is_transient(error: Exception) -> bool:
+    """Neo4j 瞬态错误（死锁、锁等待超时等）可安全重试。"""
+    return isinstance(error, Neo4jError) and (
+        error.code in ("Neo.TransientError.Transaction.DeadlockDetected",)
+        or "deadlock" in str(error).lower()
+        or error.code.startswith("Neo.TransientError")
+    )
 
 
 def _quote_cypher_identifier(value: str, fallback: str) -> str:
@@ -42,6 +60,60 @@ class GraphQueryResult:
     entity_type: str
     properties: dict = field(default_factory=dict)
     relations: list[dict] = field(default_factory=list)
+
+
+def _group_entity_items(
+    items: list[tuple[EntityData, EntitySource]],
+) -> list[tuple[EntityData, list[dict]]]:
+    """按 (name, entity_type) 聚合：description 取最长，sources 按出现顺序去重。"""
+    grouped: dict[tuple[str, str], list] = {}
+    for entity, source in items:
+        new_source = {
+            "doc_id": source.doc_id,
+            "chunk_index": source.chunk_index,
+            "doc_title": source.doc_title,
+        }
+        key = (entity.name, entity.entity_type)
+        if key not in grouped:
+            grouped[key] = [entity, [new_source]]
+            continue
+        existing_entity, sources = grouped[key]
+        if len(entity.description) > len(existing_entity.description):
+            grouped[key][0] = EntityData(
+                name=existing_entity.name,
+                entity_type=existing_entity.entity_type,
+                description=entity.description,
+            )
+        if new_source not in sources:
+            sources.append(new_source)
+    return [(entity, sources) for entity, sources in grouped.values()]
+
+
+def _group_relation_items(
+    items: list[tuple[RelationData, EntitySource]],
+) -> list[tuple[RelationData, list[dict]]]:
+    """按 (from_name, to_name, relation_type) 聚合：description 取最长，sources 去重。"""
+    grouped: dict[tuple[str, str, str], list] = {}
+    for relation, source in items:
+        new_source = {
+            "doc_id": source.doc_id,
+            "chunk_index": source.chunk_index,
+        }
+        key = (relation.from_name, relation.to_name, relation.relation_type)
+        if key not in grouped:
+            grouped[key] = [relation, [new_source]]
+            continue
+        existing_relation, sources = grouped[key]
+        if len(relation.description) > len(existing_relation.description):
+            grouped[key][0] = RelationData(
+                from_name=existing_relation.from_name,
+                to_name=existing_relation.to_name,
+                relation_type=existing_relation.relation_type,
+                description=relation.description,
+            )
+        if new_source not in sources:
+            sources.append(new_source)
+    return [(relation, sources) for relation, sources in grouped.values()]
 
 
 class Neo4jClient:
@@ -161,29 +233,67 @@ class Neo4jClient:
             ]
 
     async def delete_document_graph(self, doc_id: str) -> None:
-        """删除文档的图谱数据：清理实体 sources + 删 Document 节点。"""
+        """删除文档的图谱数据：清理实体 sources + 删 Document 节点。
+
+        并发删除同一版本链的文档时，两个删除会触碰同一批 MERGE 聚合的
+        实体节点。逐条 SET 会在不同事务间交叉加锁引发死锁
+        （TransientError.DeadlockDetected），因此：
+        1. sources 清理合并为单条 UNWIND 批量写（一个事务一次性加锁）；
+        2. 读取按 name 排序，与批处理共同保证确定的加锁顺序；
+        3. 整个删除包在瞬态错误重试里（指数退避）。
+        """
+        for attempt in range(TRANSIENT_RETRY_ATTEMPTS):
+            try:
+                await self._delete_document_graph_once(doc_id)
+                return
+            except Neo4jError as error:
+                if attempt + 1 >= TRANSIENT_RETRY_ATTEMPTS or not _is_transient(error):
+                    raise
+                delay = TRANSIENT_RETRY_BASE_DELAY * (2**attempt)
+                logger.warning(
+                    "删除文档图谱遭遇瞬态错误（第 %s 次），%.1fs 后重试: %s",
+                    attempt + 1, delay, error.code,
+                )
+                await asyncio.sleep(delay)
+
+    async def _delete_document_graph_once(self, doc_id: str) -> None:
         async with self._driver.session() as session:
-            # 1. 从所有实体的 sources 中移除该 doc_id 的条目
+            # 1. 从所有实体的 sources 中移除该 doc_id 的条目。
+            #    ORDER BY name 保证并发删除以相同顺序触碰实体。
             result = await session.run(
                 """
                 MATCH (e)
                 WHERE e.sources IS NOT NULL
                   AND e.sources CONTAINS $doc_id
                 RETURN e.name AS name, e.sources AS sources
+                ORDER BY name
                 """,
                 doc_id=doc_id,
             )
             records = await result.data()
-            for record in records:
-                sources: list[dict] = json.loads(record["sources"])
-                new_sources = [s for s in sources if s["doc_id"] != doc_id]
+            if records:
+                updates = []
+                for record in records:
+                    sources: list[dict] = json.loads(record["sources"])
+                    new_sources = [s for s in sources if s["doc_id"] != doc_id]
+                    updates.append(
+                        {
+                            "name": record["name"],
+                            "sources": (
+                                json.dumps(new_sources, ensure_ascii=False)
+                                if new_sources
+                                else "[]"
+                            ),
+                        }
+                    )
+                # 单条批量写：一次事务、一次性加锁，替代原来的逐条 SET。
                 await session.run(
                     """
-                    MATCH (e {name: $name})
-                    SET e.sources = $sources
+                    UNWIND $updates AS u
+                    MATCH (e {name: u.name})
+                    SET e.sources = u.sources
                     """,
-                    name=record["name"],
-                    sources=json.dumps(new_sources, ensure_ascii=False) if new_sources else "[]",
+                    updates=updates,
                 )
 
             # 2. 删除 sources 为空的孤立实体
@@ -336,6 +446,165 @@ class Neo4jClient:
                         from_name=relation.from_name,
                         to_name=relation.to_name,
                         sources=json.dumps(sources, ensure_ascii=False),
+                    )
+
+    # ── 批量写入 ─────────────────────────────────────────────
+
+    async def upsert_entities_batch(
+        self, items: list[tuple[EntityData, EntitySource]]
+    ) -> None:
+        """批量写入实体：每个 entity_type 一次 UNWIND MERGE + 至多一次 sources 回写。
+
+        语义与逐条 upsert_entity 一致（同 label 同名 MERGE、description 取较长、
+        sources 追加去重），但把每个实体 2-3 次往返压缩为每类型 2 次。
+        """
+        if not items:
+            return
+        by_type: dict[str, list[tuple[EntityData, list[dict]]]] = {}
+        for entity, sources in _group_entity_items(items):
+            by_type.setdefault(entity.entity_type, []).append((entity, sources))
+
+        for entity_type, group in by_type.items():
+            label = _quote_cypher_identifier(entity_type, "Entity")
+            rows = [
+                {
+                    "name": e.name,
+                    "entity_type": e.entity_type,
+                    "description": e.description,
+                    "sources": json.dumps(s, ensure_ascii=False),
+                }
+                for e, s in group
+            ]
+            async with self._driver.session() as session:
+                result = await session.run(
+                    f"""
+                    UNWIND $rows AS row
+                    MERGE (e:{label} {{name: row.name}})
+                    SET e.entity_type = row.entity_type,
+                        e.description = CASE
+                            WHEN size(row.description) > size(coalesce(e.description, ''))
+                            THEN row.description
+                            ELSE e.description
+                        END
+                    RETURN row.name AS name, e.sources AS sources
+                    """,
+                    rows=rows,
+                )
+                records = await result.data()
+
+            existing_by_name = {
+                r["name"]: (json.loads(r["sources"]) if r["sources"] else [])
+                for r in records
+            }
+            updates = []
+            for row in rows:
+                merged = list(existing_by_name.get(row["name"], []))
+                changed = False
+                for s in json.loads(row["sources"]):
+                    if not any(
+                        x.get("doc_id") == s["doc_id"]
+                        and x.get("chunk_index") == s["chunk_index"]
+                        for x in merged
+                    ):
+                        merged.append(s)
+                        changed = True
+                if changed:
+                    updates.append(
+                        {
+                            "name": row["name"],
+                            "sources": json.dumps(merged, ensure_ascii=False),
+                        }
+                    )
+            if updates:
+                async with self._driver.session() as session:
+                    await session.run(
+                        f"""
+                        UNWIND $updates AS u
+                        MATCH (e:{label} {{name: u.name}})
+                        SET e.sources = u.sources
+                        """,
+                        updates=updates,
+                    )
+
+    async def upsert_relations_batch(
+        self, items: list[tuple[RelationData, EntitySource]]
+    ) -> None:
+        """批量写入关系：每个 relation_type 一次 UNWIND MERGE + 至多一次 sources 回写。"""
+        if not items:
+            return
+        by_type: dict[str, list[tuple[RelationData, list[dict]]]] = {}
+        for relation, sources in _group_relation_items(items):
+            by_type.setdefault(relation.relation_type, []).append(
+                (relation, sources)
+            )
+
+        for relation_type, group in by_type.items():
+            rel_label = _quote_cypher_identifier(relation_type, "RELATED_TO")
+            rows = [
+                {
+                    "from_name": r.from_name,
+                    "to_name": r.to_name,
+                    "description": r.description,
+                    "sources": json.dumps(s, ensure_ascii=False),
+                }
+                for r, s in group
+            ]
+            async with self._driver.session() as session:
+                result = await session.run(
+                    f"""
+                    UNWIND $rows AS row
+                    MATCH (a {{name: row.from_name}})
+                    MATCH (b {{name: row.to_name}})
+                    MERGE (a)-[r:{rel_label}]->(b)
+                    SET r.description = CASE
+                            WHEN size(row.description) > size(coalesce(r.description, ''))
+                            THEN row.description
+                            ELSE r.description
+                        END
+                    RETURN row.from_name AS from_name, row.to_name AS to_name,
+                           r.sources AS sources
+                    """,
+                    rows=rows,
+                )
+                records = await result.data()
+
+            existing_by_pair = {
+                (r["from_name"], r["to_name"]): (
+                    json.loads(r["sources"]) if r["sources"] else []
+                )
+                for r in records
+            }
+            updates = []
+            for row in rows:
+                merged = list(
+                    existing_by_pair.get((row["from_name"], row["to_name"]), [])
+                )
+                changed = False
+                for s in json.loads(row["sources"]):
+                    if not any(
+                        x.get("doc_id") == s["doc_id"]
+                        and x.get("chunk_index") == s["chunk_index"]
+                        for x in merged
+                    ):
+                        merged.append(s)
+                        changed = True
+                if changed:
+                    updates.append(
+                        {
+                            "from_name": row["from_name"],
+                            "to_name": row["to_name"],
+                            "sources": json.dumps(merged, ensure_ascii=False),
+                        }
+                    )
+            if updates:
+                async with self._driver.session() as session:
+                    await session.run(
+                        f"""
+                        UNWIND $updates AS u
+                        MATCH (a {{name: u.from_name}})-[r:{rel_label}]->(b {{name: u.to_name}})
+                        SET r.sources = u.sources
+                        """,
+                        updates=updates,
                     )
 
     async def create_doc_relation(

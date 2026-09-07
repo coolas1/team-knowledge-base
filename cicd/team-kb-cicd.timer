@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the Team KB CI/CD pipeline every 5 minutes
+
+[Timer]
+# First run shortly after boot, then 5 minutes after each finished run.
+# Type=oneshot service means a still-running pipeline is never overlapped.
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+# Catch up on a missed activation window after resume/boot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -115,3 +115,27 @@ async def test_delete_failure_is_isolated() -> None:
     hook = HindsightRetainHook(FakeService(), repository)
 
     await hook.before_remove("document-1")
+
+
+async def test_build_retain_hook_uses_injected_repository(monkeypatch) -> None:
+    from src.engine.hindsight_components.hook import build_retain_hook
+
+    repo = FakeRepository()
+
+    # Mock HindsightService so after_indexed doesn't call external LLM/embedder
+    class _FakeService:
+        async def retain(self, retain_input):
+            pass
+
+    monkeypatch.setattr(
+        "src.engine.hindsight_components.hook.HindsightService",
+        lambda r, p: _FakeService(),
+    )
+
+    hook = build_retain_hook(repository=repo)
+
+    await hook.after_indexed(
+        document_id="d1", title="t.md", content="text", file_type="markdown",
+    )
+
+    assert repo.states == [("d1", "retaining", None)]

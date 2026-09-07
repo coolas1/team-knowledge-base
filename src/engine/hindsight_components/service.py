@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from .config import HindsightOptions
-from .protocols import HindsightProviders, MemoryRepository
-from .recall import RecallEngine
-from .reflect import ReflectEngine
-from .retain import RetainEngine
-from .types import RecallResult, ReflectResult, RetainInput, RetainResult
+from src.engine.hindsight_components.config import HindsightOptions
+from src.engine.hindsight_components.protocols import HindsightProviders, MemoryRepository
+from src.engine.hindsight_components.recall import RecallEngine
+from src.engine.hindsight_components.reflect import ReflectEngine
+from src.engine.hindsight_components.retain import RetainEngine
+from src.engine.hindsight_components.types import RecallResult, ReflectResult, RetainInput, RetainResult
 
 
 class HindsightService:

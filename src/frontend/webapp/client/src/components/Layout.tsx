@@ -68,10 +68,36 @@ export function Layout() {
       await uploadFile(files[0])
       return
     }
-    for (const file of files) {
-      if (!(await uploadFile(file, false, false))) return
+    setUploading(true)
+    setUploadFailure(null)
+    try {
+      const { items } = await api.uploadFiles(files)
+      const failedIndex = items.findIndex((item) => !item.ok)
+      if (failedIndex >= 0) {
+        const error = items[failedIndex].error
+        setUploadFailure({
+          file:
+            files.find((f) => f.name === error?.filename) ??
+            files[failedIndex] ??
+            files[0],
+          message: error?.message ?? '上传未完成',
+          suggestion: error?.suggestion || '请确认文件可正常打开，或稍后直接重试。',
+          retryable: error?.retryable ?? true,
+        })
+      }
+      if (items.some((item) => item.ok)) navigate('/')
+    } catch (error) {
+      const apiError = error instanceof ApiError ? error : undefined
+      setUploadFailure({
+        file: files[0],
+        message: error instanceof Error ? error.message : '上传未完成',
+        suggestion: apiError?.suggestion || '请确认文件可正常打开，或稍后直接重试。',
+        retryable: apiError?.retryable ?? true,
+      })
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
     }
-    navigate('/')
   }
 
   return (

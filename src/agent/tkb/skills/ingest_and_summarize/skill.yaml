@@ -1,0 +1,4 @@
+name: ingest_and_summarize
+description: Ingest a file into the knowledge base and produce a summary.
+inputs: { name: str, data: bytes }
+tools: [ingest, get_document]

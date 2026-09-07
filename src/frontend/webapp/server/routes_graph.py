@@ -1,28 +1,30 @@
-"""BFF graph routes: full graph / entity / neighbors."""
+"""BFF graph routes: full graph / entity / neighbors (KnowledgeBase direct)."""
 from __future__ import annotations
+
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Query
 
-from src.agent.interface import EngineClient
+from src.engine.interface import KnowledgeBase
 from src.frontend.webapp.server import deps
 
 router = APIRouter(prefix="/graph", tags=["graph"])
 
 
 @router.get("/full")
-async def full_graph(engine: EngineClient = Depends(deps.get_engine)):
-    return await engine.get_graph(None)
+async def full_graph(kb: KnowledgeBase = Depends(deps.get_kb)):
+    return asdict(await kb.get_graph(None))
 
 
 @router.get("/entity/{name}")
-async def entity_graph(name: str, engine: EngineClient = Depends(deps.get_engine)):
-    return await engine.get_graph(name)
+async def entity_graph(name: str, kb: KnowledgeBase = Depends(deps.get_kb)):
+    return asdict(await kb.get_graph(name))
 
 
 @router.get("/neighbors/{name}")
 async def neighbors(
     name: str,
     hops: int = Query(2, ge=1, le=3),
-    engine: EngineClient = Depends(deps.get_engine),
+    kb: KnowledgeBase = Depends(deps.get_kb),
 ):
-    return await engine.get_neighbors(name)
+    return asdict(await kb.get_neighbors(name))

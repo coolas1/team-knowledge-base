@@ -99,17 +99,17 @@ def _reset():
 
 
 def test_get_reranker_none(monkeypatch):
-    monkeypatch.setattr(settings, "reranker_provider", "none")
+    monkeypatch.setattr(settings.reranker, "provider", "none")
     _reset()
     assert isinstance(reranker_mod.get_reranker(), reranker_mod.NoopReranker)
     _reset()
 
 
 def test_get_reranker_http(monkeypatch):
-    monkeypatch.setattr(settings, "reranker_provider", "http")
-    monkeypatch.setattr(settings, "reranker_base_url", "https://example.com/v1")
-    monkeypatch.setattr(settings, "reranker_model", "m")
-    monkeypatch.setattr(settings, "reranker_api_key", "k")
+    monkeypatch.setattr(settings.reranker, "provider", "http")
+    monkeypatch.setattr(settings.reranker, "base_url", "https://example.com/v1")
+    monkeypatch.setattr(settings.reranker, "model", "m")
+    monkeypatch.setattr(settings.reranker, "api_key", "k")
     _reset()
     r = reranker_mod.get_reranker()
     assert isinstance(r, reranker_mod.HttpReranker)
@@ -120,8 +120,8 @@ def test_get_reranker_http(monkeypatch):
 
 
 def test_get_reranker_http_without_base_url_falls_back_to_noop(monkeypatch):
-    monkeypatch.setattr(settings, "reranker_provider", "http")
-    monkeypatch.setattr(settings, "reranker_base_url", "")
+    monkeypatch.setattr(settings.reranker, "provider", "http")
+    monkeypatch.setattr(settings.reranker, "base_url", "")
     _reset()
     assert isinstance(reranker_mod.get_reranker(), reranker_mod.NoopReranker)
     _reset()
@@ -129,15 +129,15 @@ def test_get_reranker_http_without_base_url_falls_back_to_noop(monkeypatch):
 
 def test_get_reranker_local(monkeypatch):
     _install_fake_sentence_transformers(monkeypatch)
-    monkeypatch.setattr(settings, "reranker_provider", "local")
-    monkeypatch.setattr(settings, "reranker_model", "any-model")
+    monkeypatch.setattr(settings.reranker, "provider", "local")
+    monkeypatch.setattr(settings.reranker, "model", "any-model")
     _reset()
     assert isinstance(reranker_mod.get_reranker(), reranker_mod.LocalReranker)
     _reset()
 
 
 def test_get_reranker_singleton(monkeypatch):
-    monkeypatch.setattr(settings, "reranker_provider", "none")
+    monkeypatch.setattr(settings.reranker, "provider", "none")
     _reset()
     a = reranker_mod.get_reranker()
     b = reranker_mod.get_reranker()

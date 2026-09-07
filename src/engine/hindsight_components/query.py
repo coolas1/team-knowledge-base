@@ -12,11 +12,12 @@ from src.engine.interface import (
     KnowledgeSource,
 )
 
-from .config import HindsightOptions
-from .providers import ProjectHindsightProviders
-from .repository import PostgresMemoryRepository
-from .service import HindsightService
-from .types import RecallCandidate, RecallResult, ReflectResult
+from src.engine.hindsight_components.config import HindsightOptions
+from src.engine.hindsight_components.providers import ProjectHindsightProviders
+from src.engine.hindsight_components.protocols import MemoryRepository
+from src.engine.hindsight_components.repository import PostgresMemoryRepository
+from src.engine.hindsight_components.service import HindsightService
+from src.engine.hindsight_components.types import RecallCandidate, RecallResult, ReflectResult
 
 
 class CoreQueryService(Protocol):
@@ -162,10 +163,13 @@ class HindsightQueryService:
         return sources
 
 
-def build_query_service() -> HindsightQueryService:
+def build_query_service(
+    *,
+    repository: MemoryRepository | None = None,
+) -> HindsightQueryService:
     from config.settings import settings
 
-    repository = PostgresMemoryRepository()
+    repository = repository or PostgresMemoryRepository()
     options = HindsightOptions(
         recall_min_semantic=settings.hindsight_recall_min_semantic,
         recall_min_score=settings.hindsight_recall_min_score,

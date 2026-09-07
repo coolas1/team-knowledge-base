@@ -1,0 +1,3 @@
+op: remove
+requires_approval: true
+question: "Permanently delete this document?"

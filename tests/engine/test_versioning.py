@@ -92,7 +92,7 @@ def test_build_changes_prompt_contains_both_versions():
 async def test_analyze_changes_with_todo_provider_returns_placeholder(monkeypatch):
     from config.settings import settings
 
-    monkeypatch.setattr(settings, "llm_provider", "todo")
+    monkeypatch.setattr(settings.llm, "base_url", "")
     result = await Analyzer().analyze_changes("old", "new", "t")
     assert result.summary.startswith("[待 LLM 生成]")
 
@@ -303,7 +303,7 @@ def test_backend_implements_version_methods():
 async def test_mcp_version_tools_delegate_to_kb():
     from tests.conftest import FakeKnowledgeBase
 
-    from src.engine import mcp as mcp_mod
+    from src.agent.tkb.mcp import server as mcp_mod
 
     kb = FakeKnowledgeBase()
     mcp_mod.set_kb(kb)
@@ -331,7 +331,7 @@ async def test_mcp_version_tools_delegate_to_kb():
 async def test_mcp_version_tools_report_missing_doc():
     from tests.conftest import FakeKnowledgeBase
 
-    from src.engine import mcp as mcp_mod
+    from src.agent.tkb.mcp import server as mcp_mod
 
     kb = FakeKnowledgeBase()
 
@@ -354,7 +354,7 @@ async def test_mcp_version_tools_report_missing_doc():
 async def test_mcp_edit_document_reports_versioned_result():
     from tests.conftest import FakeKnowledgeBase
 
-    from src.engine import mcp as mcp_mod
+    from src.agent.tkb.mcp import server as mcp_mod
     from src.engine.interface import DocumentRef
 
     kb = FakeKnowledgeBase()
@@ -380,7 +380,7 @@ async def test_mcp_edit_document_reports_versioned_result():
 async def test_mcp_edit_document_missing_doc_returns_error():
     from tests.conftest import FakeKnowledgeBase
 
-    from src.engine import mcp as mcp_mod
+    from src.agent.tkb.mcp import server as mcp_mod
 
     kb = FakeKnowledgeBase()
 
@@ -394,12 +394,6 @@ async def test_mcp_edit_document_missing_doc_returns_error():
         assert "error" in res
     finally:
         mcp_mod._kb = None
-
-
-def test_adapter_forwards_edit_document():
-    from src.engine.hindsight_components.adapter import HindsightKnowledgeBaseAdapter
-
-    assert hasattr(HindsightKnowledgeBaseAdapter, "edit_document")
 
 
 def test_reindex_document_accepts_previous_version():
@@ -457,7 +451,7 @@ def test_build_edit_proposal_prompt_contains_request_and_doc():
 async def test_propose_edit_with_todo_provider_returns_original(monkeypatch):
     from config.settings import settings
 
-    monkeypatch.setattr(settings, "llm_provider", "todo")
+    monkeypatch.setattr(settings.llm, "base_url", "")
     result = await Analyzer().propose_edit("原文", "改一下", "t")
     assert result.proposed_text == "原文"
 
@@ -517,7 +511,7 @@ def test_backend_implements_propose_edit():
 async def test_mcp_propose_edit_delegates_to_kb():
     from tests.conftest import FakeKnowledgeBase
 
-    from src.engine import mcp as mcp_mod
+    from src.agent.tkb.mcp import server as mcp_mod
 
     kb = FakeKnowledgeBase()
     seen: list[tuple[str, str]] = []
@@ -540,7 +534,7 @@ async def test_mcp_propose_edit_delegates_to_kb():
 async def test_mcp_propose_edit_missing_doc_returns_error():
     from tests.conftest import FakeKnowledgeBase
 
-    from src.engine import mcp as mcp_mod
+    from src.agent.tkb.mcp import server as mcp_mod
 
     kb = FakeKnowledgeBase()
 
@@ -655,7 +649,7 @@ def test_find_version_candidate_picks_highest_similarity():
 async def test_mcp_confirm_version_match_delegates_to_kb():
     from tests.conftest import FakeKnowledgeBase
 
-    from src.engine import mcp as mcp_mod
+    from src.agent.tkb.mcp import server as mcp_mod
 
     kb = FakeKnowledgeBase()
     seen: list[tuple[str, str]] = []
@@ -678,7 +672,7 @@ async def test_mcp_confirm_version_match_delegates_to_kb():
 async def test_mcp_confirm_version_match_error_passthrough():
     from tests.conftest import FakeKnowledgeBase
 
-    from src.engine import mcp as mcp_mod
+    from src.agent.tkb.mcp import server as mcp_mod
 
     kb = FakeKnowledgeBase()
 
@@ -702,3 +696,110 @@ def test_backend_implements_confirm_version_match():
 
 def test_pipeline_record_version_change_is_public():
     assert hasattr(Pipeline, "record_version_change")
+
+
+# ── 删除并发修复：批量清理 + 瞬态重试 + 孤儿兜底 ────────────────
+
+
+class BatchRecordingSession(Session):
+    """记录 UNWIND 批量写参数的假会话。"""
+
+
+class RecordsResult(Result):
+    """返回一条实体记录，触发 UNWIND 批量写路径。"""
+
+    async def data(self):
+        return [{"name": "E1", "sources": json.dumps([{"doc_id": "d1"}])}]
+
+
+class RecordsSession(Session):
+    async def run(self, query, **parameters):
+        self.queries.append(query)
+        self.parameters.append(parameters)
+        return RecordsResult()
+
+
+async def test_delete_document_graph_batches_source_updates():
+    client = Neo4jClient.__new__(Neo4jClient)
+    client._driver = Driver()
+    client._driver.value = RecordsSession()
+    session = client._driver.value
+
+    await client.delete_document_graph("d1")
+
+    queries = session.queries
+    assert any("ORDER BY name" in q for q in queries), "读取应按 name 排序（确定加锁顺序）"
+    assert any("UNWIND $updates" in q for q in queries), "sources 更新应合并为单条批量写"
+    # 批量写参数包含移除了 doc_id 的 sources
+    unwind_params = next(p for p in session.parameters if "updates" in p)
+    assert unwind_params["updates"] == [{"name": "E1", "sources": "[]"}]
+
+
+async def test_delete_document_graph_retries_transient_errors(monkeypatch):
+    from src.engine.components.store import neo4j as neo4j_mod
+
+    attempts = {"count": 0}
+
+    async def flaky_delete(doc_id):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise neo4j_mod.Neo4jError("deadlock detected: fake")
+
+    class FakeDriverObj:
+        value = Session()
+
+        def session(self):
+            return self.value
+
+    client = Neo4jClient.__new__(Neo4jClient)
+    client._driver = FakeDriverObj()
+    client._delete_document_graph_once = flaky_delete  # type: ignore[method-assign]
+
+    # 跳过指数退避的真实等待，加速测试
+    async def fast_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(neo4j_mod.asyncio, "sleep", fast_sleep)
+
+    await client.delete_document_graph("d1")
+
+    assert attempts["count"] == 3, "瞬态错误应重试至成功"
+
+
+async def test_remove_cleans_graph_even_when_postgres_row_missing():
+    """孤儿兜底：Postgres 行不存在时也要执行图谱清理。"""
+    from types import SimpleNamespace
+
+    from src.engine.graphrag.backend import GraphRAGBackend
+
+    cleaned: list[str] = []
+
+    class FakeNeo4j:
+        async def delete_document_graph(self, doc_id):
+            cleaned.append(doc_id)
+
+    class FakePipeline:
+        async def before_remove(self, document_id):
+            return None
+
+    class MissingDocSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, model, uid):
+            return None
+
+    import src.engine.graphrag.backend as backend_mod
+
+    original_factory = backend_mod.async_session_factory
+    backend_mod.async_session_factory = MissingDocSession  # type: ignore[assignment]
+    try:
+        backend = GraphRAGBackend(FakeNeo4j(), FakePipeline())
+        await backend.remove("00000000-0000-0000-0000-000000000001")
+    finally:
+        backend_mod.async_session_factory = original_factory  # type: ignore[assignment]
+
+    assert cleaned == ["00000000-0000-0000-0000-000000000001"]

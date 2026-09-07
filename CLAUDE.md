@@ -6,8 +6,8 @@ with reranking, and query through a CLI, an MCP server, or a web UI.
 
 Three independently switchable modules live under `src/`:
 
-- **engine** — GraphRAG storage/retrieval (Postgres+pgvector, Neo4j), CLI, MCP.
-- **agent** — stateless skills + LLM orchestration (see `src/agent/CLAUDE.md`).
+- **engine** — GraphRAG storage/retrieval (Postgres+pgvector, Neo4j), CLI.
+- **agent** — plugin-based skills + LLM orchestration (see `src/agent/CLAUDE.md`).
 - **frontend** — FastAPI BFF + React SPA (see `src/frontend/CLAUDE.md`).
 
 ## Commands
@@ -19,19 +19,29 @@ Run from the repo root unless noted. Python tooling uses `uv`.
 - **Integration tests:** `RUN_INTEGRATION=1 uv run pytest` (live Postgres+Neo4j+Ollama)
 - **Lint:** `uv run ruff check`
 - **Format:** `uv run ruff format`
-- **Engine MCP server:** `uv run python -m src.engine.mcp` (port 8000, `/mcp`)
 - **Engine CLI:** `uv run python -m src.engine.cli recall --query "..."`
-- **BFF server:** `uv run uvicorn src.frontend.webapp.server.app:app --reload`
+- **BFF server:** `uv run uvicorn src.frontend.webapp.server.app:app --reload` (serves `/mcp`)
 - **SPA (dev):** `cd src/frontend/webapp/client && npm install && npm run dev` (proxies `/api` → :8000)
 - **SPA tests:** `cd src/frontend/webapp/client && npm test`
 
 ## Workflow
 
 1. Run `uv run ruff check` and `uv run pytest` before pushing.
-2. Backing services run via `docker compose up -d` (Postgres :5433, Neo4j :7687);
-   copy `.env.example` to `.env` and set `OLLAMA_BASE_URL` first.
-3. The reranker is configurable via `RERANKER_PROVIDER`: `http` (external
+2. **The LAN deployment is pipeline-managed** (`cicd/`): a systemd user timer
+   polls `origin/main` every 5 min, gates on lint + tests, builds SHA-tagged
+   images, and redeploys via `podman compose`. Do NOT run
+   `docker/podman compose up` by hand — the pipeline is the sole operator of
+   the `team-kb` compose project; use the published ports (5433/7687/8000)
+   as a client instead. Runbook, rollback, and install steps: `cicd/README.md`.
+3. Local dev backing services (`docker compose up -d` in the dev checkout)
+   are separate from the LAN deployment; copy `.env.example` to `.env` and
+   set `EMBEDDING_BASE_URL` and `LLM_BASE_URL` first.
+4. The reranker is configurable via `RERANKER_PROVIDER`: `http` (external
    `/v1/rerank` API, default), `local` (torch — needs `--extra reranker`), or `none`.
+5. Memory capabilities (retain, reflective query, graph worker) toggle via
+   `engine.memory.*` in `config/app.yaml`.
+6. Ingest parallelism is bounded by `engine.ingest.chunk_concurrency` and
+   `engine.ingest.doc_concurrency` in `config/app.yaml` (1 = serial).
 
 ## Coding Standards
 
@@ -52,8 +62,8 @@ src/
 ```
 
 Backing services (`docker-compose.yml`): Postgres+pgvector (vectors, chunks) and
-Neo4j (entity/relation graph). Ollama is external (`OLLAMA_BASE_URL`). Config
-flows through `.env` → `config/settings.py` (pydantic-settings).
+Neo4j (entity/relation graph). Ollama is opt-in via the compose `ollama`
+profile. Config flows through `.env` → `config/settings.py` (pydantic-settings).
 
 ## Validity check
 

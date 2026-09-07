@@ -1,10 +1,8 @@
-"""Webapp BFF (FastAPI). Calls the engine via EngineClient and may invoke
-agent skills in-process. Lifespan wires the engine + agent plugin.
+"""Webapp BFF (FastAPI). Single-app wiring: engine, plugin, and MCP all run
+in-process; the BFF serves the SPA, the REST API, and /mcp.
 
 Routing: API endpoints live under ``/api`` so they never collide with the
-SPA's client-side routes (``/``, ``/documents/:id``, ``/search``, ...). Any
-other GET falls through to the built SPA (``index.html``); in dev the SPA is
-served by Vite and only ``/api/*`` is proxied here.
+SPA's client-side routes. Any other GET falls through to the built SPA.
 """
 
 from __future__ import annotations
@@ -18,8 +16,6 @@ from fastapi.responses import FileResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 
-from src.engine.mcp import build_app as build_mcp_app
-from src.engine.mcp import mcp as mcp_server
 from src.frontend.webapp.server import deps
 from src.frontend.webapp.server.routes_documents import router as documents_router
 from src.frontend.webapp.server.routes_search import router as search_router
@@ -28,21 +24,28 @@ from src.frontend.webapp.server.routes_query import router as query_router
 from src.frontend.webapp.server.routes_agent import router as agent_router
 from src.frontend.webapp.server.routes_artifacts import router as artifacts_router
 from src.frontend.webapp.server.routes_config import router as config_router
+from src.agent.tkb.mcp.server import build_app as build_mcp_app
 
-# Where the built SPA (vite build output) lives. Set SPA_DIST in the container;
-# in dev this path is absent and the SPA is served by Vite instead.
 SPA_DIST = Path(os.getenv("SPA_DIST", "src/frontend/webapp/client/dist"))
+
+# The FastMCP session manager allows a single run() per instance; the app has
+# one lifespan per process. Tests open many TestClients against this app, so
+# guard against repeated runs (later test lifespans skip it).
+_mcp_session_started = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _mcp_session_started
     await deps.startup()
+    from src.agent.tkb.mcp.server import mcp as mcp_server
+
     try:
-        if deps.engine_initialized():
-            async with mcp_server.session_manager.run():
-                yield
-        else:
-            # Unit tests replace startup with a no-op and exercise REST only.
+        if _mcp_session_started:
+            yield
+            return
+        _mcp_session_started = True
+        async with mcp_server.session_manager.run():
             yield
     finally:
         await deps.shutdown()
@@ -50,7 +53,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Team Knowledge Base BFF", version="0.1.0", lifespan=lifespan)
 
-# API under /api (see module docstring).
+# API under /api.
 api = APIRouter(prefix="/api")
 api.include_router(documents_router)
 api.include_router(search_router)
@@ -60,6 +63,8 @@ api.include_router(agent_router)
 api.include_router(artifacts_router)
 api.include_router(config_router)
 app.include_router(api)
+
+# MCP: always mounted in-process (single-app wiring).
 app.mount("/mcp", build_mcp_app(), name="mcp")
 
 

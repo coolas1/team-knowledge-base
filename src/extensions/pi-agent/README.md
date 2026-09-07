@@ -65,9 +65,8 @@ the internal service name `pi-agent:8010`.
 ## Model configuration
 
 Explicit `PI_AGENT_*` model settings take priority. If they are omitted, the
-runtime inherits the existing `LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL`, and
-`LLM_API_KEY` settings. A disabled shared provider (`todo`, `none`, or
-`disabled`) falls back to local Ollama:
+runtime inherits the shared `LLM_MODEL`, `LLM_BASE_URL`, and `LLM_API_KEY`
+settings when `LLM_BASE_URL` is set. Otherwise it falls back to local Ollama:
 
 | Variable | Default |
 | --- | --- |

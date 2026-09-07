@@ -1,0 +1,21 @@
+date,category,amount_jpy,amount_usd,vendor,note
+2024-03-13,lodging,5500,37.16,Naha Guesthouse,weekly dorm
+2024-03-22,lodging,12000,81.08,Sesoko Inn,"twin, 4 nights"
+2024-03-26,lodging,6800,45.95,Ishigaki Hostel,private
+2024-03-27,food,1800,12.16,Makishi Market,lunch + drinks
+2024-03-21,food,4500,30.41,Johan's izakaya,dinner w/ Kenta
+2024-03-05,food,650,4.39,Blue Seal,"ice cream, hot day"
+2024-03-16,dive,18000,121.62,Sea World Dive,2-tank boat dive
+2024-03-02,dive,12000,81.08,Reef Support,shore dive + guide
+2024-03-05,dive,22000,148.65,Umi Gitto,charter + gear rental
+2024-03-17,transit,14000,94.59,JAL Naha-Ishigaki,one-way
+2024-03-19,transit,700,4.73,Yui Rail,Naha to airport
+2024-03-11,transit,4500,30.41,rental scooter,2 days on Ishigaki
+2024-03-28,gear,2200,14.86,REEF safe sunscreen,zinc-only
+2024-03-04,gear,1400,9.46,logbook,waterproof
+2024-03-28,gear,850,5.74,defog,small bottle
+2024-03-18,gear,4500,30.41,Yonaguni Dive Shop,dry bag
+2024-03-28,music,1800,12.16,Zoom H5 battery,field recording supply
+2024-03-15,music,6500,43.92,memory card 256GB,spare for recordings
+2024-03-04,fermentation,1500,10.14,koji starter,from local brewer
+2024-03-17,fermentation,3500,23.65,awamori tasting,"3 glasses, distillery"

@@ -129,13 +129,11 @@ export function loadPiAgentConfig(
 ): PiAgentConfig {
   const cwd = env.PI_AGENT_CWD?.trim() || process.cwd();
   const dataDir = env.PI_AGENT_DATA_DIR?.trim() || `${cwd}/.pi-agent-data`;
-  const sharedProvider = env.LLM_PROVIDER?.trim();
-  const inheritSharedModel =
-    Boolean(sharedProvider) &&
-    !["none", "todo", "disabled"].includes(sharedProvider!.toLowerCase());
+  const sharedBaseUrl = env.LLM_BASE_URL?.trim();
+  const inheritSharedModel = Boolean(sharedBaseUrl);
   const provider =
     env.PI_AGENT_PROVIDER?.trim() ||
-    (inheritSharedModel ? sharedProvider : undefined) ||
+    (inheritSharedModel ? "openai" : undefined) ||
     "ollama";
   const isOllama = provider.toLowerCase() === "ollama";
   const model =
@@ -158,7 +156,7 @@ export function loadPiAgentConfig(
     ),
     modelBaseUrl:
       env.PI_AGENT_BASE_URL?.trim() ||
-      (inheritSharedModel ? env.LLM_BASE_URL?.trim() : undefined) ||
+      (inheritSharedModel ? sharedBaseUrl : undefined) ||
       "http://localhost:11434/v1",
     modelApiKey:
       env.PI_AGENT_API_KEY?.trim() ||

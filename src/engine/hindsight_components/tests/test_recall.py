@@ -62,7 +62,7 @@ async def test_conversation_filter_is_applied_before_all_arm_rankings() -> None:
             self.file = candidate("file", "high ranking file", semantic=1.0)
             self.file.source_type = "graphrag-pipeline"
             self.conversation = candidate(
-                "conversation", "remembered preference", semantic=0.2
+                "conversation", "remembered preference", semantic=0.2, keyword=0.8
             )
             self.conversation.source_type = "conversation"
 

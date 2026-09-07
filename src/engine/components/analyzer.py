@@ -218,7 +218,7 @@ def _build_prompt(text: str, title: str, schema: dict) -> str:
 
 
 class Analyzer:
-    """LLM 分析器，支持 Ollama 和 OpenAI 兼容 API。"""
+    """LLM 分析器，通过 OpenAI 兼容 API 调用。"""
 
     def __init__(self, schema_path: Path | None = None) -> None:
         self._schema_path = schema_path or _DEFAULT_SCHEMA_PATH
@@ -227,10 +227,9 @@ class Analyzer:
     async def analyze(self, text: str, title: str) -> AnalysisResult:
         """分析文档，返回 overview + 实体 + 关系。
 
-        如果 LLM 未配置（provider: todo），返回空结果占位。
+        如果 LLM 未配置（LLM_BASE_URL 为空），返回空结果占位。
         """
-        provider = settings.llm_provider
-        if provider == "todo":
+        if not settings.llm.enabled:
             # LLM 未配置，返回占位结果
             return AnalysisResult(
                 overview=f"[待 LLM 生成] {title}",
@@ -240,14 +239,7 @@ class Analyzer:
             )
 
         prompt = _build_prompt(text, title, self._schema)
-
-        if provider == "ollama":
-            raw = await self._call_ollama(prompt)
-        elif provider in ("openai", "custom"):
-            raw = await self._call_openai_compatible(prompt)
-        else:
-            return AnalysisResult(overview=f"[未知 provider: {provider}] {title}")
-
+        raw = await self._call_openai_compatible(prompt)
         return self._parse_response(raw)
 
     # ── chunk 级分析 ─────────────────────────────────────────────
@@ -256,19 +248,11 @@ class Analyzer:
         self, chunk_text: str, doc_title: str, chunk_index: int
     ) -> ChunkAnalysisResult:
         """对单个 chunk 做实体和关系抽取。"""
-        provider = settings.llm_provider
-        if provider == "todo":
+        if not settings.llm.enabled:
             return ChunkAnalysisResult(chunk_index=chunk_index)
 
         prompt = self._build_chunk_prompt(chunk_text, doc_title, self._schema)
-
-        if provider == "ollama":
-            raw = await self._call_ollama(prompt)
-        elif provider in ("openai", "custom"):
-            raw = await self._call_openai_compatible(prompt)
-        else:
-            return ChunkAnalysisResult(chunk_index=chunk_index)
-
+        raw = await self._call_openai_compatible(prompt)
         return self._parse_chunk_response(raw, chunk_index)
 
     # ── overview 级分析 ──────────────────────────────────────────
@@ -277,8 +261,7 @@ class Analyzer:
         self, text: str, title: str
     ) -> AnalysisResult:
         """文档级分析，仅提取 overview + file_relations。"""
-        provider = settings.llm_provider
-        if provider == "todo":
+        if not settings.llm.enabled:
             return AnalysisResult(
                 overview=f"[待 LLM 生成] {title}",
                 entities=[],
@@ -287,14 +270,7 @@ class Analyzer:
             )
 
         prompt = self._build_overview_prompt(title, text)
-
-        if provider == "ollama":
-            raw = await self._call_ollama(prompt)
-        elif provider in ("openai", "custom"):
-            raw = await self._call_openai_compatible(prompt)
-        else:
-            return AnalysisResult(overview=f"[未知 provider] {title}")
-
+        raw = await self._call_openai_compatible(prompt)
         return self._parse_overview_response(raw)
 
     # ── 版本变更分析（LLM diff）────────────────────────────────────
@@ -307,20 +283,13 @@ class Analyzer:
         Prompt 设计参考 VersionRAG：只提取实质内容变更，
         过滤排版/标点/空白等非实质差异。
         """
-        provider = settings.llm_provider
-        if provider == "todo":
+        if not settings.llm.enabled:
             return ChangeAnalysisResult(
                 summary=f"[待 LLM 生成] {title} 版本变更"
             )
 
         prompt = self._build_changes_prompt(old_text, new_text, title)
-
-        if provider == "ollama":
-            raw = await self._call_ollama(prompt)
-        elif provider in ("openai", "custom"):
-            raw = await self._call_openai_compatible(prompt)
-        else:
-            return ChangeAnalysisResult(summary=f"[未知 provider] {title}")
+        raw = await self._call_openai_compatible(prompt)
 
         return self._parse_changes_response(raw)
 
@@ -330,23 +299,14 @@ class Analyzer:
         self, text: str, edit_request: str, title: str
     ) -> EditProposalResult:
         """根据用户修改要求生成编辑提议（不落库，等待确认）。"""
-        provider = settings.llm_provider
-        if provider == "todo":
+        if not settings.llm.enabled:
             return EditProposalResult(
                 proposed_text=text,
                 notes=["[待 LLM 生成] LLM 未配置，原文返回"],
             )
 
         prompt = self._build_edit_proposal_prompt(text, edit_request, title)
-
-        if provider == "ollama":
-            raw = await self._call_ollama(prompt)
-        elif provider in ("openai", "custom"):
-            raw = await self._call_openai_compatible(prompt)
-        else:
-            return EditProposalResult(
-                proposed_text=text, notes=[f"[未知 provider] {title}"]
-            )
+        raw = await self._call_openai_compatible(prompt)
 
         return self._parse_edit_proposal_response(raw)
 
@@ -474,9 +434,9 @@ class Analyzer:
         推理型模型偶发把输出预算全部耗在思考上（content 为空），
         空响应时自动重试。
         """
-        base_url = (settings.llm_base_url or "https://api.openai.com/v1").rstrip("/")
-        model = settings.llm_model or "gpt-4o-mini"
-        api_key = settings.llm_api_key
+        base_url = settings.llm.base_url.rstrip("/")
+        model = settings.llm.require_model()
+        api_key = settings.llm.api_key
 
         content = ""
         for attempt in range(3):
