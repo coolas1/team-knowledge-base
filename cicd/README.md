@@ -70,17 +70,22 @@ adopts it in one deliberate deploy:
 1. Confirm nothing on the LAN used pi-agent directly at `host:8010`
    (host networking exposed it; compose publishes only `127.0.0.1:8010`).
    If something did, publish the port explicitly in `docker-compose.yml`.
-2. Run the pipeline once with deploy enabled (or `systemctl --user start
+2. Remove the hand-run `team-kb-pi-agent-host` container first — it was
+   started outside the compose project, so `--remove-orphans` does NOT
+   catch it, and it holds `:8010` (the compose pi-agent publishes
+   `127.0.0.1:8010` and cannot bind while the old one runs):
+   `podman rm -f team-kb-pi-agent-host`
+3. Run the pipeline once with deploy enabled (or `systemctl --user start
    team-kb-cicd.service` after merging the pending work, so `origin/main`
    is at or ahead of the running stack):
    `podman compose up -d --remove-orphans` recreates the containers under
-   the current compose wiring, carries the named volumes (`pgdata`,
-   `neo4jdata`, `piagentdata`, `artifactsdata`), and removes
-   `team-kb-pi-agent-host` (the old `--network host` workaround) as an orphan.
-3. Verify: `curl http://127.0.0.1:8000/health` is green, a document ingested
+   the current compose wiring and carries the named volumes (`pgdata`,
+   `neo4jdata`, `piagentdata`, `artifactsdata`); leftover in-project
+   containers (e.g. an aborted `team-kb-backend`) are removed as orphans.
+4. Verify: `curl http://127.0.0.1:8000/health` is green, a document ingested
    before the cutover is still searchable, and a pi-agent MCP round-trip
    succeeds (proves the in-network `webapp:8000` host trust).
-4. Enable the timer (step 5 above). From here on, merges to `origin/main`
+5. Enable the timer (install step 5 above). From here on, merges to `origin/main`
    deploy automatically within ~5 minutes.
 
 ## Rollback
