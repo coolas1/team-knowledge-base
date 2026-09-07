@@ -19,16 +19,27 @@ from src.engine.interface import (
 from tests.conftest import FakeKnowledgeBase
 
 
-def test_mcp_transport_allows_compose_hosts_and_rejects_unknown_hosts():
+def test_mcp_transport_allows_localhost_and_compose_service_hosts():
     settings = mcp_mod.mcp.settings.transport_security
     assert settings is not None
     assert settings.enable_dns_rebinding_protection is True
 
     security = TransportSecurityMiddleware(settings)
+    # localhost clients, on any port
+    for host in ("localhost:8000", "127.0.0.1:8000", "[::1]:8000", "localhost:1234"):
+        assert security._validate_host(host) is True, host
     # single-app compose: pi-agent reaches the backend by service/container name
-    assert security._validate_host("backend:8000") is True
-    assert security._validate_host("team-kb-webapp:8000") is True
+    for host in ("backend:8000", "webapp:8000", "team-kb-webapp:8000"):
+        assert security._validate_host(host) is True, host
+
+
+def test_mcp_transport_rejects_unknown_hosts():
+    security = TransportSecurityMiddleware(mcp_mod.mcp.settings.transport_security)
+    # DNS-rebind protection stays active for anything outside the allowlist
     assert security._validate_host("attacker.example:8000") is False
+    # near-misses must not be accepted either
+    assert security._validate_host("webapp.evil.example:8000") is False
+    assert security._validate_host("webapp:8001") is False
 
 
 @pytest.fixture

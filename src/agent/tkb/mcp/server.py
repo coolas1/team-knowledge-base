@@ -36,6 +36,7 @@ mcp = FastMCP(
             # Single-app compose: in-network clients (pi-agent sidecar) reach
             # the backend by service name or container name.
             "backend:8000",
+            "webapp:8000",
             "team-kb-webapp:8000",
         ],
         allowed_origins=[
