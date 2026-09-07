@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Static bootstrap for the Team KB CI/CD pipeline, installed once at
+# /var/tmp/team-kb-cicd/run.sh (from cicd/run.sh.template). Deliberately
+# trivial and rarely changed: all real logic lives in the versioned
+# repo checkout at repo/cicd/pipeline.sh, so the pipeline evolves with
+# the code it deploys.
+#
+# The systemd unit's ExecStart points here. On a fresh stable dir (no
+# clone yet) it performs the initial clone; afterwards it just execs the
+# pipeline, which keeps repo/ synced itself.
+set -Eeuo pipefail
+
+home="/var/tmp/team-kb-cicd"
+mkdir -p "$home"
+
+# deploy.env carries the proxy settings the initial clone needs (the
+# pipeline sources it too, for the same reason).
+while IFS= read -r line; do
+  [[ "$line" =~ ^[[:space:]]*# ]] && continue
+  [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+  export "$line"
+done < "$home/deploy.env"
+
+if [[ ! -d "$home/repo/.git" ]]; then
+  git clone --branch main \
+    https://github.com/Cried1/team-knowledge-base.git "$home/repo"
+fi
+
+exec "$home/repo/cicd/pipeline.sh" "$@"

@@ -27,13 +27,20 @@ Run from the repo root unless noted. Python tooling uses `uv`.
 ## Workflow
 
 1. Run `uv run ruff check` and `uv run pytest` before pushing.
-2. Backing services run via `docker compose up -d` (Postgres :5433, Neo4j :7687);
-   copy `.env.example` to `.env` and set `EMBEDDING_BASE_URL` and `LLM_BASE_URL` first.
-3. The reranker is configurable via `RERANKER_PROVIDER`: `http` (external
+2. **The LAN deployment is pipeline-managed** (`cicd/`): a systemd user timer
+   polls `origin/main` every 5 min, gates on lint + tests, builds SHA-tagged
+   images, and redeploys via `podman compose`. Do NOT run
+   `docker/podman compose up` by hand — the pipeline is the sole operator of
+   the `team-kb` compose project; use the published ports (5433/7687/8000)
+   as a client instead. Runbook, rollback, and install steps: `cicd/README.md`.
+3. Local dev backing services (`docker compose up -d` in the dev checkout)
+   are separate from the LAN deployment; copy `.env.example` to `.env` and
+   set `EMBEDDING_BASE_URL` and `LLM_BASE_URL` first.
+4. The reranker is configurable via `RERANKER_PROVIDER`: `http` (external
    `/v1/rerank` API, default), `local` (torch — needs `--extra reranker`), or `none`.
-4. Memory capabilities (retain, reflective query, graph worker) toggle via
+5. Memory capabilities (retain, reflective query, graph worker) toggle via
    `engine.memory.*` in `config/app.yaml`.
-5. Ingest parallelism is bounded by `engine.ingest.chunk_concurrency` and
+6. Ingest parallelism is bounded by `engine.ingest.chunk_concurrency` and
    `engine.ingest.doc_concurrency` in `config/app.yaml` (1 = serial).
 
 ## Coding Standards
