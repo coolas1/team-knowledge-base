@@ -29,6 +29,16 @@ die() { log "FAILED: $*"; exit 1; }
 
 export PATH="$HOME/.local/bin:$TKB_NODE22_BIN:/usr/local/bin:/usr/bin:/bin"
 
+# --- self-location guard ----------------------------------------------------
+# Like pipeline.sh: rollback resets the clone mid-run, which would rewrite
+# the script bash is executing. Snapshot to the stable dir and re-exec.
+if [[ -z "${TKB_CICD_SNAPSHOT:-}" ]] \
+  && [[ "${BASH_SOURCE[0]}" -ef "$repo_dir/cicd/rollback.sh" ]]; then
+  snap="$TKB_CICD_HOME/rollback.exec.sh"
+  cp "${BASH_SOURCE[0]}" "$snap"
+  TKB_CICD_SNAPSHOT=1 exec bash "$snap" "$@"
+fi
+
 # Only PROXY keys from deploy.env are exported (see pipeline.sh for why).
 if [[ -f "$deploy_env" ]]; then
   while IFS= read -r line; do

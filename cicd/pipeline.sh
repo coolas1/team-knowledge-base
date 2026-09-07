@@ -85,6 +85,20 @@ done
 
 mkdir -p "$TKB_CICD_HOME"
 
+# --- self-location guard ----------------------------------------------------
+# The pipeline lives inside the very clone it syncs: `git reset --hard` in
+# stage_sync would rewrite the script bash is mid-executing (garbage or
+# stale logic), and the invoked copy is always the PREVIOUS head's version.
+# So when started from the clone, snapshot to the stable dir and re-exec
+# the snapshot; after sync, hand over to the freshly checked-out copy if
+# it differs (see the TKB_CICD_FRESH re-exec below).
+if [[ -z "${TKB_CICD_SNAPSHOT:-}" && -z "${TKB_CICD_FRESH:-}" ]] \
+  && [[ "${BASH_SOURCE[0]}" -ef "$repo_dir/cicd/pipeline.sh" ]]; then
+  snap="$TKB_CICD_HOME/pipeline.exec.sh"
+  cp "${BASH_SOURCE[0]}" "$snap"
+  TKB_CICD_SNAPSHOT=1 exec bash "$snap" "$@"
+fi
+
 # --- stages -----------------------------------------------------------------
 HEAD_SHA=""
 SHORT_SHA=""
@@ -184,6 +198,15 @@ stage_record() {
 # --- run --------------------------------------------------------------------
 if ! stage_sync; then
   exit 0 # unchanged head: no gate, no build, no deploy
+fi
+
+# Sync may have checked out a newer pipeline.sh than the copy running now.
+# Hand over to the fresh version before gating, so a pushed pipeline change
+# takes effect on the very run that pulls it.
+if [[ -z "${TKB_CICD_FRESH:-}" ]] \
+  && ! cmp -s "${BASH_SOURCE[0]}" "$repo_dir/cicd/pipeline.sh"; then
+  log "sync: pipeline.sh changed on main; re-execing the fresh version"
+  TKB_CICD_FRESH=1 exec bash "$repo_dir/cicd/pipeline.sh" "$@"
 fi
 
 stage_gate

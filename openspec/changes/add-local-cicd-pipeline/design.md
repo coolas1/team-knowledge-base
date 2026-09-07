@@ -66,6 +66,12 @@ See proposal.md for motivation. Facts that shape this design:
    `repo/cicd/pipeline.sh`. This resolves the chicken-and-egg (units need a
    stable path; the script should evolve with the code it deploys) and the
    bootstrap is intentionally trivial (~5 lines, rarely changes).
+   Self-update guard (found at cutover): the invoked script is always the
+   previous head's copy, and `reset --hard` would rewrite the file bash is
+   executing — so the script snapshots itself to the stable dir before
+   syncing and, after sync, re-execs the freshly checked-out copy when it
+   differs. A pushed pipeline change thus takes effect on the run that
+   pulls it.
 
 5. **Gate = `ruff check` + `uv run pytest` + SPA `npm test`.** Tests run on
    the host against the clone, with `UV_PROJECT_ENVIRONMENT=/var/tmp/tkb-venvs/cicd`

@@ -20,8 +20,20 @@ commit runs watch → sync → gate → build → deploy → verify on the LAN h
 | `/var/tmp/team-kb-cicd/repo/` | Disposable clone; every run is `git fetch` + `reset --hard origin/main`. |
 | `/var/tmp/team-kb-cicd/last-deployed` | SHA of the last commit the pipeline deployed successfully. Unchanged head ⇒ run is a no-op. |
 | `/var/tmp/team-kb-cicd/deployed-shas` | History: `<timestamp> <sha>` per deploy (and rollbacks). |
+| `/var/tmp/team-kb-cicd/pipeline.exec.sh` | Snapshot of the running pipeline (self-update guard, below). |
 | `/var/tmp/tkb-venvs/cicd` | Gate venv (`UV_PROJECT_ENVIRONMENT`) — kept off the slow home filesystem. |
 | `/var/tmp/node22/bin` | Node 22 for the SPA tests (system Node is 18). |
+
+## Self-update
+
+`pipeline.sh` lives inside the clone it syncs, so a run always *starts* from
+the previous head's copy of the script. Two guards make that safe: the
+script snapshots itself to the stable dir before doing anything (`git reset
+--hard` must never rewrite the file bash is executing), and after sync it
+compares itself against the freshly checked-out `cicd/pipeline.sh` and
+re-execs the new version when they differ — so a change to the pipeline
+lands on the very run that pulls it. `rollback.sh` snapshots itself the same
+way (it resets the clone to the target SHA mid-run).
 
 ## Install (one-time, on the LAN host)
 
