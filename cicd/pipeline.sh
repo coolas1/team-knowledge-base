@@ -24,7 +24,7 @@ set -Eeuo pipefail
 # --- configuration ----------------------------------------------------------
 # TKB_CICD_HOME etc. are overridable for sandbox testing.
 TKB_CICD_HOME="${TKB_CICD_HOME:-/var/tmp/team-kb-cicd}"
-TKB_CICD_REMOTE="${TKB_CICD_REMOTE:-https://github.com/Cried1/team-knowledge-base.git}"
+TKB_CICD_REMOTE="${TKB_CICD_REMOTE:-https://github.com/coolas1/team-knowledge-base.git}"
 TKB_CICD_BRANCH="${TKB_CICD_BRANCH:-main}"
 TKB_CICD_VENV="${TKB_CICD_VENV:-/var/tmp/tkb-venvs/cicd}"
 TKB_NODE22_BIN="${TKB_NODE22_BIN:-/var/tmp/node22/bin}"

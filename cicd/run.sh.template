@@ -27,7 +27,7 @@ done < "$home/deploy.env"
 
 if [[ ! -d "$home/repo/.git" ]]; then
   git clone --branch main \
-    https://github.com/Cried1/team-knowledge-base.git "$home/repo"
+    https://github.com/coolas1/team-knowledge-base.git "$home/repo"
 fi
 
 exec "$home/repo/cicd/pipeline.sh" "$@"
