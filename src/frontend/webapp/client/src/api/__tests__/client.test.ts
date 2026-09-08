@@ -227,3 +227,31 @@ describe('api client', () => {
     )
   })
 })
+
+  it('uploadFiles posts all files to the batch endpoint', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        items: [{ ok: true, document: { id: 'doc-1', status: 'pending' } }],
+      }),
+    })
+    const a = new File(['# A'], 'a.md', { type: 'text/markdown' })
+    const b = new File(['# B'], 'b.md', { type: 'text/markdown' })
+
+    const result = await api.uploadFiles([a, b])
+
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/documents/upload/batch')
+    expect(init?.method).toBe('POST')
+    expect((init?.body as FormData).getAll('files')).toEqual([a, b])
+    expect(result.items[0].document?.id).toBe('doc-1')
+  })
+
+  it('uploadFiles wraps network failure in ApiError guidance', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('fetch failed'))
+    const a = new File(['# A'], 'a.md', { type: 'text/markdown' })
+
+    await expect(api.uploadFiles([a])).rejects.toMatchObject({
+      code: 'network_error',
+    })
+  })

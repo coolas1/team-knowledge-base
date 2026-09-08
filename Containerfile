@@ -6,6 +6,13 @@
 # Node 22 is installed into the Python image so the SPA is built in-place -
 # no cross-stage copy.
 #
+# Layers are ordered by change frequency: system deps -> toolchain -> Python
+# deps -> SPA build -> app source. A Python-only edit re-runs only the final
+# COPY layers. uv comes digest-pinned from the official image (one-time
+# pull, cached in local storage) - the old astral.sh installer curl was the
+# 78%-of-wall-clock cost of a build (flaky through the proxy: one run spent
+# ~113 min on it, another failed with curl exit 35).
+#
 # Build:  podman build -t team-kb-webapp -f Containerfile .
 # Run:    via docker-compose.yml (webapp service), or:
 #         podman run --rm -p 8000:8000 --env-file .env team-kb-webapp
@@ -33,15 +40,15 @@ RUN set -eux; \
     curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" \
       | tar -xz --strip-components=1 -C /usr/local
 
-# PyPI is not reachable in every deployment environment. Use Astral's pinned
-# standalone installer so the build does not depend on `pip install uv`.
-RUN curl -LsSf https://astral.sh/uv/0.12.5/install.sh -o /tmp/uv-installer.sh \
- && UV_UNMANAGED_INSTALL=/usr/local/bin sh /tmp/uv-installer.sh \
- && rm /tmp/uv-installer.sh
+# uv from the official image, digest-pinned (NOT an inter-stage copy - an
+# external image ref in --from pulls from local storage, which is warm).
+COPY --from=ghcr.io/astral-sh/uv:0.12.5@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 \
+     /uv /uvx /usr/local/bin/
 
 WORKDIR /app
 
 # Python deps (the optional reranker extra, and therefore torch, is omitted).
+# Copying only the lock inputs keeps this layer cached across code edits.
 COPY pyproject.toml uv.lock ./
 # Use a reachable PyPI mirror in this deployment environment. The frozen lock
 # file still fixes the exact dependency graph and artifact hashes. The lock
@@ -56,18 +63,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     UV_HTTP_TIMEOUT=600 \
     uv sync --frozen --no-dev --no-install-project
 
-# App source + config.
-COPY src/ ./src/
-COPY config/ ./config/
-
-# Build the SPA in-place -> src/frontend/webapp/client/dist (served by the BFF).
-# node_modules is installed and removed in the SAME layer, so it is not in the
-# final image (only dist/ is).
+# SPA: client source only, so a Python edit never invalidates this layer.
+# node_modules is installed and removed in the SAME layer, so it is not in
+# the final image (only dist/ is). The later `COPY src/` overlay cannot
+# clobber dist because the context excludes **/dist (see .dockerignore).
+COPY src/frontend/webapp/client/ ./src/frontend/webapp/client/
 RUN cd src/frontend/webapp/client \
  && npm ci \
  && npm run security \
  && npm run build \
  && rm -rf node_modules
+
+# App source + config: the most frequently changed inputs, last.
+COPY src/ ./src/
+COPY config/ ./config/
 
 ENV PYTHONPATH=/app \
     SPA_DIST=/app/src/frontend/webapp/client/dist \

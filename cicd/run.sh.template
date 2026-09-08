@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Static bootstrap for the Team KB CI/CD pipeline, installed once at
+# <repo>/.deploy/run.sh (from cicd/run.sh.template). Deliberately
+# trivial and rarely changed: all real logic lives in the versioned
+# repo checkout at repo/cicd/pipeline.sh, so the pipeline evolves with
+# the code it deploys.
+#
+# The stable dir is derived from this script's own location (so the
+# whole .deploy/ tree can be moved with the repo); TKB_CICD_HOME
+# overrides it for sandbox testing.
+#
+# The systemd unit's ExecStart points here. On a fresh stable dir (no
+# clone yet) it performs the initial clone; afterwards it just execs the
+# pipeline, which keeps repo/ synced itself.
+set -Eeuo pipefail
+
+home="${TKB_CICD_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+mkdir -p "$home"
+
+# deploy.env carries the proxy settings the initial clone needs (the
+# pipeline sources them too, for the same reason). Only PROXY keys are
+# exported — see the comment in pipeline.sh for why app config must not
+# leak into the environment.
+while IFS= read -r line; do
+  [[ "$line" =~ ^[[:space:]]*# ]] && continue
+  [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
+  case "${BASH_REMATCH[1]}" in
+    *_proxy|*_PROXY) export "$line" ;;
+  esac
+done < "$home/deploy.env"
+
+if [[ ! -d "$home/repo/.git" ]]; then
+  git clone --branch main \
+    https://github.com/coolas1/team-knowledge-base.git "$home/repo"
+fi
+
+export TKB_CICD_HOME="$home"
+exec "$home/repo/cicd/pipeline.sh" "$@"

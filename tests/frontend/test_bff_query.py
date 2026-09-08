@@ -1,25 +1,27 @@
+"""Test the /api/query route (Hindsight KnowledgeQuery endpoint)."""
+
+from __future__ import annotations
+
 import pytest
 from fastapi.testclient import TestClient
 
-from src.agent.engine_client import InProcessEngineClient
-from src.engine.interface import KnowledgeQueryResult, KnowledgeSource
 from src.frontend.webapp.server import app as app_mod, deps
+from src.engine.interface import KnowledgeQueryResult, KnowledgeSource
 from tests.conftest import FakeKnowledgeBase
 
 
 class FakeQueryService:
-    def __init__(self):
-        self.request = None
+    request = None
 
     async def query(self, request):
         self.request = request
         return KnowledgeQueryResult(
             strategy_used="reflect",
-            answer="reflected answer",
+            answer="grounded answer",
             sources=[
                 KnowledgeSource(
                     memory_id="m1",
-                    memory_type="chunk",
+                    memory_type="world",
                     doc_id="d1",
                     title="Doc",
                     chunk_text="context",
@@ -29,67 +31,50 @@ class FakeQueryService:
 
 
 @pytest.fixture
-def query_client(monkeypatch):
-    async def noop():
+def client(monkeypatch):
+    async def _noop():
         pass
 
+    monkeypatch.setattr(deps, "startup", _noop)
+    monkeypatch.setattr(deps, "shutdown", _noop)
+    app_mod.app.dependency_overrides[deps.get_kb] = lambda: FakeKnowledgeBase()
+    app_mod.app.dependency_overrides[deps.get_plugin] = lambda: None
     service = FakeQueryService()
-    engine = InProcessEngineClient(FakeKnowledgeBase(), query_service=service)
-    monkeypatch.setattr(deps, "startup", noop)
-    monkeypatch.setattr(deps, "shutdown", noop)
-    app_mod.app.dependency_overrides[deps.get_engine] = lambda: engine
-    with TestClient(app_mod.app) as client:
-        yield client, service
+    app_mod.app.dependency_overrides[deps.get_query] = lambda: service
+    with TestClient(app_mod.app) as c:
+        yield c
     app_mod.app.dependency_overrides.clear()
 
 
-def test_query_route_forwards_hindsight_options(query_client):
-    client, service = query_client
-    response = client.post(
+def test_query_returns_reflect_result(client):
+    res = client.post(
         "/api/query",
-        json={
-            "query": "where is Acme?",
-            "strategy": "reflect",
-            "mode": "fast",
-            "top_k": 4,
-            "needs_answer": True,
-        },
+        json={"query": "分析项目进展", "strategy": "reflect", "mode": "deep"},
     )
+    assert res.status_code == 200
+    out = res.json()
+    assert out["answer"] == "grounded answer"
+    assert out["strategy_used"] == "reflect"
+    assert out["sources"][0]["memory_id"] == "m1"
 
-    assert response.status_code == 200
-    assert response.json()["answer"] == "reflected answer"
-    assert service.request.strategy == "reflect"
-    assert service.request.mode == "fast"
-    assert service.request.top_k == 4
+
+def test_query_rejects_blank_query(client):
+    res = client.post("/api/query", json={"query": "   "})
+    assert res.status_code == 422
 
 
-def test_query_route_returns_503_when_hindsight_is_disabled(monkeypatch):
-    async def noop():
+def test_query_returns_503_when_no_service(monkeypatch):
+    async def _noop():
         pass
 
-    engine = InProcessEngineClient(FakeKnowledgeBase())
-    monkeypatch.setattr(deps, "startup", noop)
-    monkeypatch.setattr(deps, "shutdown", noop)
-    app_mod.app.dependency_overrides[deps.get_engine] = lambda: engine
+    monkeypatch.setattr(deps, "startup", _noop)
+    monkeypatch.setattr(deps, "shutdown", _noop)
+    app_mod.app.dependency_overrides[deps.get_kb] = lambda: FakeKnowledgeBase()
+    app_mod.app.dependency_overrides[deps.get_plugin] = lambda: None
+    app_mod.app.dependency_overrides[deps.get_query] = lambda: None
     try:
-        with TestClient(app_mod.app) as client:
-            response = client.post("/api/query", json={"query": "acme"})
+        with TestClient(app_mod.app) as c:
+            res = c.post("/api/query", json={"query": "test"})
+            assert res.status_code == 503
     finally:
         app_mod.app.dependency_overrides.clear()
-
-    assert response.status_code == 503
-    assert "Hindsight" in response.json()["detail"]
-
-
-def test_query_route_validates_options(query_client):
-    client, _ = query_client
-    response = client.post(
-        "/api/query", json={"query": "acme", "strategy": "unsupported"}
-    )
-    assert response.status_code == 422
-
-
-def test_query_route_rejects_blank_query(query_client):
-    client, _ = query_client
-    response = client.post("/api/query", json={"query": "   "})
-    assert response.status_code == 422

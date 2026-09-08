@@ -1,0 +1,8 @@
+tools:
+  - { name: search,           params: { query: str, top_k: int } }
+  - { name: get_document,     params: { doc_id: str } }
+  - { name: query_graph,      params: { entity_name: str, include_neighbors: bool, hops: int } }
+  - { name: upload_document,  params: { file_name: str, content: str } }
+  - { name: list_documents,   params: { page: int, page_size: int, file_type: str, status: str } }
+  - { name: remove_document,  params: { doc_id: str, approved: bool } }
+  - { name: get_full_graph,   params: {} }

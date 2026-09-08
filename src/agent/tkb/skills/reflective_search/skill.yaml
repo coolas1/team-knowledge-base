@@ -1,0 +1,18 @@
+name: reflective_search
+description: Use Hindsight recall or reflect to query the knowledge base.
+inputs:
+  query:
+    type: string
+    required: true
+  strategy:
+    type: string
+    default: auto
+  mode:
+    type: string
+    default: deep
+  top_k:
+    type: integer
+    default: 10
+  needs_answer:
+    type: boolean
+    default: true

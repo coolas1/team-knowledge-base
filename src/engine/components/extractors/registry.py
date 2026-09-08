@@ -49,6 +49,7 @@ class ExtractorRegistry:
             ".md": "markdown",
             ".markdown": "markdown",
             ".txt": "markdown",
+            ".csv": "csv",
             ".pdf": "pdf",
             ".docx": "docx",
             ".pptx": "pptx",

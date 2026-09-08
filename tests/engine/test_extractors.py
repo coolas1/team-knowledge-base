@@ -21,6 +21,21 @@ def test_extract_txt_treated_as_markdown():
     assert "plain text file" in text
 
 
+def test_extract_csv_treated_as_text():
+    text = registry.extract(FIXTURES / "sample.csv")
+    assert "Alice,Engineer,Acme" in text
+
+
+def test_csv_uses_markdown_extractor():
+    from src.engine.components.extractors.markdown import MarkdownExtractor
+
+    assert isinstance(registry.get_extractor(Path("data.csv")), MarkdownExtractor)
+
+
+def test_guess_file_type_csv():
+    assert ExtractorRegistry.guess_file_type(Path("a.csv")) == "csv"
+
+
 def test_guess_file_type():
     assert ExtractorRegistry.guess_file_type(Path("a.md")) == "markdown"
     assert ExtractorRegistry.guess_file_type(Path("a.pdf")) == "pdf"

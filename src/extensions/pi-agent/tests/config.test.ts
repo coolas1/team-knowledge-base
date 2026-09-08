@@ -106,24 +106,21 @@ describe("loadPiAgentConfig", () => {
 
   it("inherits the configured shared LLM when Pi has no model override", () => {
     const config = loadPiAgentConfig({
-      LLM_PROVIDER: "custom",
       LLM_MODEL: "configured-model",
       LLM_BASE_URL: "https://llm.example/v1",
       LLM_API_KEY: "shared-secret",
     });
 
-    expect(config.provider).toBe("custom");
+    expect(config.provider).toBe("openai");
     expect(config.model).toBe("configured-model");
     expect(config.modelName).toBe("configured-model");
     expect(config.modelBaseUrl).toBe("https://llm.example/v1");
     expect(config.modelApiKey).toBe("shared-secret");
   });
 
-  it("does not inherit a disabled shared LLM", () => {
+  it("does not inherit a shared LLM without LLM_BASE_URL", () => {
     const config = loadPiAgentConfig({
-      LLM_PROVIDER: "todo",
       LLM_MODEL: "placeholder",
-      LLM_BASE_URL: "https://example.invalid/v1",
     });
 
     expect(config.provider).toBe("ollama");
@@ -151,5 +148,14 @@ describe("loadPiAgentConfig", () => {
       /TKB_DEEP_TOOL_TIMEOUT_MS.*PI_AGENT_TURN_RESERVE_SECONDS.*PI_AGENT_MAX_RUN_SECONDS/,
     );
     expect(() => new PiAgentRuntime(agent, adapter)).toThrow(/Invalid timeout hierarchy/);
+  });
+
+  it("ignores a stale LLM_PROVIDER without LLM_BASE_URL", () => {
+    const config = loadPiAgentConfig({
+      LLM_PROVIDER: "custom",
+    });
+
+    expect(config.provider).toBe("ollama");
+    expect(config.modelBaseUrl).toBe("http://localhost:11434/v1");
   });
 });

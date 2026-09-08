@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import pytest
-
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.retain import RetainEngine
 from src.engine.hindsight_components.types import RetainInput
 
-from .fakes import FakeProviders, FakeRepository
+from src.engine.hindsight_components.tests.fakes import FakeProviders, FakeRepository
 
 
 async def test_retain_builds_atomic_memories_observation_and_links() -> None:
@@ -38,18 +36,30 @@ async def test_retain_builds_atomic_memories_observation_and_links() -> None:
     )
 
 
-async def test_retain_rejects_empty_content() -> None:
-    engine = RetainEngine(FakeRepository(), FakeProviders(), HindsightOptions())
+async def test_retain_skips_empty_content_without_raising() -> None:
+    # Image-only docs (OCR returns no text) legitimately have nothing to
+    # remember: persist an empty plan so the document reaches the "indexed"
+    # terminal state with zero memories instead of erroring.
+    repository = FakeRepository()
+    engine = RetainEngine(repository, FakeProviders(), HindsightOptions())
 
-    with pytest.raises(ValueError, match="empty"):
-        await engine.retain(
-            RetainInput(
-                document_id="document-1",
-                title="empty.md",
-                content="  ",
-                file_type="markdown",
-            )
+    result = await engine.retain(
+        RetainInput(
+            document_id="document-1",
+            title="photo.png",
+            content="   ",
+            file_type="image",
         )
+    )
+
+    assert result.chunks == 0
+    assert result.facts == 0
+    assert result.observations == 0
+    assert result.memories == 0
+    assert result.links == 0
+    assert repository.plan is not None
+    assert repository.plan.memories == []
+    assert repository.plan.links == []
 
 
 async def test_conversation_retain_preserves_context_tags_and_provenance() -> None:

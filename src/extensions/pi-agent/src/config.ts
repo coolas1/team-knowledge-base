@@ -1,3 +1,5 @@
+import path from "node:path";
+
 export interface TkbAdapterConfig {
   mcpUrl: string;
   connectTimeoutMs: number;
@@ -142,13 +144,11 @@ export function loadPiAgentConfig(
   if (path.resolve(sessionDir) === path.resolve(transcriptDir)) {
     throw new Error("PI_AGENT_TRANSCRIPT_DIR must differ from PI_AGENT_SESSION_DIR");
   }
-  const sharedProvider = env.LLM_PROVIDER?.trim();
-  const inheritSharedModel =
-    Boolean(sharedProvider) &&
-    !["none", "todo", "disabled"].includes(sharedProvider!.toLowerCase());
+  const sharedBaseUrl = env.LLM_BASE_URL?.trim();
+  const inheritSharedModel = Boolean(sharedBaseUrl);
   const provider =
     env.PI_AGENT_PROVIDER?.trim() ||
-    (inheritSharedModel ? sharedProvider : undefined) ||
+    (inheritSharedModel ? "openai" : undefined) ||
     "ollama";
   const isOllama = provider.toLowerCase() === "ollama";
   const model =
@@ -178,7 +178,7 @@ export function loadPiAgentConfig(
     ),
     modelBaseUrl:
       env.PI_AGENT_BASE_URL?.trim() ||
-      (inheritSharedModel ? env.LLM_BASE_URL?.trim() : undefined) ||
+      (inheritSharedModel ? sharedBaseUrl : undefined) ||
       "http://localhost:11434/v1",
     modelApiKey:
       env.PI_AGENT_API_KEY?.trim() ||
@@ -215,4 +215,3 @@ export function validateDeadlineHierarchy(
     );
   }
 }
-import path from "node:path";

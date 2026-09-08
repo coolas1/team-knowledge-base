@@ -1,5 +1,14 @@
 const BASE = '/api'
 
+export interface PipelineProgress {
+  stage: string
+  detail: string
+  current: number
+  total: number
+  started_at: number  // epoch seconds
+  updated_at: number
+}
+
 export interface Document {
   id: string
   title: string
@@ -15,6 +24,7 @@ export interface Document {
   memory_count?: number
   memory_link_count?: number
   chunk_count?: number
+  pipeline?: PipelineProgress
   created_at?: string
   updated_at?: string
 }
@@ -24,6 +34,24 @@ export interface DocumentList {
   page: number
   page_size: number
   items: Document[]
+}
+
+export interface BatchUploadError {
+  code: string
+  message: string
+  suggestion: string
+  retryable: boolean
+  filename?: string
+}
+
+export interface BatchUploadItem {
+  ok: boolean
+  document?: Document
+  error?: BatchUploadError
+}
+
+export interface BatchUploadResult {
+  items: BatchUploadItem[]
 }
 
 export interface GraphNode {
@@ -207,6 +235,26 @@ export const api = {
     form.append('file', file)
     try {
       return await request<Document>('/documents/upload', { method: 'POST', body: form })
+    } catch (error) {
+      if (error instanceof ApiError) throw error
+      throw new ApiError(
+        '无法连接上传服务',
+        0,
+        'network_error',
+        '请检查网络或服务状态，恢复后可直接重试。',
+        true,
+      )
+    }
+  },
+
+  async uploadFiles(files: File[]) {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    try {
+      return await request<BatchUploadResult>('/documents/upload/batch', {
+        method: 'POST',
+        body: form,
+      })
     } catch (error) {
       if (error instanceof ApiError) throw error
       throw new ApiError(

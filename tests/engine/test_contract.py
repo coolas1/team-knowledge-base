@@ -63,3 +63,17 @@ async def test_remove_is_idempotent(name, factory):
     kb = factory()
     # removing a non-existent id must not raise
     await kb.remove("00000000-0000-0000-0000-000000000000")
+
+
+@pytest.mark.parametrize("name,factory", BACKENDS)
+async def test_ingest_batch_returns_ref_per_source(name, factory):
+    kb = factory()
+    refs = await kb.ingest_batch(
+        [
+            IngestSource(name="a.md", data=b"# A"),
+            IngestSource(name="b.md", data=b"# B"),
+        ]
+    )
+    assert len(refs) == 2
+    assert {r.title for r in refs} == {"a.md", "b.md"}
+    assert all(r.id for r in refs)

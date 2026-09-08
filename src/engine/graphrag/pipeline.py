@@ -1,7 +1,8 @@
-"""文件入库 Pipeline：提取 → 分块 → LLM 分析 → Embedding → 写入存储。"""
+"""文件入库 Pipeline：提取 -> 分块 -> LLM 分析 -> Embedding -> 写入存储。"""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from pathlib import Path
@@ -17,13 +18,25 @@ from src.engine.components.store.neo4j import (
     RelationData,
 )
 from src.engine.components.store.postgres import async_session_factory
-from src.engine.components.analyzer import Analyzer, ChunkAnalysisResult
+from src.engine.components.analyzer import (
+    Analyzer,
+    AnalysisResult,
+    ChunkAnalysisResult,
+)
 from src.engine.components.chunker import chunk_text
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
+from src.engine.graphrag.progress import clear_progress, set_progress
 from src.engine.interface import DocumentIndexHook
 
 logger = logging.getLogger(__name__)
+
+
+def _unwrap_exception_group(exc: BaseException) -> BaseException:
+    """TaskGroup 会把单异常包成 ExceptionGroup，展开便于 error_msg 可读。"""
+    if isinstance(exc, ExceptionGroup) and len(exc.exceptions) == 1:
+        return exc.exceptions[0]
+    return exc
 
 
 class Pipeline:
@@ -34,10 +47,66 @@ class Pipeline:
         neo4j: Neo4jClient,
         analyzer: Analyzer | None = None,
         index_hook: DocumentIndexHook | None = None,
+        chunk_concurrency: int = 4,
+        doc_concurrency: int = 2,
     ) -> None:
         self._neo4j = neo4j
         self._analyzer = analyzer or Analyzer()
         self._index_hook = index_hook
+        self._chunk_sem = asyncio.Semaphore(max(1, chunk_concurrency))
+        self._doc_sem = asyncio.Semaphore(max(1, doc_concurrency))
+
+    async def _analyze_document(
+        self, raw_text: str, title: str, doc_id: UUID
+    ) -> tuple[
+        AnalysisResult, list, list[ChunkAnalysisResult], list[list[float]]
+    ]:
+        """分块后并行执行：overview ∥ 逐 chunk 分析（信号量限流）∥ embedding。
+
+        返回 (doc_analysis, chunks, chunk_analyses, embeddings)；
+        chunk_analyses 按 chunk 顺序排列，写入顺序确定。
+        """
+        chunks = await asyncio.to_thread(chunk_text, raw_text)
+        total = len(chunks)
+        results: list[ChunkAnalysisResult | None] = [None] * total
+        completed = 0
+        set_progress(str(doc_id), "analyzing_chunks", f"分析实体 0/{total}", 0, total)
+
+        async def analyze_one(index: int, text: str) -> None:
+            nonlocal completed
+            async with self._chunk_sem:
+                ca = await self._analyzer.analyze_chunk(text, title, index)
+            results[index] = ca
+            completed += 1
+            set_progress(
+                str(doc_id),
+                "analyzing_chunks",
+                f"分析实体 {completed}/{total}",
+                completed,
+                total,
+            )
+
+        async def _no_embeddings() -> list[list[float]]:
+            return []
+
+        async with asyncio.TaskGroup() as tg:
+            overview_task = tg.create_task(
+                self._analyzer.analyze_overview(raw_text, title)
+            )
+            embed_task = tg.create_task(
+                embedder.embed_batch([c.text for c in chunks])
+                if chunks
+                else _no_embeddings()
+            )
+            for i, chunk in enumerate(chunks):
+                tg.create_task(analyze_one(i, chunk.text))
+
+        return (
+            overview_task.result(),
+            chunks,
+            [ca for ca in results if ca is not None],
+            embed_task.result(),
+        )
 
     async def process_file(
         self,
@@ -46,9 +115,10 @@ class Pipeline:
         title: str,
         file_type: str,
     ) -> None:
-        """处理新上传的文件：提取 → 分块 → 分析 → embedding → 写入。
+        """处理新上传的文件：提取 -> 分块 -> 分析 -> embedding -> 写入。
 
         幂等性：通过 content_hash (SHA256) 判断，内容未变则跳过。
+        doc 信号量限制并发处理的文档数；分析阶段内部并行（chunk 信号量限流）。
         """
         async with async_session_factory() as session:
             # 1. 读取文件并计算 hash
@@ -69,99 +139,120 @@ class Pipeline:
             )
             await session.commit()
 
-            try:
-                # 3. 文本提取
-                raw_text = registry.extract(file_path)
+        try:
+            # 3. 提取 + 并行分析（doc 信号量限制并发文档数）
+            set_progress(str(doc_id), "extracting", "提取文本")
+            async with self._doc_sem:
+                raw_text = await asyncio.to_thread(registry.extract, file_path)
                 logger.info(f"文档 {doc_id} 提取完成, {len(raw_text)} 字符")
+                (
+                    doc_analysis,
+                    chunks,
+                    chunk_analyses,
+                    embeddings,
+                ) = await self._analyze_document(raw_text, title, doc_id)
+            logger.info(
+                f"文档 {doc_id} 分析完成: {len(chunks)} chunks, "
+                f"{len(doc_analysis.file_relations)} file_relations"
+            )
 
-                # 4. 文本分块（先分块再分析）
-                chunks = chunk_text(raw_text)
-                logger.info(f"文档 {doc_id} 分块完成: {len(chunks)} chunks")
-
-                # 5. 文档级 overview + file_relations
-                doc_analysis = await self._analyzer.analyze_overview(raw_text, title)
-                logger.info(
-                    f"文档 {doc_id} overview 生成完成, "
-                    f"{len(doc_analysis.file_relations)} file_relations"
+            # 4. 写入 Postgres
+            async with async_session_factory() as session:
+                await self._persist_chunks(
+                    session,
+                    doc_id=doc_id,
+                    title=title,
+                    raw_text=raw_text,
+                    content_hash=content_hash,
+                    overview=doc_analysis.overview,
+                    chunks=chunks,
+                    embeddings=embeddings,
                 )
 
-                # 6. 逐 Chunk LLM 分析
-                chunk_analyses: list[ChunkAnalysisResult] = []
-                for chunk in chunks:
-                    ca = await self._analyzer.analyze_chunk(
-                        chunk.text, title, chunk.index
-                    )
-                    chunk_analyses.append(ca)
-                    logger.info(
-                        f"文档 {doc_id} chunk[{chunk.index}]: "
-                        f"{len(ca.entities)} 实体, {len(ca.relations)} 关系"
-                    )
-
-                # 7. Embedding
-                if chunks:
-                    texts = [c.text for c in chunks]
-                    embeddings = await embedder.embed_batch(texts)
-                else:
-                    embeddings = []
-
-                # 8. 写入 Postgres（overview 使用 doc_analysis.overview）
-                await session.execute(
-                    Chunk.__table__.delete().where(Chunk.doc_id == doc_id)  # type: ignore[union-attr]
-                )
-
-                doc_uri = f"{doc_id}:{title}"
-                for chunk, embedding in zip(chunks, embeddings):
-                    db_chunk = Chunk(
-                        doc_id=doc_id,
-                        chunk_index=chunk.index,
-                        chunk_text=chunk.text,
-                        embedding=embedding,
-                        overview=doc_analysis.overview,
-                        doc_uri=doc_uri,
-                        token_count=chunk.token_count,
-                    )
-                    session.add(db_chunk)
-
-                await session.execute(
-                    update(Document)
-                    .where(Document.id == doc_id)
-                    .values(
-                        raw_text=raw_text,
-                        overview=doc_analysis.overview,
-                        content_hash=content_hash,
-                        status="indexed",
-                        error_msg=None,
-                    )
-                )
-                await session.commit()
-                logger.info(f"文档 {doc_id} Postgres 写入完成")
-
-                # 9. 写入 Neo4j（三层图谱）
-                await self._write_graph(
+            # 5. 写入 Neo4j（三层图谱）
+            async with async_session_factory() as session:
+                set_progress(str(doc_id), "writing_neo4j", "写入知识图谱")
+                await self._neo4j.upsert_document_node(
                     doc_id=str(doc_id),
                     title=title,
                     file_type=file_type,
                     overview=doc_analysis.overview,
-                    chunk_analyses=chunk_analyses,
-                    file_relations=doc_analysis.file_relations,
-                    session=session,
                 )
-                await self._notify_indexed(
-                    document_id=str(doc_id),
-                    title=title,
-                    content=raw_text,
-                    file_type=file_type,
-                )
-                logger.info(f"文档 {doc_id} Pipeline 完成 ✓")
+                await self._write_chunk_graph(str(doc_id), title, chunk_analyses)
+                if doc_analysis.file_relations:
+                    await self._write_file_relations(
+                        str(doc_id), doc_analysis.file_relations, session
+                    )
+            await self._notify_indexed(
+                document_id=str(doc_id),
+                title=title,
+                content=raw_text,
+                file_type=file_type,
+            )
+            clear_progress(str(doc_id))
+            logger.info(f"文档 {doc_id} Pipeline 完成 ✓")
 
-            except Exception as e:
-                logger.error(f"文档 {doc_id} Pipeline 失败: {e}", exc_info=True)
-                await session.execute(
-                    update(Document)
-                    .where(Document.id == doc_id)
-                    .values(status="failed", error_msg=str(e))
+        except Exception as e:
+            await self._mark_failed(doc_id, e, "Pipeline")
+
+    async def _persist_chunks(
+        self,
+        session,
+        *,
+        doc_id: UUID,
+        title: str,
+        raw_text: str,
+        content_hash: str,
+        overview: str,
+        chunks: list,
+        embeddings: list[list[float]],
+    ) -> None:
+        """chunk 行写入 + 文档状态更新为 indexed（两条入库路径共用）。"""
+        set_progress(str(doc_id), "writing_postgres", "写入数据库")
+        await session.execute(
+            Chunk.__table__.delete().where(Chunk.doc_id == doc_id)  # type: ignore[union-attr]
+        )
+
+        doc_uri = f"{doc_id}:{title}"
+        for chunk, embedding in zip(chunks, embeddings):
+            session.add(
+                Chunk(
+                    doc_id=doc_id,
+                    chunk_index=chunk.index,
+                    chunk_text=chunk.text,
+                    embedding=embedding,
+                    overview=overview,
+                    doc_uri=doc_uri,
+                    token_count=chunk.token_count,
                 )
-                await session.commit()
+            )
+
+        await session.execute(
+            update(Document)
+            .where(Document.id == doc_id)
+            .values(
+                raw_text=raw_text,
+                overview=overview,
+                content_hash=content_hash,
+                status="indexed",
+                error_msg=None,
+            )
+        )
+        await session.commit()
+        logger.info(f"文档 {doc_id} Postgres 写入完成")
+
+    async def _mark_failed(self, doc_id: UUID, exc: Exception, stage: str) -> None:
+        """失败收尾：清进度 + 状态置为 failed。"""
+        clear_progress(str(doc_id))
+        unwrapped = _unwrap_exception_group(exc)
+        logger.error(f"文档 {doc_id} {stage} 失败: {unwrapped}", exc_info=True)
+        async with async_session_factory() as session:
+            await session.execute(
+                update(Document)
+                .where(Document.id == doc_id)
+                .values(status="failed", error_msg=str(unwrapped))
+            )
+            await session.commit()
 
     async def reindex_document(self, doc_id: UUID, new_text: str) -> None:
         """编辑后重新索引：跳过文本提取，直接从文本开始分析。"""
@@ -171,6 +262,7 @@ class Pipeline:
                 raise ValueError(f"文档不存在: {doc_id}")
 
             title = doc.title
+            file_type = doc.file_type
             content_hash = hashlib.sha256(new_text.encode()).hexdigest()
 
             await session.execute(
@@ -180,111 +272,57 @@ class Pipeline:
             )
             await session.commit()
 
-            try:
-                # 重新分块 + 逐 chunk 分析
-                chunks = chunk_text(new_text)
-                chunk_analyses: list[ChunkAnalysisResult] = []
-                for chunk in chunks:
-                    ca = await self._analyzer.analyze_chunk(
-                        chunk.text, title, chunk.index
-                    )
-                    chunk_analyses.append(ca)
+        try:
+            # 并行分析（doc 信号量限制并发文档数）
+            async with self._doc_sem:
+                (
+                    doc_analysis,
+                    chunks,
+                    chunk_analyses,
+                    embeddings,
+                ) = await self._analyze_document(new_text, title, doc_id)
 
-                if chunks:
-                    texts = [c.text for c in chunks]
-                    embeddings = await embedder.embed_batch(texts)
-                else:
-                    embeddings = []
-
-                await session.execute(
-                    Chunk.__table__.delete().where(Chunk.doc_id == doc_id)  # type: ignore[union-attr]
+            async with async_session_factory() as session:
+                await self._persist_chunks(
+                    session,
+                    doc_id=doc_id,
+                    title=title,
+                    raw_text=new_text,
+                    content_hash=content_hash,
+                    overview=doc_analysis.overview,
+                    chunks=chunks,
+                    embeddings=embeddings,
                 )
-
-                # 更新 overview
-                doc_analysis = await self._analyzer.analyze_overview(new_text, title)
-
-                doc_uri = f"{doc_id}:{title}"
-                for chunk, embedding in zip(chunks, embeddings):
-                    db_chunk = Chunk(
-                        doc_id=doc_id,
-                        chunk_index=chunk.index,
-                        chunk_text=chunk.text,
-                        embedding=embedding,
-                        overview=doc_analysis.overview,
-                        doc_uri=doc_uri,
-                        token_count=chunk.token_count,
-                    )
-                    session.add(db_chunk)
-
-                await session.execute(
-                    update(Document)
-                    .where(Document.id == doc_id)
-                    .values(
-                        raw_text=new_text,
-                        overview=doc_analysis.overview,
-                        content_hash=content_hash,
-                        status="indexed",
-                        error_msg=None,
-                    )
-                )
-                await session.commit()
 
                 # 更新 Neo4j（先清理旧图谱数据，防止过时实体残留）
+                set_progress(str(doc_id), "writing_neo4j", "写入知识图谱")
                 await self._neo4j.delete_document_graph(str(doc_id))
                 await self._neo4j.upsert_document_node(
                     doc_id=str(doc_id),
                     title=title,
-                    file_type=doc.file_type,
+                    file_type=file_type,
                     overview=doc_analysis.overview,
                 )
-                # 写入 chunk 级实体和关系
-                for ca in chunk_analyses:
-                    source = EntitySource(
-                        doc_id=str(doc_id), chunk_index=ca.chunk_index, doc_title=title
-                    )
-                    for entity in ca.entities:
-                        await self._neo4j.upsert_entity(
-                            entity=EntityData(
-                                name=entity.name,
-                                entity_type=entity.type,
-                                description=entity.description,
-                            ),
-                            source=source,
-                        )
-                    for relation in ca.relations:
-                        await self._neo4j.upsert_relation(
-                            relation=RelationData(
-                                from_name=relation.from_name,
-                                to_name=relation.to_name,
-                                relation_type=relation.type,
-                                description=relation.description,
-                            ),
-                            source=source,
-                        )
+                await self._write_chunk_graph(str(doc_id), title, chunk_analyses)
 
-                # L3: file_relations → Document↔Document 边
+                # L3: file_relations -> Document↔Document 边
                 if doc_analysis.file_relations:
                     await self._write_file_relations(
                         str(doc_id), doc_analysis.file_relations, session
                     )
 
-                await self._notify_indexed(
-                    document_id=str(doc_id),
-                    title=title,
-                    content=new_text,
-                    file_type=doc.file_type,
-                )
+            await self._notify_indexed(
+                document_id=str(doc_id),
+                title=title,
+                content=new_text,
+                file_type=file_type,
+            )
+            clear_progress(str(doc_id))
 
-                logger.info(f"文档 {doc_id} re-index 完成 ✓")
+            logger.info(f"文档 {doc_id} re-index 完成 ✓")
 
-            except Exception as e:
-                logger.error(f"文档 {doc_id} re-index 失败: {e}", exc_info=True)
-                await session.execute(
-                    update(Document)
-                    .where(Document.id == doc_id)
-                    .values(status="failed", error_msg=str(e))
-                )
-                await session.commit()
+        except Exception as e:
+            await self._mark_failed(doc_id, e, "re-index")
 
     async def _notify_indexed(
         self,
@@ -316,54 +354,44 @@ class Pipeline:
             # Document FK cascade remains the final cleanup guarantee.
             logger.exception("文档 %s 的附加索引清理钩子失败", document_id)
 
-    async def _write_graph(
+    async def _write_chunk_graph(
         self,
         doc_id: str,
         title: str,
-        file_type: str,
-        overview: str,
         chunk_analyses: list[ChunkAnalysisResult],
-        file_relations: list,
-        session,
     ) -> None:
-        """三层图谱写入：L1 chunk 级 + L2 文档内聚合 + L3 跨文档关联。"""
-        # Document 节点（仅元数据）
-        await self._neo4j.upsert_document_node(
-            doc_id=doc_id, title=title, file_type=file_type, overview=overview
-        )
-
-        # L1+L2: 逐 chunk 写入实体和关系（MERGE 自然聚合）
+        """L1+L2: 扁平化 chunk 分析结果，批量写入实体和关系（MERGE 自然聚合）。"""
+        entity_items: list[tuple[EntityData, EntitySource]] = []
+        relation_items: list[tuple[RelationData, EntitySource]] = []
         for ca in chunk_analyses:
             source = EntitySource(
                 doc_id=doc_id, chunk_index=ca.chunk_index, doc_title=title
             )
-
-            # 实体节点
-            for entity in ca.entities:
-                await self._neo4j.upsert_entity(
-                    entity=EntityData(
+            entity_items.extend(
+                (
+                    EntityData(
                         name=entity.name,
                         entity_type=entity.type,
                         description=entity.description,
                     ),
-                    source=source,
+                    source,
                 )
-
-            # 关系边
-            for relation in ca.relations:
-                await self._neo4j.upsert_relation(
-                    relation=RelationData(
+                for entity in ca.entities
+            )
+            relation_items.extend(
+                (
+                    RelationData(
                         from_name=relation.from_name,
                         to_name=relation.to_name,
                         relation_type=relation.type,
                         description=relation.description,
                     ),
-                    source=source,
+                    source,
                 )
-
-        # L3: file_relations → Document↔Document 边
-        if file_relations:
-            await self._write_file_relations(doc_id, file_relations, session)
+                for relation in ca.relations
+            )
+        await self._neo4j.upsert_entities_batch(entity_items)
+        await self._neo4j.upsert_relations_batch(relation_items)
 
     async def _write_file_relations(
         self, doc_id: str, file_relations: list, session

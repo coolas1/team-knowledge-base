@@ -59,3 +59,29 @@ def test_cli_remove(capsys, monkeypatch):
     rc = cli_mod.main(["remove", "--doc-id", "abc"])
     assert rc == 0
     assert capsys.readouterr().out.strip() == '{"removed": "abc"}'
+
+
+def test_cli_ingest_batch_prints_terminal_statuses(capsys, monkeypatch, tmp_path):
+    fake = FakeKnowledgeBase()
+    _install_fake(monkeypatch, fake)
+    p1 = tmp_path / "a.md"
+    p1.write_text("# A", encoding="utf-8")
+    p2 = tmp_path / "b.md"
+    p2.write_text("# B", encoding="utf-8")
+
+    rc = cli_mod.main(["ingest-batch", "--files", str(p1), str(p2)])
+
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert [r["title"] for r in out] == ["a.md", "b.md"]
+    assert all(r["status"] == "indexed" for r in out)
+
+
+def test_cli_ingest_batch_missing_file_fails(capsys, monkeypatch, tmp_path):
+    fake = FakeKnowledgeBase()
+    _install_fake(monkeypatch, fake)
+
+    rc = cli_mod.main(["ingest-batch", "--files", str(tmp_path / "nope.md")])
+
+    assert rc == 1
+    assert "nope.md" in capsys.readouterr().err

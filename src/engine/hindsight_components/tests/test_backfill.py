@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
 import pytest
 
 from src.engine.hindsight_components.backfill import (
     BackfillCandidate,
+    HttpCandidateSource,
     run_backfill,
 )
 from src.engine.hindsight_components.types import RetainResult
@@ -126,3 +128,48 @@ async def test_backfill_rejects_invalid_concurrency():
         await run_backfill(
             FakeSource([]), FakeService(), FakeStateStore(), concurrency=0
         )
+
+
+# -- HttpCandidateSource tests -----------------------------------------------
+
+
+async def test_http_candidate_source_lists_candidates():
+    def handler(request):
+        assert request.url.path == "/api/engine/hindsight/backfill/candidates"
+        assert request.url.params.get("force") == "true"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "document_id": "d1",
+                    "title": "t.md",
+                    "content": "text",
+                    "file_type": "markdown",
+                    "hindsight_status": None,
+                }
+            ],
+        )
+
+    transport = httpx.MockTransport(handler)
+    source = HttpCandidateSource("http://engine")
+    source._client = httpx.AsyncClient(transport=transport, base_url="http://engine")
+
+    candidates = await source.list_candidates(force=True)
+    assert len(candidates) == 1
+    assert candidates[0].document_id == "d1"
+    assert candidates[0].content == "text"
+    await source._client.aclose()
+
+
+async def test_http_candidate_source_with_document_id():
+    def handler(request):
+        assert request.url.params.get("document_id") == "d1"
+        return httpx.Response(200, json=[])
+
+    transport = httpx.MockTransport(handler)
+    source = HttpCandidateSource("http://engine")
+    source._client = httpx.AsyncClient(transport=transport, base_url="http://engine")
+
+    candidates = await source.list_candidates(document_id="d1")
+    assert candidates == []
+    await source._client.aclose()

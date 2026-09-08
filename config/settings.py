@@ -4,6 +4,66 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class LLMSettings(BaseSettings):
+    """Chat/analysis LLM — any OpenAI-compatible /chat/completions API.
+
+    Empty base_url disables the LLM (Analyzer degrades to placeholders;
+    Hindsight raises). Enabled with an empty model is a config error.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_prefix="LLM_", extra="ignore"
+    )
+
+    base_url: str = ""
+    model: str = ""
+    api_key: str = ""
+
+    @property
+    def enabled(self) -> bool:
+        """True when an OpenAI-compatible endpoint is configured."""
+        return bool(self.base_url)
+
+    def require_model(self) -> str:
+        """Model name, or a clear error when enabled without a model."""
+        if not self.model:
+            raise ValueError(
+                "LLM_BASE_URL is set but LLM_MODEL is empty; "
+                "configure LLM_MODEL or clear LLM_BASE_URL to disable the LLM"
+            )
+        return self.model
+
+
+class EmbeddingSettings(BaseSettings):
+    """Embeddings — any OpenAI-compatible /v1/embeddings API.
+
+    No off switch: embeddings are load-bearing for search. The stored
+    vector width is fixed at 768 (EMBEDDING_DIM in store/models.py); the
+    Embedder fails fast if the model returns another width.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_prefix="EMBEDDING_", extra="ignore"
+    )
+
+    base_url: str = "http://localhost:11434/v1"
+    model: str = "nomic-embed-text"
+    api_key: str = ""
+
+
+class RerankerSettings(BaseSettings):
+    """Reranker — provider: none | http | local (see components/reranker.py)."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_prefix="RERANKER_", extra="ignore"
+    )
+
+    provider: str = "none"
+    base_url: str = ""
+    model: str = "BAAI/bge-reranker-v2-m3"
+    api_key: str = ""
+
+
 class InfraSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -17,26 +77,9 @@ class InfraSettings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = "neo4j"
 
-    ollama_base_url: str = "http://localhost:11434"
-
-    # Chat/analysis LLM (OpenAI-compatible or Ollama). provider="todo" disables it.
-    llm_provider: str = "todo"
-    llm_model: str = "gpt-4o-mini"
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_api_key: str = ""
-
-    # Reranker (search gatekeeper). provider: local|http|none.
-    #   local = CrossEncoder (needs the `reranker` extra / torch);
-    #   http  = external /v1/rerank API (Cohere/Jina/OpenAI-compatible);
-    #   none  = disabled (vector-only ranking, no torch).
-    reranker_provider: str = "none"
-    reranker_model: str = "BAAI/bge-reranker-v2-m3"
-    reranker_base_url: str = ""
-    reranker_api_key: str = ""
-
-    # Disposable Neo4j projection worker. It remains opt-in so PostgreSQL-only
-    # Hindsight deployments keep their current runtime behaviour.
-    hindsight_graph_worker_enabled: bool = False
+    # Disposable Neo4j projection worker. Kill switch for deployments without
+    # Neo4j; the primary control is the engine.memory.graph_worker app flag.
+    hindsight_graph_worker_enabled: bool = True
     hindsight_graph_worker_poll_seconds: float = Field(default=1.0, gt=0)
     hindsight_graph_worker_lease_seconds: int = Field(default=300, ge=1)
     hindsight_graph_worker_max_attempts: int = Field(default=10, ge=1)
@@ -76,6 +119,17 @@ class InfraSettings(BaseSettings):
 
     app_host: str = "0.0.0.0"
     app_port: int = 8000
+
+    # Uploaded document originals. The relative default keeps dev-checkout
+    # behavior; the compose deployment sets the absolute volume mount
+    # (/app/uploads) so uploads survive container recreation.
+    uploads_dir: str = "uploads"
+
+    # Model config groups (OpenAI-compatible endpoints). Sub-models each
+    # read their own env prefix from .env; see the classes above.
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+    embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
+    reranker: RerankerSettings = Field(default_factory=RerankerSettings)
 
     @property
     def postgres_dsn(self) -> str:

@@ -12,21 +12,17 @@ from src.engine.interface import (
     KnowledgeSource,
 )
 
-from .config import HindsightOptions
-from .providers import ProjectHindsightProviders
-from .repository import PostgresMemoryRepository
-from .service import HindsightService
-from .types import RecallCandidate, RecallResult, ReflectResult
+from src.engine.hindsight_components.config import HindsightOptions
+from src.engine.hindsight_components.providers import ProjectHindsightProviders
+from src.engine.hindsight_components.protocols import MemoryRepository
+from src.engine.hindsight_components.repository import PostgresMemoryRepository
+from src.engine.hindsight_components.service import HindsightService
+from src.engine.hindsight_components.types import RecallCandidate, RecallResult, ReflectResult
 
 
 class CoreQueryService(Protocol):
     async def recall(
-        self,
-        query: str,
-        *,
-        mode: str = "deep",
-        top_k: int | None = None,
-        search_id: str | None = None,
+        self, query: str, *, mode: str = "deep", top_k: int | None = None
     ) -> RecallResult: ...
 
     async def reflect(
@@ -48,13 +44,9 @@ class HindsightQueryService:
         self._validate(request)
         strategy = self._resolve_strategy(request)
         if strategy == "recall":
-            recall_kwargs = {
-                "mode": request.mode,
-                "top_k": request.top_k,
-            }
-            if request.correlation_id is not None:
-                recall_kwargs["search_id"] = request.correlation_id
-            recalled = await self._core.recall(request.query, **recall_kwargs)
+            recalled = await self._core.recall(
+                request.query, mode=request.mode, top_k=request.top_k
+            )
             grouped: defaultdict[str, list[dict]] = defaultdict(list)
             for item in recalled.results:
                 grouped[item.memory_type].append(item.as_evidence())
@@ -171,10 +163,13 @@ class HindsightQueryService:
         return sources
 
 
-def build_query_service() -> HindsightQueryService:
+def build_query_service(
+    *,
+    repository: MemoryRepository | None = None,
+) -> HindsightQueryService:
     from config.settings import settings
 
-    repository = PostgresMemoryRepository(
+    repository = repository or PostgresMemoryRepository(
         keyword_index_enabled=settings.hindsight_keyword_index_enabled,
         keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
     )

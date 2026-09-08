@@ -7,9 +7,9 @@ from uuid import uuid4
 
 from src.engine.components.chunker import Chunk, chunk_text
 
-from .config import HindsightOptions
-from .protocols import HindsightProviders, MemoryRepository
-from .types import (
+from src.engine.hindsight_components.config import HindsightOptions
+from src.engine.hindsight_components.protocols import HindsightProviders, MemoryRepository
+from src.engine.hindsight_components.types import (
     ExtractedFact,
     MemoryDraft,
     MemoryLinkDraft,
@@ -17,7 +17,7 @@ from .types import (
     RetainPlan,
     RetainResult,
 )
-from .utils import cosine, normalize_entity, parse_datetime, valid_indexes
+from src.engine.hindsight_components.utils import cosine, normalize_entity, parse_datetime, valid_indexes
 
 
 class RetainEngine:
@@ -38,7 +38,27 @@ class RetainEngine:
             overlap=self._options.chunk_overlap_tokens,
         )
         if not chunks:
-            raise ValueError("cannot retain empty content")
+            # No extractable text (e.g. an image-only document whose OCR found
+            # nothing). Persist an empty plan so the document reaches the
+            # "indexed" terminal state with zero memories instead of erroring.
+            await self._repository.replace_document(
+                RetainPlan(
+                    document_id=retain_input.document_id,
+                    title=retain_input.title,
+                    file_type=retain_input.file_type,
+                    source_type=retain_input.source_type,
+                    memories=[],
+                    links=[],
+                )
+            )
+            return RetainResult(
+                document_id=retain_input.document_id,
+                chunks=0,
+                facts=0,
+                observations=0,
+                memories=0,
+                links=0,
+            )
 
         facts_by_chunk = await self._extract_facts(retain_input, chunks)
         facts = [fact for group in facts_by_chunk for fact in group]

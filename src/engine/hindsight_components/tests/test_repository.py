@@ -183,6 +183,37 @@ async def test_indexed_keyword_search_limits_materialized_candidates() -> None:
     assert session.params["keyword_query_tokens"] == ["tkb", "知识", "识库"]
 
 
+def test_candidate_coerces_numpy_embedding_to_native_floats() -> None:
+    # pgvector returns embeddings as numpy arrays; list(arr) keeps numpy.float32
+    # scalars, which FastAPI's jsonable_encoder cannot serialize (HTTP 500 on
+    # every memory search endpoint).
+    import numpy as np
+
+    unit = SimpleNamespace(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        text="atomic fact",
+        source_text="source chunk",
+        chunk_index=0,
+        memory_type="world",
+        context="",
+        occurred_start=None,
+        occurred_end=None,
+        metadata_json={},
+        source_memory_ids=[],
+        embedding=np.array([0.1, 0.2, 0.3], dtype=np.float32),
+    )
+
+    candidate = PostgresMemoryRepository._candidate(
+        unit, SimpleNamespace(title="week.md"), semantic_score=0.9
+    )
+
+    assert candidate.embedding is not None
+    assert len(candidate.embedding) == 3
+    assert all(type(value) is float for value in candidate.embedding)
+    assert candidate.embedding == pytest.approx([0.1, 0.2, 0.3], rel=1e-6)
+
+
 def test_normalization_tokens_and_advisory_lock_are_stable() -> None:
     document_id = uuid.uuid4()
 

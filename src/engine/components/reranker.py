@@ -110,17 +110,17 @@ def get_reranker() -> RerankerProtocol:
 
 
 def _build_reranker() -> RerankerProtocol:
-    provider = settings.reranker_provider
+    provider = settings.reranker.provider
     if provider == "local":
-        return LocalReranker(settings.reranker_model or "BAAI/bge-reranker-v2-m3")
+        return LocalReranker(settings.reranker.model or "BAAI/bge-reranker-v2-m3")
     if provider == "http":
-        if not settings.reranker_base_url:
+        if not settings.reranker.base_url:
             logger.warning("RERANKER_PROVIDER=http but RERANKER_BASE_URL is empty; using noop")
             return NoopReranker()
         return HttpReranker(
-            base_url=settings.reranker_base_url,
-            model=settings.reranker_model,
-            api_key=settings.reranker_api_key,
+            base_url=settings.reranker.base_url,
+            model=settings.reranker.model,
+            api_key=settings.reranker.api_key,
         )
     logger.info("reranker disabled (provider=%r); using noop", provider)
     return NoopReranker()

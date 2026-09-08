@@ -229,6 +229,44 @@ class PostgresMemoryRepository:
                     )
                 )
 
+    async def list_backfill_candidates(
+        self,
+        *,
+        document_id: str | None = None,
+        force: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List indexed documents eligible for Hindsight backfill, with raw_text."""
+        statement = (
+            select(Document, HindsightDocumentState.status)
+            .outerjoin(
+                HindsightDocumentState,
+                HindsightDocumentState.document_id == Document.id,
+            )
+            .where(Document.status == "indexed", Document.raw_text != "")
+            .order_by(Document.created_at, Document.id)
+        )
+        if document_id is not None:
+            statement = statement.where(Document.id == uuid.UUID(document_id))
+        if not force:
+            statement = statement.where(
+                or_(
+                    HindsightDocumentState.document_id.is_(None),
+                    HindsightDocumentState.status != "indexed",
+                )
+            )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [
+            {
+                "document_id": str(document.id),
+                "title": document.title,
+                "content": document.raw_text,
+                "file_type": document.file_type,
+                "hindsight_status": hindsight_status,
+            }
+            for document, hindsight_status in rows
+        ]
+
     async def graph_projection(self, document_id: str) -> MemoryGraphProjection | None:
         uid = uuid.UUID(document_id)
         async with self._session_factory() as session:
@@ -818,7 +856,9 @@ class PostgresMemoryRepository:
             occurred_end=unit.occurred_end.isoformat() if unit.occurred_end else None,
             metadata=metadata,
             source_memory_ids=[str(item) for item in unit.source_memory_ids],
-            embedding=list(unit.embedding) if unit.embedding is not None else None,
+            embedding=[float(v) for v in unit.embedding]
+            if unit.embedding is not None
+            else None,
             **scores,
         )
 
