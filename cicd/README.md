@@ -7,22 +7,41 @@ commit runs watch → sync → gate → build → deploy → verify on the LAN h
 
 ```
 ~/.config/systemd/user/team-kb-cicd.timer      (5-min cadence)
-  └─ team-kb-cicd.service → /var/tmp/team-kb-cicd/run.sh   (static bootstrap)
-                              └─ /var/tmp/team-kb-cicd/repo/cicd/pipeline.sh
+  └─ team-kb-cicd.service → <repo>/.deploy/run.sh          (static bootstrap)
+                              └─ <repo>/.deploy/repo/cicd/pipeline.sh
 ```
+
+`<repo>` is the dev checkout: `/home/zhangxiang/workspaces/projects/team-knowledge-base`.
+The stable dir `.deploy/` is **gitignored** — it never shows in git status or
+commits. Both `run.sh` and `pipeline.sh` derive the stable dir from their own
+location (`TKB_CICD_HOME` overrides it for sandbox testing), so the whole
+`.deploy/` tree moves with the repo; only the unit's `ExecStart` is absolute.
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `/var/tmp/team-kb-cicd/deploy.env` | Deployment credentials + proxy settings. Compose `--env-file` input; also sourced by the pipeline for proxy. **Lives outside the clone — wiping the clone never touches credentials.** |
-| `/var/tmp/team-kb-cicd/run.sh` | Static bootstrap (from `cicd/run.sh.template`); initial clone + exec pipeline. |
-| `/var/tmp/team-kb-cicd/repo/` | Disposable clone; every run is `git fetch` + `reset --hard origin/main`. |
-| `/var/tmp/team-kb-cicd/last-deployed` | SHA of the last commit the pipeline deployed successfully. Unchanged head ⇒ run is a no-op. |
-| `/var/tmp/team-kb-cicd/deployed-shas` | History: `<timestamp> <sha>` per deploy (and rollbacks). |
-| `/var/tmp/team-kb-cicd/pipeline.exec.sh` | Snapshot of the running pipeline (self-update guard, below). |
-| `/var/tmp/tkb-venvs/cicd` | Gate venv (`UV_PROJECT_ENVIRONMENT`) — kept off the slow home filesystem. |
+| `<repo>/.deploy/deploy.env` | Deployment credentials + proxy settings + npm cache dir. Compose `--env-file` input; also sourced by the pipeline for proxy/`npm_config_cache`. **Lives outside the clone — wiping the clone never touches credentials.** |
+| `<repo>/.deploy/run.sh` | Static bootstrap (from `cicd/run.sh.template`); initial clone + exec pipeline. Derives the stable dir from its own location. |
+| `<repo>/.deploy/repo/` | Disposable clone; every run is `git fetch` + `reset --hard origin/main`. |
+| `<repo>/.deploy/last-deployed` | SHA of the last commit the pipeline deployed successfully. Unchanged head ⇒ run is a no-op. |
+| `<repo>/.deploy/deployed-shas` | History: `<timestamp> <sha>` per deploy (and rollbacks). |
+| `<repo>/.deploy/pipeline.exec.sh` | Snapshot of the running pipeline (self-update guard, below). |
+| `/var/tmp/tkb-venvs/cicd` | Gate venv (`UV_PROJECT_ENVIRONMENT`) — kept on local disk (the home filesystem is slow cephfs). |
+| `/var/tmp/tkb-npm-cache` | SPA npm cache (`npm_config_cache` in deploy.env) — local disk, for the same reason. |
 | `/var/tmp/node22/bin` | Node 22 for the SPA tests (system Node is 18). |
+
+Perf note: only the clone (git objects, source tree, `node_modules`) lives on
+cephfs. The gate venv, npm cache, and podman storage stay on local disk, so
+the 5-min cadence is not cephfs-bound; a fresh clone's first `npm install`
+is slower (~5 min observed), later runs reuse `node_modules` (`clean -fd`
+keeps ignored files).
+
+**Caveat:** because `.deploy/` lives inside the dev checkout, wiping the
+checkout (e.g. `git clean -fdx` from the parent, or deleting the directory)
+also wipes `deploy.env` and the deploy state. Volumes, images, and the
+systemd units survive; restore `deploy.env` from the source `.env` plus the
+proxy/`npm_config_cache` lines (install step 1 below) and re-run step 2.
 
 ## Self-update
 
@@ -38,16 +57,18 @@ way (it resets the clone to the target SHA mid-run).
 ## Install (one-time, on the LAN host)
 
 ```bash
-# 1. Stable dir + credentials
-mkdir -p /var/tmp/team-kb-cicd
-cp .env /var/tmp/team-kb-cicd/deploy.env        # from the env the live stack uses
-chmod 600 /var/tmp/team-kb-cicd/deploy.env
+# 1. Stable dir + credentials (inside the dev checkout)
+mkdir -p .deploy
+cp .env .deploy/deploy.env                      # from the env the live stack uses
+chmod 600 .deploy/deploy.env
 # Append proxy vars so git/uv/npm/podman reach the outside:
 env | grep -iE '^(https?_proxy|no_proxy|npm_config_proxy|npm_config_https_proxy)=' \
-  >> /var/tmp/team-kb-cicd/deploy.env
+  >> .deploy/deploy.env
+# Keep the SPA npm cache on local disk (the clone lives on the slower home fs):
+echo 'npm_config_cache=/var/tmp/tkb-npm-cache' >> .deploy/deploy.env
 
 # 2. Bootstrap (after this change is merged to main)
-install -m 755 cicd/run.sh.template /var/tmp/team-kb-cicd/run.sh
+install -m 755 cicd/run.sh.template .deploy/run.sh
 
 # 3. systemd user units + linger (timers survive logout)
 install -m 644 cicd/team-kb-cicd.service cicd/team-kb-cicd.timer \
@@ -56,11 +77,15 @@ systemctl --user daemon-reload
 loginctl enable-linger "$USER"                   # verify: loginctl show-user "$USER" | grep Linger
 
 # 4. Dry run against current origin/main (deploy withheld)
-/var/tmp/team-kb-cicd/run.sh --dry-run           # or: systemctl --user start team-kb-cicd.service
+.deploy/run.sh --dry-run                         # or: systemctl --user start team-kb-cicd.service
 
 # 5. Cutover deploy (see runbook below), then enable the timer
 systemctl --user enable --now team-kb-cicd.timer  # verify: systemctl --user list-timers
 ```
+
+The unit's `ExecStart` is the absolute `<repo>/.deploy/run.sh` path; if the
+checkout moves, edit `ExecStart` (and `Documentation=`) in the unit and
+`systemctl --user daemon-reload`.
 
 ## Cutover runbook (hand-run stack → pipeline-managed)
 
@@ -92,8 +117,8 @@ adopts it in one deliberate deploy:
 
 ```bash
 # List deployed SHAs (newest last)
-cat /var/tmp/team-kb-cicd/deployed-shas
-/var/tmp/team-kb-cicd/repo/cicd/rollback.sh <sha>
+cat .deploy/deployed-shas
+.deploy/repo/cicd/rollback.sh <sha>
 ```
 
 Rollback retags the SHA-tagged images as `:latest`, checks the clone out at

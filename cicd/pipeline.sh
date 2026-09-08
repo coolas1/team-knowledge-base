@@ -2,7 +2,7 @@
 # Local CI/CD pipeline for the LAN deployment of team-knowledge-base.
 #
 # Invoked every 5 minutes by the systemd user timer (team-kb-cicd.timer) via
-# the static bootstrap /var/tmp/team-kb-cicd/run.sh. Stages:
+# the static bootstrap run.sh in the stable dir (<repo>/.deploy/). Stages:
 #
 #   watch  - compare git ls-remote origin/main against the last deployed SHA;
 #            exit 0 without doing anything when unchanged
@@ -22,8 +22,15 @@
 set -Eeuo pipefail
 
 # --- configuration ----------------------------------------------------------
-# TKB_CICD_HOME etc. are overridable for sandbox testing.
-TKB_CICD_HOME="${TKB_CICD_HOME:-/var/tmp/team-kb-cicd}"
+# TKB_CICD_HOME etc. are overridable for sandbox testing. The default derives
+# from this script's location (clone layout <home>/repo/cicd/pipeline.sh, so
+# home is two levels up), which keeps a relocated stable dir working without
+# env setup. Exported because the self-location guard below re-execs a
+# snapshot from a different path — there, location-based derivation would be
+# wrong.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TKB_CICD_HOME="${TKB_CICD_HOME:-$(cd "$script_dir/../.." && pwd)}"
+export TKB_CICD_HOME
 TKB_CICD_REMOTE="${TKB_CICD_REMOTE:-https://github.com/coolas1/team-knowledge-base.git}"
 TKB_CICD_BRANCH="${TKB_CICD_BRANCH:-main}"
 TKB_CICD_VENV="${TKB_CICD_VENV:-/var/tmp/tkb-venvs/cicd}"
@@ -57,16 +64,18 @@ die() { log "FAILED: $*"; exit 1; }
 export PATH="$HOME/.local/bin:$TKB_NODE22_BIN:/usr/local/bin:/usr/bin:/bin"
 
 # deploy.env holds compose substitution values plus the proxy settings
-# git/uv/npm/podman need. Only the PROXY keys are exported into this
-# environment: exporting app config (LLM_MODEL etc.) would leak into the
-# gate's test processes (pydantic-settings reads real env vars) and change
-# test behavior. Compose receives the full file via --env-file.
+# git/uv/npm/podman need. Only the PROXY keys and npm_config_cache are
+# exported into this environment: exporting app config (LLM_MODEL etc.)
+# would leak into the gate's test processes (pydantic-settings reads real
+# env vars) and change test behavior. npm_config_cache keeps the SPA
+# install's cache on local disk even though the clone (node_modules) is on
+# the slower home filesystem. Compose receives the full file via --env-file.
 if [[ -f "$deploy_env" ]]; then
   while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
     case "${BASH_REMATCH[1]}" in
-      *_proxy|*_PROXY) export "$line" ;;
+      *_proxy|*_PROXY|npm_config_cache) export "$line" ;;
     esac
   done < "$deploy_env"
 fi
