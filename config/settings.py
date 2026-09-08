@@ -110,6 +110,11 @@ class InfraSettings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
 
+    # Uploaded document originals. The relative default keeps dev-checkout
+    # behavior; the compose deployment sets the absolute volume mount
+    # (/app/uploads) so uploads survive container recreation.
+    uploads_dir: str = "uploads"
+
     # Model config groups (OpenAI-compatible endpoints). Sub-models each
     # read their own env prefix from .env; see the classes above.
     llm: LLMSettings = Field(default_factory=LLMSettings)
