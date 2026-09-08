@@ -32,6 +32,13 @@ src/frontend/webapp/client/tsconfig.tsbuildinfo
 # Runtime data
 .pi-agent-data/
 
+# CI/CD stable dir (deploy.env, disposable clone, deploy state) —
+# credentials and state live here; must never be committed.
+/.deploy/
+
+# Benchmark output (retrieval QA evals etc.)
+/bench/
+
 # Local-only generated docs (plugin plan files; not shared)
 docs/superpowers/
 
