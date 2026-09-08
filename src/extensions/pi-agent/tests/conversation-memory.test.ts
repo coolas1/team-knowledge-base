@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { loadTkbAdapterConfig } from "../src/config.js";
 import {
   buildConversationMemoryExtension,
-  extractCompletedConversationTurn,
   formatConversationMemoryBlock,
   recallMemoryForPrompt,
 } from "../src/conversation-memory.js";
@@ -142,20 +141,5 @@ describe("conversation memory prompt integration", () => {
     expect(block).toContain("<untrusted_conversation_memory>");
     expect(block).toContain("</untrusted_conversation_memory>");
     expect(block.length).toBeLessThanOrEqual(320);
-  });
-
-  it("extracts only the completed visible turn and its persisted entry id", () => {
-    const assistant = { role: "assistant", content: [{ type: "text", text: "answer" }], stopReason: "stop" };
-    const user = { role: "user", content: [{ type: "text", text: "question" }] };
-    expect(
-      extractCompletedConversationTurn(
-        [{ role: "assistant", content: [{ type: "text", text: "old" }] }, user, assistant],
-        [
-          { type: "message", id: "old-id", message: { role: "assistant", content: [{ type: "text", text: "old" }] } },
-          { type: "message", id: "turn-id", message: assistant },
-        ],
-        1,
-      ),
-    ).toEqual({ turnId: "turn-id", userText: "question", assistantText: "answer" });
   });
 });

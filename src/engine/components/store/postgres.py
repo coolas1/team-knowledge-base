@@ -46,6 +46,39 @@ async def init_db() -> None:
             )
         )
 
+    # Existing deployments need an online expansion because create_all does not
+    # add columns or indexes to an already-present table.
+    async with engine.connect() as conn:
+        conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+        await conn.execute(
+            text(
+                "ALTER TABLE memory_units "
+                "ADD COLUMN IF NOT EXISTS lexical_tokens TEXT[]"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
+                "idx_memory_units_lexical_tokens "
+                "ON memory_units USING gin (lexical_tokens)"
+            )
+        )
+        if settings.hindsight_keyword_index_enabled:
+            pending = int(
+                await conn.scalar(
+                    text(
+                        "SELECT count(*) FROM memory_units "
+                        "WHERE state = 'active' AND lexical_tokens IS NULL"
+                    )
+                )
+                or 0
+            )
+            if pending:
+                raise RuntimeError(
+                    "HINDSIGHT_KEYWORD_INDEX_ENABLED requires a complete lexical "
+                    f"backfill; {pending} active memory_units remain"
+                )
+
 
 async def get_session() -> AsyncSession:  # type: ignore[misc]
     """FastAPI Depends 注入用。"""

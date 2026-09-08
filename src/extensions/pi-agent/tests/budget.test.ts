@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { ExecutionBudget, enforceToolBudget } from "../src/budget.js";
+import {
+  ExecutionBudget,
+  enforceToolBudget,
+  SearchFallbackBudget,
+  TurnBudgetExhaustedError,
+  TurnDeadlineBudget,
+} from "../src/budget.js";
 
 describe("ExecutionBudget", () => {
   it("blocks execution after the hard tool-call limit", async () => {
@@ -31,5 +37,25 @@ describe("ExecutionBudget", () => {
     budget.reset();
     expect(budget.claim()).toBe(true);
     expect(budget.limitReached).toBe(false);
+  });
+});
+
+describe("turn deadline budgets", () => {
+  it("caps a late tool call before the synthesis reserve", () => {
+    let now = 1_000;
+    const budget = new TurnDeadlineBudget(180, 60, () => now);
+    expect(budget.effectiveTimeoutMs(60_000)).toBe(60_000);
+    now += 100_000;
+    expect(budget.effectiveTimeoutMs(60_000)).toBe(20_000);
+    now += 20_000;
+    expect(() => budget.effectiveTimeoutMs(1_000)).toThrow(TurnBudgetExhaustedError);
+  });
+
+  it("allows one automatic fallback per turn and resets", () => {
+    const budget = new SearchFallbackBudget();
+    expect(budget.claim()).toBe(true);
+    expect(budget.claim()).toBe(false);
+    budget.reset();
+    expect(budget.claim()).toBe(true);
   });
 });

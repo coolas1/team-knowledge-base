@@ -35,14 +35,7 @@ describe("restricted skill reader", () => {
     await writeFile(outside, "secret", "utf8");
     const tool = buildSkillReadTool(root);
 
-    const result = await tool.execute(
-      "1",
-      { path: outside },
-      undefined,
-      undefined,
-      {} as never,
-    );
-    expect((result as { isError?: boolean }).isError).toBe(true);
+    await expect(tool.execute("1", { path: outside }, undefined, undefined, {} as never)).rejects.toThrow("outside");
     await rm(outside, { force: true });
   });
 });

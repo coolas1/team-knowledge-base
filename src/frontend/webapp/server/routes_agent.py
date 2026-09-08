@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.agent.interface import LlmClient, SkillContext
 from src.frontend.webapp.server import deps
@@ -54,6 +54,7 @@ async def ingest_summarize(file: UploadFile = File(...), kb=Depends(deps.get_kb)
 
 class AgentMessageRequest(BaseModel):
     message: str
+    client_message_id: str | None = Field(default=None, alias="clientMessageId")
 
 
 _SESSION_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -163,7 +164,14 @@ async def stream_agent_message(session_id: str, body: AgentMessageRequest):
         request = client.build_request(
             "POST",
             f"{_pi_agent_url()}/v1/sessions/{session_id}/messages",
-            json={"message": body.message},
+            json={
+                "message": body.message,
+                **(
+                    {"clientMessageId": body.client_message_id}
+                    if body.client_message_id
+                    else {}
+                ),
+            },
         )
         response = await client.send(request, stream=True)
     except httpx.RequestError as exc:
