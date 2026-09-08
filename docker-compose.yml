@@ -120,6 +120,10 @@ services:
       # Fixed BFF upstream; no model credentials are exposed to the browser.
       PI_AGENT_URL: http://pi-agent:8010
       ARTIFACTS_DIR: /app/artifacts
+      # Uploaded document originals live on a named volume so they survive
+      # container recreation (redeploys). Default is a relative "uploads/"
+      # dir for non-compose runs.
+      UPLOADS_DIR: /app/uploads
       APP_HOST: 0.0.0.0
       APP_PORT: "8000"
     ports:
@@ -132,6 +136,7 @@ services:
       # inside a .env value or a ${VAR:-default}, so reference it directly here.)
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
       - artifactsdata:/app/artifacts
+      - uploadsdata:/app/uploads
     restart: unless-stopped
 
   pi-agent:
@@ -195,3 +200,4 @@ volumes:
   ollamadata:
   piagentdata:
   artifactsdata:
+  uploadsdata:
