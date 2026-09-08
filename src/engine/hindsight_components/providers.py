@@ -68,12 +68,8 @@ class ProjectHindsightProviders:
         timeout: float,
     ) -> str:
         if not settings.llm.enabled:
-            raise RuntimeError(
-                "Hindsight LLM is disabled (LLM_BASE_URL is empty)"
-            )
-        return await self._openai(
-            system, user, json_mode=json_mode, timeout=timeout
-        )
+            raise RuntimeError("Hindsight LLM is disabled (LLM_BASE_URL is empty)")
+        return await self._openai(system, user, json_mode=json_mode, timeout=timeout)
 
     @staticmethod
     async def _openai(

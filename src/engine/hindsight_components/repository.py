@@ -14,6 +14,8 @@ from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.components.store.models import Document
+from src.engine.components.store.scope import scope_predicate
+from src.engine.scope import MemoryScope
 
 from .models import (
     ConversationMemorySource,
@@ -56,6 +58,8 @@ class PostgresMemoryRepository:
         *,
         keyword_index_enabled: bool = False,
         keyword_candidate_limit: int = 300,
+        scope: MemoryScope | None = None,
+        retention_lease: tuple[str, str] | None = None,
     ) -> None:
         if session_factory is None:
             from src.engine.components.store.postgres import async_session_factory
@@ -66,20 +70,288 @@ class PostgresMemoryRepository:
             raise ValueError("keyword_candidate_limit must be greater than zero")
         self._keyword_index_enabled = keyword_index_enabled
         self._keyword_candidate_limit = keyword_candidate_limit
+        self.scope = scope or MemoryScope()
+        self._retention_lease = retention_lease
+
+    def with_scope(self, scope: MemoryScope) -> PostgresMemoryRepository:
+        return PostgresMemoryRepository(
+            self._session_factory,
+            keyword_index_enabled=self._keyword_index_enabled,
+            keyword_candidate_limit=self._keyword_candidate_limit,
+            scope=scope,
+            retention_lease=self._retention_lease,
+        )
+
+    def with_lease(self, document_id: str, lease_token: str):
+        return PostgresMemoryRepository(
+            self._session_factory,
+            keyword_index_enabled=self._keyword_index_enabled,
+            keyword_candidate_limit=self._keyword_candidate_limit,
+            scope=self.scope,
+            retention_lease=(document_id, lease_token),
+        )
+
+    async def retention_input(self, document_id: str):
+        from .types import RetainInput
+        from datetime import datetime
+
+        async with self._session_factory() as session:
+            document = await session.scalar(
+                select(Document).where(
+                    Document.id == uuid.UUID(document_id), self._document_scope()
+                )
+            )
+            if document is None:
+                raise ValueError("document does not exist")
+            if document.file_type == "conversation":
+                raise ValueError("conversation extraction must use the durable queue")
+            state = await session.get(HindsightDocumentState, document.id)
+            saved = dict(state.source_context or {}) if state else {}
+            return RetainInput(
+                document_id=str(document.id),
+                expected_revision=state.revision if state else 0,
+                title=document.title,
+                content=document.raw_text,
+                file_type=document.file_type,
+                tags=tuple(document.tags or []),
+                agent_name=saved.get("agent_name", self.scope.agent_name),
+                source_timestamp=datetime.fromisoformat(saved["source_timestamp"])
+                if saved.get("source_timestamp")
+                else None,
+                reference_timezone=saved.get("reference_timezone", "UTC"),
+                policy_version=self.scope.policy_version,
+                speakers=saved.get(
+                    "speakers",
+                    {
+                        "user": self.scope.subject_id,
+                        "assistant": self.scope.agent_name,
+                    },
+                ),
+            )
+
+    async def _check_retention_lease(self, session, document_id):
+        if self._retention_lease is None:
+            return
+        from .models import ConversationMemorySource
+        from .types import RetentionLeaseLost
+
+        owner, token = self._retention_lease
+        if str(document_id) != owner:
+            raise RetentionLeaseLost("retention lease belongs to a different document")
+        source = await session.scalar(
+            select(ConversationMemorySource)
+            .where(
+                ConversationMemorySource.document_id == uuid.UUID(owner),
+                ConversationMemorySource.bank_id == self.scope.bank_id,
+                ConversationMemorySource.lease_token == uuid.UUID(token),
+                ConversationMemorySource.status == "processing",
+                ConversationMemorySource.lease_expires_at > func.clock_timestamp(),
+            )
+            .with_for_update()
+        )
+        if source is None:
+            raise RetentionLeaseLost("retention lease is no longer valid")
+
+    def _memory_scope(self):
+        return scope_predicate(
+            MemoryUnit.bank_id, MemoryUnit.scope_tags, self.scope
+        ) & MemoryUnit.document_id.in_(
+            select(Document.id).where(self._document_scope()).correlate(None)
+        )
+
+    def _document_scope(self):
+        return scope_predicate(Document.bank_id, Document.tags, self.scope)
+
+    async def retention_revision(self, document_id: str) -> int:
+        async with self._session_factory() as session:
+            visible = await session.scalar(
+                select(Document.id).where(
+                    Document.id == uuid.UUID(document_id), self._document_scope()
+                )
+            )
+            if visible is None:
+                raise ValueError("document does not exist")
+            return int(
+                await session.scalar(
+                    select(HindsightDocumentState.revision).where(
+                        HindsightDocumentState.document_id == visible
+                    )
+                )
+                or 0
+            )
+
+    async def retention_extraction_cache(self, document_id: str) -> dict:
+        async with self._session_factory() as session:
+            visible = await session.scalar(
+                select(Document.id).where(
+                    Document.id == uuid.UUID(document_id), self._document_scope()
+                )
+            )
+            if visible is None:
+                raise ValueError("document does not exist")
+            cache = await session.scalar(
+                select(HindsightDocumentState.extraction_cache).where(
+                    HindsightDocumentState.document_id == visible
+                )
+            )
+            return dict(cache or {})
+
+    async def retention_request_result(
+        self, document_id: str, request_id: str, request_hash: str
+    ):
+        from .models import RetentionRequest
+        from .types import RetentionRequestConflict
+
+        async with self._session_factory() as session:
+            visible = await session.scalar(
+                select(Document.id).where(
+                    Document.id == uuid.UUID(document_id), self._document_scope()
+                )
+            )
+            if visible is None:
+                raise ValueError("document does not exist")
+            row = await session.get(RetentionRequest, (visible, request_id))
+            if row is None:
+                return None
+            if row.bank_id != self.scope.bank_id or row.request_hash != request_hash:
+                raise RetentionRequestConflict("retention request content conflict")
+            return dict(row.result_payload)
+
+    async def entity_candidates(self, names: tuple[str, ...], *, limit: int = 10):
+        from sqlalchemy import or_
+        from .entity_resolver import EntityCandidate
+
+        if not 1 <= limit <= 100:
+            raise ValueError("entity candidate limit must be between 1 and 100")
+        normalized = tuple(
+            dict.fromkeys(normalize_entity(n) for n in names if normalize_entity(n))
+        )
+        if not normalized:
+            return []
+        # Alias evidence belongs to visible facts, never to a global entity profile.
+        aliases = MemoryUnitEntity.aliases
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(MemoryEntity, MemoryUnit.text, aliases.label("aliases"))
+                    .join(
+                        MemoryUnitEntity, MemoryUnitEntity.entity_id == MemoryEntity.id
+                    )
+                    .join(MemoryUnit, MemoryUnit.id == MemoryUnitEntity.memory_id)
+                    .where(
+                        self._memory_scope(),
+                        MemoryEntity.bank_id == self.scope.bank_id,
+                        or_(
+                            MemoryEntity.normalized_name.in_(normalized),
+                            func.lower(MemoryUnitEntity.original_name).in_(normalized),
+                            aliases.overlap(list(normalized)),
+                        ),
+                    )
+                    .order_by(MemoryEntity.id, MemoryUnit.id)
+                    .limit(limit * 3)
+                )
+            ).all()
+        collected = {}
+        for entity, evidence, source_aliases in rows:
+            key = str(entity.id)
+            entry = collected.setdefault(
+                key, {"name": entity.canonical_name, "aliases": [], "evidence": []}
+            )
+            if isinstance(source_aliases, list):
+                entry["aliases"].extend(a for a in source_aliases if isinstance(a, str))
+            if len(entry["evidence"]) < 3:
+                entry["evidence"].append(evidence)
+        return [
+            EntityCandidate(
+                key,
+                data["name"],
+                tuple(dict.fromkeys(data["aliases"])),
+                tuple(data["evidence"]),
+            )
+            for key, data in list(collected.items())[:limit]
+        ]
 
     async def replace_document(self, plan: RetainPlan) -> None:
+        if any(memory.document_id != plan.document_id for memory in plan.memories):
+            raise ValueError("memory draft belongs to a different document")
         document_id = uuid.UUID(plan.document_id)
         async with self._session_factory() as session:
             async with session.begin():
-                if await session.get(Document, document_id) is None:
+                await self._check_retention_lease(session, document_id)
+                document = await session.get(Document, document_id)
+                if document is None or not self.scope.permits(
+                    getattr(document, "bank_id", None) or "default-team",
+                    getattr(document, "tags", None) or [],
+                ):
                     raise ValueError(f"document does not exist: {plan.document_id}")
                 await session.execute(
                     select(func.pg_advisory_xact_lock(document_lock_key(document_id)))
                 )
+                from .models import RetentionRequest
+                from .types import RetentionRequestConflict
+
+                if plan.request_id:
+                    prior = await session.get(
+                        RetentionRequest, (document_id, plan.request_id)
+                    )
+                    if prior is not None:
+                        if (
+                            prior.bank_id != self.scope.bank_id
+                            or prior.request_hash != plan.request_hash
+                        ):
+                            raise RetentionRequestConflict(
+                                "retention request content conflict"
+                            )
+                        plan.result_payload = dict(prior.result_payload)
+                        plan.revision = plan.result_payload["revision"]
+                        return
+                from .types import RetentionRevisionConflict
+
+                current_revision = int(
+                    await session.scalar(
+                        select(HindsightDocumentState.revision).where(
+                            HindsightDocumentState.document_id == document_id
+                        )
+                    )
+                    or 0
+                )
+                if (
+                    plan.expected_revision is not None
+                    and plan.expected_revision != current_revision
+                ):
+                    raise RetentionRevisionConflict("retention revision conflict")
+                plan.revision = current_revision + 1
+                if plan.result_payload:
+                    plan.result_payload["revision"] = plan.revision
+                targets = {
+                    item["id"]
+                    for memory in plan.memories
+                    for item in memory.metadata.get("resolved_entities", [])
+                    if item.get("existing")
+                }
+                for target in sorted(targets):
+                    visible = await session.scalar(
+                        select(MemoryEntity.id)
+                        .where(
+                            MemoryEntity.id == uuid.UUID(target),
+                            MemoryEntity.bank_id == self.scope.bank_id,
+                            MemoryEntity.id.in_(
+                                select(MemoryUnitEntity.entity_id)
+                                .join(
+                                    MemoryUnit,
+                                    MemoryUnit.id == MemoryUnitEntity.memory_id,
+                                )
+                                .where(self._memory_scope())
+                            ),
+                        )
+                        .with_for_update()
+                    )
+                    if visible is None:
+                        raise ValueError("resolved entity is no longer visible")
                 old_ids = list(
                     await session.scalars(
                         select(MemoryUnit.id).where(
-                            MemoryUnit.document_id == document_id
+                            MemoryUnit.document_id == document_id, self._memory_scope()
                         )
                     )
                 )
@@ -92,26 +364,40 @@ class PostgresMemoryRepository:
                     await session.execute(
                         delete(MemoryUnit).where(
                             MemoryUnit.memory_type == "observation",
+                            self._memory_scope(),
                             MemoryUnit.source_memory_ids.overlap(old_ids),
                         )
                     )
                 await session.execute(
-                    delete(MemoryUnit).where(MemoryUnit.document_id == document_id)
+                    delete(MemoryUnit).where(
+                        MemoryUnit.document_id == document_id, self._memory_scope()
+                    )
                 )
-                await self._insert_memories(session, plan)
+                await self._insert_memories(
+                    session, plan, scope_tags=getattr(document, "tags", None) or []
+                )
                 await self._insert_links(session, plan)
                 await session.execute(
                     delete(MemoryEntity).where(
+                        MemoryEntity.bank_id == self.scope.bank_id,
                         ~select(MemoryUnitEntity.entity_id)
                         .where(MemoryUnitEntity.entity_id == MemoryEntity.id)
-                        .exists()
+                        .exists(),
                     )
                 )
                 await session.execute(
                     insert(HindsightDocumentState)
                     .values(
                         document_id=document_id,
-                        status="indexed",
+                        operation_id=document_id,
+                        revision=plan.revision,
+                        stage_results=dict(plan.stage_results),
+                        source_context=dict(plan.source_context),
+                        extraction_cache=dict(plan.extraction_cache),
+                        status="degraded"
+                        if plan.extraction_status == "degraded"
+                        else "indexed",
+                        bank_id=self.scope.bank_id,
                         error_msg=None,
                         memory_count=len(plan.memories),
                         link_count=len(plan.links),
@@ -119,7 +405,13 @@ class PostgresMemoryRepository:
                     .on_conflict_do_update(
                         index_elements=[HindsightDocumentState.document_id],
                         set_={
-                            "status": "indexed",
+                            "revision": plan.revision,
+                            "stage_results": dict(plan.stage_results),
+                            "source_context": dict(plan.source_context),
+                            "extraction_cache": dict(plan.extraction_cache),
+                            "status": "degraded"
+                            if plan.extraction_status == "degraded"
+                            else "indexed",
                             "error_msg": None,
                             "memory_count": len(plan.memories),
                             "link_count": len(plan.links),
@@ -128,6 +420,16 @@ class PostgresMemoryRepository:
                     )
                 )
                 self._enqueue_graph_event(session, document_id, "replace")
+                if plan.request_id:
+                    session.add(
+                        RetentionRequest(
+                            document_id=document_id,
+                            bank_id=self.scope.bank_id,
+                            request_id=plan.request_id,
+                            request_hash=plan.request_hash,
+                            result_payload=plan.result_payload,
+                        )
+                    )
                 for impacted_document_id in sorted(impacted_documents, key=str):
                     self._enqueue_graph_event(
                         session,
@@ -141,30 +443,67 @@ class PostgresMemoryRepository:
         status: str,
         *,
         error_msg: str | None = None,
+        stage_results: dict | None = None,
+        source_context: dict | None = None,
+        expected_revision: int | None = None,
     ) -> None:
         async with self._session_factory() as session:
+            await self._check_retention_lease(session, document_id)
+            if expected_revision is not None:
+                from .types import RetentionRevisionConflict
+
+                uid = uuid.UUID(document_id)
+                await session.execute(
+                    select(func.pg_advisory_xact_lock(document_lock_key(uid)))
+                )
+                current = int(
+                    await session.scalar(
+                        select(HindsightDocumentState.revision).where(
+                            HindsightDocumentState.document_id == uid
+                        )
+                    )
+                    or 0
+                )
+                if current != expected_revision:
+                    raise RetentionRevisionConflict("retention revision conflict")
+            document = await session.get(Document, uuid.UUID(document_id))
+            if document is None or not self.scope.permits(
+                getattr(document, "bank_id", None) or "default-team",
+                getattr(document, "tags", None) or [],
+            ):
+                raise ValueError(f"document does not exist: {document_id}")
             await session.execute(
                 insert(HindsightDocumentState)
                 .values(
                     document_id=uuid.UUID(document_id),
+                    operation_id=uuid.UUID(document_id),
+                    stage_results=stage_results or {"retain": status},
+                    source_context=source_context or {},
                     status=status,
+                    bank_id=self.scope.bank_id,
                     error_msg=error_msg,
                 )
                 .on_conflict_do_update(
                     index_elements=[HindsightDocumentState.document_id],
                     set_={
+                        "stage_results": HindsightDocumentState.stage_results.op("||")(
+                            stage_results or {"retain": status}
+                        ),
                         "status": status,
                         "error_msg": error_msg,
                         "updated_at": func.now(),
+                        **(
+                            {"source_context": source_context}
+                            if source_context is not None
+                            else {}
+                        ),
                     },
                 )
             )
             await session.commit()
 
     async def document_state(self, document_id: str) -> DocumentMemoryState | None:
-        async with self._session_factory() as session:
-            row = await session.get(HindsightDocumentState, uuid.UUID(document_id))
-        return self._state_from_row(row) if row is not None else None
+        return (await self.document_states([document_id])).get(document_id)
 
     async def document_states(
         self, document_ids: list[str]
@@ -175,8 +514,11 @@ class PostgresMemoryRepository:
         async with self._session_factory() as session:
             rows = list(
                 await session.scalars(
-                    select(HindsightDocumentState).where(
-                        HindsightDocumentState.document_id.in_(ids)
+                    select(HindsightDocumentState)
+                    .join(Document, Document.id == HindsightDocumentState.document_id)
+                    .where(
+                        HindsightDocumentState.document_id.in_(ids),
+                        self._document_scope(),
                     )
                 )
             )
@@ -186,13 +528,21 @@ class PostgresMemoryRepository:
         uid = uuid.UUID(document_id)
         async with self._session_factory() as session:
             async with session.begin():
+                document = await session.get(Document, uid)
+                if document is None or not self.scope.permits(
+                    getattr(document, "bank_id", None) or "default-team",
+                    getattr(document, "tags", None) or [],
+                ):
+                    return
                 await session.execute(
                     select(func.pg_advisory_xact_lock(document_lock_key(uid)))
                 )
                 self._enqueue_graph_event(session, uid, "delete")
                 memory_ids = list(
                     await session.scalars(
-                        select(MemoryUnit.id).where(MemoryUnit.document_id == uid)
+                        select(MemoryUnit.id).where(
+                            MemoryUnit.document_id == uid, self._memory_scope()
+                        )
                     )
                 )
                 impacted_documents = await self._dependent_graph_documents(
@@ -204,11 +554,14 @@ class PostgresMemoryRepository:
                     await session.execute(
                         delete(MemoryUnit).where(
                             MemoryUnit.memory_type == "observation",
+                            self._memory_scope(),
                             MemoryUnit.source_memory_ids.overlap(memory_ids),
                         )
                     )
                 await session.execute(
-                    delete(MemoryUnit).where(MemoryUnit.document_id == uid)
+                    delete(MemoryUnit).where(
+                        MemoryUnit.document_id == uid, self._memory_scope()
+                    )
                 )
                 for impacted_document_id in sorted(impacted_documents, key=str):
                     self._enqueue_graph_event(
@@ -223,9 +576,10 @@ class PostgresMemoryRepository:
                 )
                 await session.execute(
                     delete(MemoryEntity).where(
+                        MemoryEntity.bank_id == self.scope.bank_id,
                         ~select(MemoryUnitEntity.entity_id)
                         .where(MemoryUnitEntity.entity_id == MemoryEntity.id)
-                        .exists()
+                        .exists(),
                     )
                 )
 
@@ -242,7 +596,11 @@ class PostgresMemoryRepository:
                 HindsightDocumentState,
                 HindsightDocumentState.document_id == Document.id,
             )
-            .where(Document.status == "indexed", Document.raw_text != "")
+            .where(
+                Document.status == "indexed",
+                Document.raw_text != "",
+                self._document_scope(),
+            )
             .order_by(Document.created_at, Document.id)
         )
         if document_id is not None:
@@ -271,12 +629,15 @@ class PostgresMemoryRepository:
         uid = uuid.UUID(document_id)
         async with self._session_factory() as session:
             document = await session.get(Document, uid)
-            if document is None:
+            if document is None or not self.scope.permits(
+                getattr(document, "bank_id", None) or "default-team",
+                getattr(document, "tags", None) or [],
+            ):
                 return None
             memories = list(
                 await session.scalars(
                     select(MemoryUnit)
-                    .where(MemoryUnit.document_id == uid)
+                    .where(MemoryUnit.document_id == uid, self._memory_scope())
                     .order_by(
                         MemoryUnit.chunk_index,
                         MemoryUnit.memory_index,
@@ -309,9 +670,12 @@ class PostgresMemoryRepository:
                 )
         return self._graph_projection(document, memories, mention_rows, links)
 
-    async def _insert_memories(self, session: AsyncSession, plan: RetainPlan) -> None:
+    async def _insert_memories(
+        self, session: AsyncSession, plan: RetainPlan, *, scope_tags=()
+    ) -> None:
         for draft in plan.memories:
             row = MemoryUnit(
+                bank_id=self.scope.bank_id,
                 id=uuid.UUID(draft.id),
                 document_id=uuid.UUID(draft.document_id),
                 chunk_index=draft.chunk_index,
@@ -330,39 +694,104 @@ class PostgresMemoryRepository:
                 proof_count=max(1, len(draft.source_memory_ids)),
                 source_memory_ids=[uuid.UUID(item) for item in draft.source_memory_ids],
                 tags=list(draft.tags),
-                metadata_json=dict(draft.metadata),
+                scope_tags=list(scope_tags),
+                metadata_json={
+                    **draft.metadata,
+                    "entity_mentions": list(draft.entities),
+                },
             )
             session.add(row)
             for entity_name in draft.entities:
                 normalized = normalize_entity(entity_name)
                 if not normalized:
                     continue
+                resolved = next(
+                    (
+                        item
+                        for item in draft.metadata.get("resolved_entities", [])
+                        if item["name"] == entity_name
+                    ),
+                    None,
+                )
+                if resolved is not None:
+                    entity_id = uuid.UUID(resolved["id"])
+                    if not resolved["existing"]:
+                        await session.execute(
+                            insert(MemoryEntity)
+                            .values(
+                                id=entity_id,
+                                canonical_name=entity_name.strip(),
+                                normalized_name=normalized,
+                                identity_key=str(entity_id),
+                                bank_id=self.scope.bank_id,
+                            )
+                            .on_conflict_do_nothing(index_elements=[MemoryEntity.id])
+                        )
+                        owner = await session.get(MemoryEntity, entity_id)
+                        if (
+                            owner is None
+                            or owner.bank_id != self.scope.bank_id
+                            or owner.identity_key != str(entity_id)
+                        ):
+                            raise ValueError("entity identity conflict")
+                    await session.execute(
+                        insert(MemoryUnitEntity)
+                        .values(
+                            memory_id=row.id,
+                            entity_id=entity_id,
+                            bank_id=self.scope.bank_id,
+                            original_name=entity_name,
+                            aliases=list(
+                                draft.metadata.get("entity_aliases", {}).get(
+                                    normalized, []
+                                )
+                            ),
+                        )
+                        .on_conflict_do_nothing()
+                    )
+                    continue
                 await session.execute(
                     insert(MemoryEntity)
                     .values(
                         canonical_name=entity_name.strip(),
                         normalized_name=normalized,
+                        identity_key="",
+                        bank_id=self.scope.bank_id,
                     )
                     .on_conflict_do_nothing(
-                        index_elements=[MemoryEntity.normalized_name]
+                        index_elements=[
+                            MemoryEntity.bank_id,
+                            MemoryEntity.normalized_name,
+                            MemoryEntity.identity_key,
+                        ]
                     )
                 )
                 entity_id = await session.scalar(
                     select(MemoryEntity.id).where(
-                        MemoryEntity.normalized_name == normalized
+                        MemoryEntity.normalized_name == normalized,
+                        MemoryEntity.identity_key == "",
+                        MemoryEntity.bank_id == self.scope.bank_id,
                     )
                 )
                 if entity_id is None:
                     raise RuntimeError(f"failed to persist entity: {entity_name}")
                 await session.execute(
                     insert(MemoryUnitEntity)
-                    .values(memory_id=row.id, entity_id=entity_id)
+                    .values(
+                        memory_id=row.id,
+                        entity_id=entity_id,
+                        bank_id=self.scope.bank_id,
+                        original_name=entity_name,
+                        aliases=list(
+                            draft.metadata.get("entity_aliases", {}).get(normalized, [])
+                        ),
+                    )
                     .on_conflict_do_nothing()
                 )
         await session.flush()
 
-    @staticmethod
     async def _dependent_graph_documents(
+        self,
         session: AsyncSession,
         memory_ids: list[uuid.UUID],
         *,
@@ -376,6 +805,7 @@ class PostgresMemoryRepository:
                 .where(
                     MemoryUnit.document_id != exclude_document_id,
                     MemoryUnit.memory_type == "observation",
+                    self._memory_scope(),
                     MemoryUnit.source_memory_ids.overlap(memory_ids),
                 )
                 .distinct()
@@ -391,6 +821,7 @@ class PostgresMemoryRepository:
                 .where(
                     MemoryUnit.document_id != exclude_document_id,
                     MemoryLink.target_memory_id.in_(memory_ids),
+                    self._memory_scope(),
                 )
                 .distinct()
             )
@@ -408,8 +839,8 @@ class PostgresMemoryRepository:
             updated_at=row.updated_at.isoformat() if row.updated_at else None,
         )
 
-    @staticmethod
     def _enqueue_graph_event(
+        self,
         session: AsyncSession,
         document_id: uuid.UUID,
         operation: str,
@@ -417,6 +848,7 @@ class PostgresMemoryRepository:
         if operation not in {"replace", "delete"}:
             raise ValueError(f"unsupported graph operation: {operation}")
         event = HindsightGraphOutbox(
+            bank_id=self.scope.bank_id,
             document_id=document_id,
             operation=operation,
         )
@@ -433,6 +865,8 @@ class PostgresMemoryRepository:
         entity_rows = {entity.id: entity for _, entity in mention_rows}
         return MemoryGraphProjection(
             document=MemoryGraphDocument(
+                bank_id=getattr(document, "bank_id", None) or "default-team",
+                tags=tuple(getattr(document, "tags", None) or []),
                 id=str(document.id),
                 title=document.title,
                 file_type=document.file_type,
@@ -505,7 +939,9 @@ class PostgresMemoryRepository:
         existing_external = (
             set(
                 await session.scalars(
-                    select(MemoryUnit.id).where(MemoryUnit.id.in_(external_ids))
+                    select(MemoryUnit.id).where(
+                        MemoryUnit.id.in_(external_ids), self._memory_scope()
+                    )
                 )
             )
             if external_ids
@@ -520,6 +956,7 @@ class PostgresMemoryRepository:
             await session.execute(
                 insert(MemoryLink)
                 .values(
+                    bank_id=self.scope.bank_id,
                     source_memory_id=source_id,
                     target_memory_id=target_id,
                     link_type=link.link_type,
@@ -541,6 +978,7 @@ class PostgresMemoryRepository:
                 select(MemoryUnit.id, score)
                 .where(
                     MemoryUnit.document_id != uuid.UUID(exclude_document_id),
+                    self._memory_scope(),
                     MemoryUnit.state == "active",
                     MemoryUnit.embedding.is_not(None),
                 )
@@ -562,6 +1000,7 @@ class PostgresMemoryRepository:
                 select(MemoryUnit, Document, score)
                 .join(Document, Document.id == MemoryUnit.document_id)
                 .where(
+                    self._memory_scope(),
                     MemoryUnit.state == "active",
                     MemoryUnit.embedding.is_not(None),
                     Document.status == "indexed",
@@ -583,6 +1022,7 @@ class PostgresMemoryRepository:
             return []
         async with self._session_factory() as session:
             conditions = (
+                self._memory_scope(),
                 MemoryUnit.state == "active",
                 Document.status == "indexed",
                 *self._recall_source_conditions(source_type),
@@ -641,7 +1081,11 @@ class PostgresMemoryRepository:
                     await session.execute(
                         select(MemoryUnit, Document)
                         .join(Document, Document.id == MemoryUnit.document_id)
-                        .where(MemoryUnit.id.in_(score_by_id))
+                        .where(
+                            MemoryUnit.id.in_(score_by_id),
+                            self._memory_scope(),
+                            *self._recall_source_conditions(source_type),
+                        )
                     )
                 ).all()
             )
@@ -673,6 +1117,7 @@ class PostgresMemoryRepository:
                 .join(MemoryEntity, MemoryEntity.id == MemoryUnitEntity.entity_id)
                 .join(Document, Document.id == MemoryUnit.document_id)
                 .where(
+                    self._memory_scope(),
                     MemoryUnit.state == "active",
                     Document.status == "indexed",
                     *self._recall_source_conditions(source_type),
@@ -717,6 +1162,7 @@ class PostgresMemoryRepository:
                             .join(Document, Document.id == MemoryUnit.document_id)
                             .where(
                                 MemoryUnit.id.in_(expanded_scores),
+                                self._memory_scope(),
                                 MemoryUnit.state == "active",
                                 Document.status == "indexed",
                                 *self._recall_source_conditions(source_type),
@@ -762,6 +1208,7 @@ class PostgresMemoryRepository:
                 .join(Document, Document.id == MemoryUnit.document_id)
                 .where(
                     *conditions,
+                    self._memory_scope(),
                     MemoryUnit.state == "active",
                     Document.status == "indexed",
                     *self._recall_source_conditions(source_type),
@@ -783,7 +1230,7 @@ class PostgresMemoryRepository:
                 select(MemoryEntity, MemoryUnit)
                 .join(MemoryUnitEntity, MemoryUnitEntity.entity_id == MemoryEntity.id)
                 .join(MemoryUnit, MemoryUnit.id == MemoryUnitEntity.memory_id)
-                .where(MemoryUnit.id.in_(ids))
+                .where(MemoryUnit.id.in_(ids), self._memory_scope())
             )
         states: dict[str, Any] = {}
         for entity, unit in rows:
@@ -805,8 +1252,20 @@ class PostgresMemoryRepository:
         self, query: str, query_embedding: list[float]
     ) -> ReflectionContext:
         async with self._session_factory() as session:
-            models = list((await session.scalars(select(MentalModelRow))).all())
-            profile = await session.get(MemoryProfileRow, "default")
+            models = list(
+                (
+                    await session.scalars(
+                        select(MentalModelRow).where(
+                            scope_predicate(
+                                MentalModelRow.bank_id, MentalModelRow.tags, self.scope
+                            )
+                        )
+                    )
+                ).all()
+            )
+            profile = await session.get(
+                MemoryProfileRow, ("default", self.scope.bank_id)
+            )
         return ReflectionContext(
             mental_models=[
                 MentalModel(

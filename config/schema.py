@@ -1,10 +1,12 @@
 """App config: validates config/app.yaml and selects implementations."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from src.engine.scope_policy import MemoryFeatures
 
 
 class MemoryCfg(BaseModel):
@@ -13,6 +15,13 @@ class MemoryCfg(BaseModel):
     enabled: bool = False
     graph_worker: bool = True
     retain_max_concurrent: int = Field(default=1, ge=1)
+    features: MemoryFeatures = Field(default_factory=MemoryFeatures)
+
+    @model_validator(mode="after")
+    def validate_features(self):
+        if self.features.scope and not self.enabled:
+            raise ValueError("memory features require memory.enabled")
+        return self
 
 
 class IngestCfg(BaseModel):

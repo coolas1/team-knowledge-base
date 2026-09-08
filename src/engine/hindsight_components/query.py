@@ -17,7 +17,11 @@ from src.engine.hindsight_components.providers import ProjectHindsightProviders
 from src.engine.hindsight_components.protocols import MemoryRepository
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
 from src.engine.hindsight_components.service import HindsightService
-from src.engine.hindsight_components.types import RecallCandidate, RecallResult, ReflectResult
+from src.engine.hindsight_components.types import (
+    RecallCandidate,
+    RecallResult,
+    ReflectResult,
+)
 
 
 class CoreQueryService(Protocol):
@@ -39,6 +43,9 @@ class HindsightQueryService:
 
     def __init__(self, core: CoreQueryService) -> None:
         self._core = core
+
+    def with_scope(self, scope):
+        return HindsightQueryService(self._core.with_scope(scope))
 
     async def query(self, request: KnowledgeQueryRequest) -> KnowledgeQueryResult:
         self._validate(request)

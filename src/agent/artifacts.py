@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 from xml.sax.saxutils import escape
+from src.engine.scope import MemoryScope, TagFilter
 
 ArtifactFormat = Literal["docx", "pdf", "pptx"]
 
@@ -37,7 +38,7 @@ def artifacts_root() -> Path:
 def _safe_stem(value: str) -> str:
     stem = _INVALID_FILENAME.sub("-", value).strip(" .-")
     stem = re.sub(r"\s+", " ", stem)
-    return (stem[:80].rstrip() or "generated-document")
+    return stem[:80].rstrip() or "generated-document"
 
 
 def _filename(title: str, requested: str | None, suffix: str) -> str:
@@ -236,7 +237,9 @@ def _generate_pptx(path: Path, title: str, content: str) -> None:
             frame = slide.placeholders[1].text_frame
             frame.clear()
             for line_index, line in enumerate(lines[:12]):
-                paragraph = frame.paragraphs[0] if line_index == 0 else frame.add_paragraph()
+                paragraph = (
+                    frame.paragraphs[0] if line_index == 0 else frame.add_paragraph()
+                )
                 paragraph.text = line
                 paragraph.level = 0
                 paragraph.font.name = "Microsoft YaHei"
@@ -270,7 +273,13 @@ def generate_artifact(
     title: str,
     content: str,
     file_name: str | None = None,
+    scope: MemoryScope | None = None,
+    write_tags: tuple[str, ...] = (),
 ) -> Artifact:
+    scope = scope or MemoryScope()
+    write_tags = TagFilter(write_tags).tags
+    if not scope.permits(scope.bank_id, write_tags):
+        raise ValueError("artifact write tags are outside the trusted scope")
     title = title.strip()
     content = content.strip()
     if not title:
@@ -316,7 +325,14 @@ def generate_artifact(
             slidev_url=slidev_url,
         )
         (directory / "metadata.json").write_text(
-            json.dumps(asdict(artifact), ensure_ascii=False, indent=2),
+            json.dumps(
+                {
+                    **asdict(artifact),
+                    "_scope": {"bank_id": scope.bank_id, "tags": list(write_tags)},
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
         return artifact
@@ -327,7 +343,9 @@ def generate_artifact(
         raise
 
 
-def resolve_artifact(artifact_id: str, *, slidev: bool = False) -> tuple[Path, Artifact]:
+def resolve_artifact(
+    artifact_id: str, *, slidev: bool = False, scope: MemoryScope | None = None
+) -> tuple[Path, Artifact]:
     try:
         normalized_id = str(uuid.UUID(artifact_id))
     except ValueError as exc:
@@ -335,7 +353,11 @@ def resolve_artifact(artifact_id: str, *, slidev: bool = False) -> tuple[Path, A
     directory = artifacts_root() / normalized_id
     metadata_path = directory / "metadata.json"
     try:
-        artifact = Artifact(**json.loads(metadata_path.read_text(encoding="utf-8")))
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        owner = metadata.pop("_scope", {"bank_id": "default-team", "tags": []})
+        if not (scope or MemoryScope()).permits(owner["bank_id"], owner["tags"]):
+            raise FileNotFoundError("artifact not found")
+        artifact = Artifact(**metadata)
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise FileNotFoundError("artifact not found") from exc
     filename = artifact.slidev_filename if slidev else artifact.filename

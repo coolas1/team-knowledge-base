@@ -111,6 +111,7 @@ the Pi model API adapter when required by a compatible provider.
 | `PI_AGENT_HOST` | `127.0.0.1` | HTTP bind host |
 | `PI_AGENT_PORT` | `8010` | HTTP port |
 | `PI_AGENT_DATA_DIR` | `<cwd>/.pi-agent-data` | Runtime data root |
+| `MEMORY_SCOPE_BINDINGS` | `{}` | Trusted credential digest to scope map; must match BFF. See [scope operations](../../../docs/memory-scope.md). |
 | `PI_AGENT_SESSION_DIR` | `<data>/sessions` | Persistent session files |
 | `PI_AGENT_TRANSCRIPT_DIR` | `<data>/transcripts` | Durable visible transcript journals; must differ from the SDK session directory |
 | `PI_AGENT_MAX_TOOL_CALLS` | `12` | Hard tool-call limit per run |

@@ -96,6 +96,29 @@ class FakeConversationMemoryService:
             raise RuntimeError("repository secret")
         return ConversationMemoryDiagnostics(enabled=True, pending=2)
 
+    async def retry_extraction(self, document_id):
+        self.calls.append(("retry", document_id))
+        if self.fail:
+            raise RuntimeError("repository secret")
+        return True
+
+
+async def test_extraction_retry_reports_scheduling_and_sanitizes_failure(fake_kb):
+    document_id = "00000000-0000-0000-0000-000000000001"
+    service = FakeConversationMemoryService()
+    mcp_mod.set_conversation_memory_service(service)
+    assert await mcp_mod.retry_memory_extraction(document_id) == {
+        "document_id": document_id,
+        "scheduled": True,
+    }
+    assert service.calls == [("retry", document_id)]
+    service.fail = True
+    with pytest.raises(RuntimeError) as caught:
+        await mcp_mod.retry_memory_extraction(document_id)
+    assert "secret" not in str(caught.value)
+    with pytest.raises(ValueError, match="invalid document_id"):
+        await mcp_mod.retry_memory_extraction("bad-id")
+
 
 async def test_search_tool_returns_chunks(fake_kb):
     seen = []
@@ -130,6 +153,51 @@ async def test_private_conversation_memory_operations_map_success(fake_kb):
     assert forgotten["deleted_documents"] == 1
     assert status["pending"] == 2
     assert [name for name, _ in service.calls] == ["recall", "enqueue", "forget"]
+
+
+async def test_conversation_delivery_acknowledges_committed_content(
+    fake_kb, monkeypatch
+):
+    import hashlib
+    import json
+    from config import schema
+
+    monkeypatch.setattr(schema, "load_config", lambda *_args: schema.AppConfig())
+    with pytest.raises(ValueError, match="reliable delivery is disabled"):
+        await mcp_mod.enqueue_conversation_turn(
+            "session-1", "turn-1", "question", "answer", require_durable_acceptance=True
+        )
+    configured = schema.AppConfig.model_validate(
+        {
+            "engine": {
+                "memory": {
+                    "enabled": True,
+                    "features": {"scope": True, "reliable_retention": True},
+                }
+            }
+        }
+    )
+    monkeypatch.setattr(schema, "load_config", lambda *_args: configured)
+
+    service = FakeConversationMemoryService()
+    mcp_mod.set_conversation_memory_service(service)
+    result = await mcp_mod.enqueue_conversation_turn(
+        "session-1", "turn-1", " 问题\n", "answer", require_durable_acceptance=True
+    )
+    assert result["durable_acceptance"] is True
+    assert (
+        result["content_hash"]
+        == hashlib.sha256(
+            json.dumps(
+                [" 问题\n", "answer"], ensure_ascii=False, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+    )
+    service.fail = True
+    with pytest.raises(RuntimeError, match="enqueue failed"):
+        await mcp_mod.enqueue_conversation_turn(
+            "session-1", "turn-1", " 问题\n", "answer", require_durable_acceptance=True
+        )
 
 
 async def test_conversation_memory_operations_validate_and_handle_disabled(fake_kb):

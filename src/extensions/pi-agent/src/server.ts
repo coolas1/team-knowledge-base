@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
-import { loadPiAgentConfig } from "./config.js";
+import { loadPiAgentConfig, loadTkbAdapterConfig } from "./config.js";
+import { ScopedRuntimeRegistry, ScopeAuthorizationError } from "./scope-runtime.js";
 import {
   type AgentRuntimeApi,
   PiAgentRuntime,
@@ -50,6 +51,7 @@ class HttpError extends Error {
 }
 
 function statusFor(error: unknown): number {
+  if (error instanceof ScopeAuthorizationError) return 403;
   if (error instanceof HttpError) return error.status;
   if (error instanceof RuntimeNotFoundError) return 404;
   if (error instanceof RuntimeConflictError) return 409;
@@ -72,8 +74,8 @@ function sendSse(response: ServerResponse, event: unknown): void {
 }
 
 export function createPiAgentHttpServer(
-  runtime: AgentRuntimeApi,
-  options: { maxRequestBytes?: number } = {},
+  sharedRuntime: AgentRuntimeApi,
+  options: { maxRequestBytes?: number; scopes?: Pick<ScopedRuntimeRegistry, "resolve"> } = {},
 ): Server {
   const maxRequestBytes = options.maxRequestBytes ?? 1_048_576;
   return createServer(async (request, response) => {
@@ -81,6 +83,9 @@ export function createPiAgentHttpServer(
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
     try {
+      const token = request.headers["x-tkb-scope-token"];
+      if (token !== undefined && !options.scopes) throw new ScopeAuthorizationError();
+      const runtime = options.scopes ? await options.scopes.resolve(token) : sharedRuntime;
       if (method === "GET" && url.pathname === "/health") {
         const health = await runtime.health();
         json(response, health.status === "ok" ? 200 : 503, health);
@@ -99,6 +104,12 @@ export function createPiAgentHttpServer(
       }
       const sessionId = parts[2];
       if (!sessionId) throw new HttpError(404, "session id is required");
+      if (!/^[A-Za-z0-9._-]{1,128}$/.test(sessionId) || sessionId === "." || sessionId === "..") {
+        throw new HttpError(400, "invalid session id");
+      }
+      // Verify ownership before opening SSE or performing mutations. Forget
+      // verifies its durable ownership marker, including after history deletion.
+      if (parts[3] !== "memory") await runtime.getSession(sessionId);
       if (method === "GET" && parts.length === 3) {
         json(response, 200, await runtime.getSession(sessionId));
         return;
@@ -173,8 +184,17 @@ export async function startPiAgentServer(): Promise<{
   const config = loadPiAgentConfig();
   const runtime = new PiAgentRuntime(config);
   await runtime.initialize();
+  const scopes = new ScopedRuntimeRegistry(runtime, config, loadTkbAdapterConfig());
+  try {
+    await scopes.initializeDeliveryScopes();
+  } catch (error) {
+    await scopes.close();
+    await runtime.close();
+    throw error;
+  }
   const server = createPiAgentHttpServer(runtime, {
     maxRequestBytes: config.maxRequestBytes,
+    scopes,
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -184,6 +204,7 @@ export async function startPiAgentServer(): Promise<{
     });
   });
   const shutdown = async () => {
+    await scopes.close();
     await runtime.close();
     server.close();
   };

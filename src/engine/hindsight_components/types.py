@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from src.engine.scope import MemoryScope as MemoryScope
+from src.engine.scope import TagExpression as TagExpression
+
 
 @dataclass(frozen=True, slots=True)
 class DocumentMemoryState:
@@ -26,6 +29,12 @@ class ConversationMemoryJob:
     content: str
     attempts: int
     status: str
+    bank_id: str = "default-team"
+    tags: tuple[str, ...] = ()
+    operation_id: str | None = None
+    lease_token: str | None = None
+    lease_expires_at: datetime | None = None
+    source_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +75,35 @@ class RetainInput:
     context: str | None = None
     tags: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    agent_name: str | None = None
+    speakers: dict[str, str | None] = field(default_factory=dict)
+    source_timestamp: datetime | None = None
+    reference_timezone: str = "UTC"
+    policy_version: int = 1
+    expected_revision: int | None = None
+    request_id: str | None = None
+    force_extraction: bool = False
+
+    def __post_init__(self):
+        from zoneinfo import ZoneInfo
+
+        ZoneInfo(self.reference_timezone)
+        if self.source_timestamp is not None and self.source_timestamp.tzinfo is None:
+            raise ValueError("source_timestamp must include a timezone")
+        if self.policy_version < 1:
+            raise ValueError("policy_version must be positive")
+        if self.request_id is not None and (
+            not isinstance(self.request_id, str)
+            or not self.request_id.strip()
+            or len(self.request_id) > 200
+        ):
+            raise ValueError("request_id must contain 1–200 characters")
+        if self.expected_revision is not None and (
+            type(self.expected_revision) is not int or self.expected_revision < 0
+        ):
+            raise ValueError("expected_revision must be a nonnegative integer")
+        if set(self.speakers) - {"user", "assistant", "unknown"}:
+            raise ValueError("unsupported speaker role")
 
 
 @dataclass(slots=True)
@@ -78,6 +116,9 @@ class ExtractedFact:
     location: str | None = None
     caused_by: list[int] = field(default_factory=list)
     confidence: float = 1.0
+    speaker_role: str = "unknown"
+    modality: str = "unknown"
+    entity_aliases: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -118,6 +159,15 @@ class RetainPlan:
     source_type: str
     memories: list[MemoryDraft]
     links: list[MemoryLinkDraft]
+    extraction_status: str = "success"
+    stage_results: dict[str, str] = field(default_factory=dict)
+    source_context: dict[str, Any] = field(default_factory=dict)
+    expected_revision: int | None = None
+    revision: int | None = None
+    request_id: str | None = None
+    request_hash: str | None = None
+    result_payload: dict[str, Any] = field(default_factory=dict)
+    extraction_cache: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +178,18 @@ class RetainResult:
     observations: int
     memories: int
     links: int
+    status: str = "success"
+    stage_results: dict[str, str] = field(default_factory=dict)
+    error_code: str | None = None
+    revision: int | None = None
+
+
+class RetentionRevisionConflict(ValueError):
+    """Retention was planned against a revision that is no longer current."""
+
+
+class RetentionRequestConflict(ValueError):
+    """An accepted request key cannot be reused with different input."""
 
 
 @dataclass(slots=True)
@@ -224,3 +286,7 @@ class ReflectResult:
     text: str
     based_on: dict[str, list[dict[str, Any]]]
     tool_trace: list[dict[str, Any]]
+
+
+class RetentionLeaseLost(RuntimeError):
+    """The worker no longer owns the right to publish this retention result."""

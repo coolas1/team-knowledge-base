@@ -3,6 +3,7 @@
 Migrated from src/core/knowledge_base.py + src/core/search.py. The backend
 owns its own DB sessions (async_session_factory); callers never pass a session.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,6 +42,7 @@ from src.engine.interface import (
 )
 from src.engine.hindsight_components.enrich import MemoryStateEnricher
 from src.engine.hindsight_components.hook import build_retain_hook
+from src.engine.scope import MemoryScope, TagFilter
 
 # Uploaded document originals; settings-driven (UPLOADS_DIR) so the compose
 # deployment can point at its named volume while the default stays relative.
@@ -75,7 +77,9 @@ def _safe_filename(name: str) -> str:
     return base
 
 
-def _to_ref(doc: Document, chunk_count: int = 0, overview: str | None = None) -> DocumentRef:
+def _to_ref(
+    doc: Document, chunk_count: int = 0, overview: str | None = None
+) -> DocumentRef:
     return DocumentRef(
         id=str(doc.id),
         title=doc.title,
@@ -96,15 +100,31 @@ class GraphRAGBackend:
         neo4j: Neo4jClient,
         pipeline: Pipeline,
         state_enricher: MemoryStateEnricher | None = None,
+        *,
+        scope: MemoryScope | None = None,
+        write_tags: tuple[str, ...] = (),
     ) -> None:
         self._neo4j = neo4j
         self._pipeline = pipeline
         self._enricher = state_enricher
+        self.scope = scope or MemoryScope()
+        self._write_tags = TagFilter(write_tags).tags
+        if hasattr(neo4j, "with_scope"):
+            self._neo4j = neo4j.with_scope(self.scope)
 
     async def _enrich(self, ref: DocumentRef) -> DocumentRef:
         if self._enricher is not None:
             await self._enricher.enrich_ref(ref)
         return ref
+
+    def with_scope(self, scope: MemoryScope, *, write_tags: tuple[str, ...] = ()):
+        return GraphRAGBackend(
+            self._neo4j,
+            self._pipeline,
+            self._enricher.with_scope(scope) if self._enricher is not None else None,
+            scope=scope,
+            write_tags=write_tags,
+        )
 
     # ── ingest / reingest / remove ───────────────────────────────
 
@@ -136,6 +156,8 @@ class GraphRAGBackend:
     async def _ingest_one(
         self, source: IngestSource
     ) -> tuple[DocumentRef, asyncio.Task]:
+        if not self.scope.permits(self.scope.bank_id, self._write_tags):
+            raise ValueError("document write tags are outside the trusted scope")
         data = source.data
         if source.path is not None and not data:
             data = source.path.read_bytes()
@@ -149,6 +171,8 @@ class GraphRAGBackend:
 
         async with async_session_factory() as session:
             doc = Document(
+                bank_id=self.scope.bank_id,
+                tags=list(self._write_tags),
                 id=doc_id,
                 title=source.name,
                 file_type=file_type,
@@ -169,7 +193,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc or not is_public_document(doc):
+            if not doc or not is_public_document(doc, self.scope):
                 raise ValueError(f"文档不存在: {doc_id}")
             await session.execute(
                 update(Document)
@@ -187,7 +211,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc or not is_public_document(doc):
+            if not doc or not is_public_document(doc, self.scope):
                 raise ValueError(f"文档不存在: {doc_id}")
             new_text = doc.raw_text or ""
             file_path = Path(doc.file_path) if doc.file_path else None
@@ -217,7 +241,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc or not is_public_document(doc):
+            if not doc or not is_public_document(doc, self.scope):
                 return
             await self._pipeline.before_remove(doc_id)
             _remove_upload_directory(uid)
@@ -232,7 +256,11 @@ class GraphRAGBackend:
 
         async with async_session_factory() as session:
             result = await full_search(
-                session, self._neo4j, request.query, top_k=request.top_k
+                session,
+                self._neo4j,
+                request.query,
+                top_k=request.top_k,
+                scope=self.scope,
             )
         chunks = [
             RecallChunk(
@@ -260,28 +288,59 @@ class GraphRAGBackend:
             if not details:
                 return GraphData()
             return GraphData(
-                nodes=[GraphNode(
-                    name=details.name, type=details.entity_type,
-                    description=details.properties.get("description", ""),
-                    sources=details.properties.get("sources", [])
-                            if isinstance(details.properties.get("sources"), list) else [],
-                )],
-                links=[GraphLink(source=r.get("other_name", ""), target=details.name,
-                                 type=r.get("type", ""), description=r.get("description", ""))
-                       for r in details.relations if r.get("type")],
+                nodes=[
+                    GraphNode(
+                        name=details.name,
+                        type=details.entity_type,
+                        description=details.properties.get("description", ""),
+                        sources=details.properties.get("sources", [])
+                        if isinstance(details.properties.get("sources"), list)
+                        else [],
+                    )
+                ],
+                links=[
+                    GraphLink(
+                        source=r.get("other_name", ""),
+                        target=details.name,
+                        type=r.get("type", ""),
+                        description=r.get("description", ""),
+                    )
+                    for r in details.relations
+                    if r.get("type")
+                ],
             )
         return GraphData(
-            nodes=[GraphNode(name=n["name"], type=n["type"], description=n.get("description", ""),
-                             sources=n.get("sources", [])) for n in raw.get("nodes", [])],
-            links=[GraphLink(source=link["source"], target=link["target"], type=link["type"],
-                             description=link.get("description", "")) for link in raw.get("links", [])],
+            nodes=[
+                GraphNode(
+                    name=n["name"],
+                    type=n["type"],
+                    description=n.get("description", ""),
+                    sources=n.get("sources", []),
+                )
+                for n in raw.get("nodes", [])
+            ],
+            links=[
+                GraphLink(
+                    source=link["source"],
+                    target=link["target"],
+                    type=link["type"],
+                    description=link.get("description", ""),
+                )
+                for link in raw.get("links", [])
+            ],
         )
 
     async def get_neighbors(self, entity: str) -> GraphData:
         results = await self._neo4j.query_neighbors(entity, hops=2)
         return GraphData(
-            nodes=[GraphNode(name=r.name, type=r.entity_type,
-                             description=r.properties.get("description", "")) for r in results],
+            nodes=[
+                GraphNode(
+                    name=r.name,
+                    type=r.entity_type,
+                    description=r.properties.get("description", ""),
+                )
+                for r in results
+            ],
             links=[],
         )
 
@@ -297,7 +356,7 @@ class GraphRAGBackend:
         async with async_session_factory() as session:
             stmt = (
                 select(Document)
-                .where(public_document_filter())
+                .where(public_document_filter(self.scope))
                 .order_by(Document.created_at.desc())
             )
             if file_type:
@@ -305,7 +364,9 @@ class GraphRAGBackend:
             if status:
                 stmt = stmt.where(Document.status == status)
 
-            count_stmt = select(func.count(Document.id)).where(public_document_filter())
+            count_stmt = select(func.count(Document.id)).where(
+                public_document_filter(self.scope)
+            )
             if file_type:
                 count_stmt = count_stmt.where(Document.file_type == file_type)
             if status:
@@ -317,7 +378,9 @@ class GraphRAGBackend:
 
             items: list[dict[str, Any]] = [
                 {
-                    "id": str(d.id), "title": d.title, "file_type": d.file_type,
+                    "id": str(d.id),
+                    "title": d.title,
+                    "file_type": d.file_type,
                     "status": d.status,
                     "overview": (d.overview or "")[:200],
                     "created_at": d.created_at.isoformat() if d.created_at else None,
@@ -328,7 +391,9 @@ class GraphRAGBackend:
         if self._enricher is not None:
             await self._enricher.enrich_dicts(items)
         return {
-            "total": total, "page": page, "page_size": page_size,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
             "items": items,
         }
 
@@ -336,15 +401,20 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc or not is_public_document(doc):
+            if not doc or not is_public_document(doc, self.scope):
                 return None
             count_stmt = select(func.count(Chunk.id)).where(Chunk.doc_id == uid)
             chunk_count = (await session.execute(count_stmt)).scalar() or 0
             result: dict[str, Any] = {
-                "id": str(doc.id), "title": doc.title, "file_type": doc.file_type,
-                "raw_text": doc.raw_text, "overview": doc.overview,
-                "file_path": doc.file_path, "content_hash": doc.content_hash,
-                "status": doc.status, "error_msg": doc.error_msg,
+                "id": str(doc.id),
+                "title": doc.title,
+                "file_type": doc.file_type,
+                "raw_text": doc.raw_text,
+                "overview": doc.overview,
+                "file_path": doc.file_path,
+                "content_hash": doc.content_hash,
+                "status": doc.status,
+                "error_msg": doc.error_msg,
                 "chunk_count": chunk_count,
                 "created_at": doc.created_at.isoformat() if doc.created_at else None,
                 "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
@@ -357,7 +427,9 @@ class GraphRAGBackend:
 def build(config: EngineConfig) -> GraphRAGBackend:
     """Factory used by src.engine.config.build_engine."""
 
-    neo4j = Neo4jClient()
+    from src.engine.components.store.source_graph import SourceNeo4jClient
+
+    neo4j = SourceNeo4jClient()
     analyzer = Analyzer(schema_path=config.config_dir / "entity_schema.yaml")
     index_hook = config.index_hook
     enricher: MemoryStateEnricher | None = None

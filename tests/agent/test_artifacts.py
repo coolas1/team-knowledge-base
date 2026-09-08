@@ -8,6 +8,40 @@ import pytest
 from src.agent.artifacts import generate_artifact, resolve_artifact
 
 
+def test_artifact_download_checks_scope_and_preserves_legacy_metadata(
+    tmp_path, monkeypatch
+):
+    import json
+    from src.agent import artifacts
+    from src.engine.scope import MemoryScope, TagFilter
+
+    monkeypatch.setenv("ARTIFACTS_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        artifacts, "_generate_docx", lambda path, *_: path.write_bytes(b"test")
+    )
+    scope = MemoryScope(bank_id="A", visibility=TagFilter(("u:1",), "exact"))
+    artifact = generate_artifact(
+        format="docx",
+        title="private",
+        content="private",
+        scope=scope,
+        write_tags=("u:1",),
+    )
+    assert resolve_artifact(artifact.id, scope=scope)[0].read_bytes() == b"test"
+    for denied in (
+        MemoryScope(),
+        MemoryScope(bank_id="B"),
+        MemoryScope(bank_id="A", visibility=TagFilter(("u:2",), "all_strict")),
+    ):
+        with pytest.raises(FileNotFoundError):
+            resolve_artifact(artifact.id, scope=denied)
+    metadata_path = tmp_path / artifact.id / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.pop("_scope")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    assert resolve_artifact(artifact.id)[1] == artifact
+
+
 @pytest.mark.parametrize("format", ["docx", "pdf", "pptx"])
 def test_generate_downloadable_office_artifacts(tmp_path, monkeypatch, format):
     monkeypatch.setenv("ARTIFACTS_DIR", str(tmp_path))

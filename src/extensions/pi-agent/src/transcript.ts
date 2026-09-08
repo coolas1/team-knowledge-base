@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -46,6 +46,35 @@ export interface AssistantCompletedEvent {
   messageId: string;
   text: string;
   timestamp: string;
+  delivery?: DeliveryIntent;
+}
+
+export interface DeliveryIntent {
+  key: string;
+  scopeKey: string;
+  contentHash: string;
+}
+
+export interface DeliveryResultEvent {
+  type: "delivery.result";
+  sessionId: string;
+  turnId: string;
+  timestamp: string;
+  status: "pending" | "accepted" | "failed" | "conflict" | "cancelled";
+  attempts: number;
+  nextAttemptAt?: string;
+  errorCode?: string;
+  operationId?: string;
+}
+
+export function completedTurnDelivery(
+  scopeKey: string, sessionId: string, turnId: string, userText: string, assistantText: string,
+): DeliveryIntent {
+  return {
+    key: createHash("sha256").update(JSON.stringify([scopeKey, sessionId, turnId])).digest("hex"),
+    scopeKey,
+    contentHash: createHash("sha256").update(JSON.stringify([userText, assistantText])).digest("hex"),
+  };
 }
 
 export interface TurnTerminalEvent {
@@ -61,6 +90,7 @@ export type TranscriptEvent =
   | UserAcceptedEvent
   | TurnRunningEvent
   | AssistantCompletedEvent
+  | DeliveryResultEvent
   | TurnTerminalEvent;
 
 export interface TranscriptMessage {
@@ -81,6 +111,8 @@ export interface TranscriptTurn {
   status: TurnStatus;
   timestamp: string;
   assistantText?: string;
+  delivery?: DeliveryIntent;
+  deliveryResult?: DeliveryResultEvent;
 }
 
 export interface TranscriptDiagnostic {
@@ -128,7 +160,7 @@ export function foldTranscript(parsed: ParsedJournal): TranscriptSnapshot {
   let modifiedAt = parsed.header.createdAt;
 
   for (const event of parsed.events) {
-    modifiedAt = event.timestamp > modifiedAt ? event.timestamp : modifiedAt;
+    if (event.type !== "delivery.result") modifiedAt = event.timestamp > modifiedAt ? event.timestamp : modifiedAt;
     switch (event.type) {
       case "user.accepted": {
         if (submissions[event.clientMessageId] || turns.has(event.turnId)) break;
@@ -166,6 +198,7 @@ export function foldTranscript(parsed: ParsedJournal): TranscriptSnapshot {
         if (!turn || ["failed", "cancelled", "interrupted"].includes(turn.status)) break;
         turn.status = "completed";
         turn.assistantText = event.text;
+        turn.delivery = event.delivery;
         if (event.text.trim() && !messageIds.has(event.messageId)) {
           messages.push({
             id: event.messageId,
@@ -182,6 +215,11 @@ export function foldTranscript(parsed: ParsedJournal): TranscriptSnapshot {
       case "turn.terminal": {
         const turn = turns.get(event.turnId);
         if (turn && turn.status !== "completed") turn.status = event.status;
+        break;
+      }
+      case "delivery.result": {
+        const turn = turns.get(event.turnId);
+        if (turn?.status === "completed" && turn.delivery) turn.deliveryResult = event;
         break;
       }
       default:
@@ -397,6 +435,18 @@ export class TranscriptStore {
   async snapshot(sessionId: string): Promise<TranscriptSnapshot | undefined> {
     const parsed = await this.parse(sessionId);
     return parsed ? foldTranscript(parsed) : undefined;
+  }
+
+  async archiveDelivery(sessionId: string, archive: TranscriptStore): Promise<void> {
+    await this.locked(sessionId, async () => {
+      const parsed = await this.parse(sessionId);
+      if (!parsed) return;
+      if (parsed.diagnostic) throw new Error("cannot archive an invalid delivery journal");
+      const selected = new Set(foldTranscript(parsed).turns.filter((turn) => turn.delivery
+        && !["accepted", "cancelled"].includes(turn.deliveryResult?.status ?? "pending")).map((turn) => turn.id));
+      if (selected.size) await archive.writeNew(sessionId,
+        parsed.events.filter((event) => selected.has(event.turnId)), parsed.header.createdAt);
+    });
   }
 
   async accept(sessionId: string, text: string, clientMessageId: string): Promise<AcceptedTurn> {

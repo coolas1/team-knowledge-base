@@ -248,7 +248,10 @@ async def test_neo4j_delete_only_removes_hindsight_projection():
     assert "MATCH (memory:HindsightMemory" in queries
     assert "DETACH DELETE memory" in queries
     assert "DELETE document" not in queries
-    assert driver.calls[0][1] == {"document_id": "document-1"}
+    assert driver.calls[0][1] == {
+        "document_id": "document-1",
+        "bank_id": "default-team",
+    }
 
 
 def test_relationship_query_rejects_dynamic_cypher_type():

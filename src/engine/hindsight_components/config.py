@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class HindsightOptions:
+    entity_resolution_enabled: bool = False
+    entity_candidate_limit: int = 10
+    entity_resolution_timeout_seconds: float = 15.0
     chunk_tokens: int = 500
     chunk_overlap_tokens: int = 50
     recall_limit: int = 20
@@ -36,7 +39,11 @@ class HindsightOptions:
     reflect_model_limit: int = 5
 
     def __post_init__(self) -> None:
+        if self.entity_candidate_limit > 100:
+            raise ValueError("entity_candidate_limit cannot exceed 100")
         positive = {
+            "entity_candidate_limit": self.entity_candidate_limit,
+            "entity_resolution_timeout_seconds": self.entity_resolution_timeout_seconds,
             "deep_total_timeout_seconds": self.deep_total_timeout_seconds,
             "query_analysis_timeout_seconds": self.query_analysis_timeout_seconds,
             "query_embedding_timeout_seconds": self.query_embedding_timeout_seconds,

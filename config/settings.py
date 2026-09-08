@@ -2,6 +2,7 @@
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from src.engine.trusted_scope import ScopeBinding
 
 
 class LLMSettings(BaseSettings):
@@ -66,6 +67,7 @@ class RerankerSettings(BaseSettings):
 
 class InfraSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    memory_scope_bindings: dict[str, ScopeBinding] = Field(default_factory=dict, repr=False)
 
     postgres_host: str = "localhost"
     postgres_port: int = 5433

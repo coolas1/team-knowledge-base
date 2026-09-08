@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from .graph_types import MemoryGraphProjection
+from src.engine.scope import MemoryScope
 
 MEMORY_LINK_RELATIONSHIPS = {
     "caused_by": "CAUSED_BY",
@@ -16,6 +17,8 @@ MEMORY_LINK_RELATIONSHIPS = {
 
 
 class MemoryGraphStore(Protocol):
+    def with_scope(self, scope: MemoryScope) -> MemoryGraphStore: ...
+
     async def ensure_schema(self) -> None: ...
 
     async def replace_document(self, projection: MemoryGraphProjection) -> None: ...
@@ -28,6 +31,9 @@ class MemoryGraphProjector:
 
     def __init__(self, store: MemoryGraphStore) -> None:
         self._store = store
+
+    def with_scope(self, scope: MemoryScope) -> MemoryGraphProjector:
+        return MemoryGraphProjector(self._store.with_scope(scope))
 
     async def ensure_schema(self) -> None:
         await self._store.ensure_schema()
@@ -43,6 +49,7 @@ class MemoryGraphProjector:
 
     @staticmethod
     def _validate(projection: MemoryGraphProjection) -> None:
+        MemoryScope(bank_id=projection.document.bank_id)
         document_id = projection.document.id.strip()
         if not document_id:
             raise ValueError("document id cannot be empty")

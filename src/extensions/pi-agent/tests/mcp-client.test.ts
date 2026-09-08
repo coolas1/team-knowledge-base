@@ -22,6 +22,21 @@ function fakeClient(overrides: Partial<McpClientLike> = {}): McpClientLike {
 }
 
 describe("TkbMcpClient", () => {
+  it("keeps concurrent scope credentials in transport headers only", async () => {
+    const raw = fakeClient();
+    const createTransport = vi.fn(() => ({}));
+    const config = loadTkbAdapterConfig({});
+    const clients = ["A", "B", undefined].map((scopeToken) => new TkbMcpClient(
+      { ...config, scopeToken }, { createClient: () => raw, createTransport },
+    ));
+    await Promise.all(clients.map((client) => client.callTool("search", { query: "same" })));
+    expect(createTransport.mock.calls).toEqual([
+      [new URL(config.mcpUrl), { "X-TKB-Scope-Token": "A" }],
+      [new URL(config.mcpUrl), { "X-TKB-Scope-Token": "B" }],
+      [new URL(config.mcpUrl), undefined],
+    ]);
+    expect(raw.callTool).toHaveBeenCalledWith({ name: "search", arguments: { query: "same" } });
+  });
   it("returns MCP text and closes the connection", async () => {
     const raw = fakeClient();
     const client = new TkbMcpClient(loadTkbAdapterConfig({}), dependencies(raw));

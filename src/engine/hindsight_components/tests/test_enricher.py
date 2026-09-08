@@ -1,4 +1,5 @@
 """MemoryStateEnricher: DocumentRef/dict enrichment from memory state."""
+
 from src.engine.interface import DocumentRef
 from src.engine.hindsight_components.enrich import MemoryStateEnricher
 from src.engine.hindsight_components.types import DocumentMemoryState

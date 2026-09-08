@@ -3,11 +3,13 @@ Relocated from src/engine/mcp.py - MCP belongs to the plugin, not the engine
 (docs/architecture.md §1, §2). remove_document is hook-guarded (policy-as-data).
 When a KnowledgeQuery is wired (hindsight engine), additional recall/reflect
 tools are registered."""
+
 from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
+from src.engine.trusted_scope import bind_service, resolve_binding
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -84,19 +86,37 @@ def set_conversation_memory_service(
 def _get_kb() -> KnowledgeBase:
     if _kb is None:
         raise RuntimeError("KnowledgeBase 未初始化")
-    return _kb
+    return bind_service(_kb, _request_binding(), writes=True)
 
 
 def _get_query_service() -> KnowledgeQuery:
     if _query_service is None:
         raise RuntimeError("Hindsight 查询服务未初始化")
-    return _query_service
+    return bind_service(_query_service, _request_binding())
 
 
 def _get_conversation_memory_service() -> ConversationMemory:
     if _conversation_memory_service is None:
         raise RuntimeError("Conversation memory is disabled")
-    return _conversation_memory_service
+    return bind_service(_conversation_memory_service, _request_binding(), writes=True)
+
+
+def _request_binding():
+    import os
+    from config.schema import load_config
+    from config.settings import settings
+
+    try:
+        request = mcp.get_context().request_context.request
+    except ValueError:
+        request = None  # stdio/direct in-process calls use the default scope.
+    return resolve_binding(
+        request.headers if request is not None else {},
+        enabled=load_config(
+            os.getenv("APP_CONFIG", "config/app.yaml")
+        ).engine.memory.features.scope,
+        bindings=settings.memory_scope_bindings,
+    )
 
 
 def _conversation_operation_failed(operation: str, error: Exception) -> RuntimeError:
@@ -133,12 +153,23 @@ async def enqueue_conversation_turn(
     turn_id: str,
     user_text: str,
     assistant_text: str,
+    require_durable_acceptance: bool = False,
+    source_timestamp: str | None = None,
+    reference_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """Internal runtime operation; not intended for model-selected tools."""
     if not session_id.strip() or not turn_id.strip():
         raise ValueError("session_id and turn_id must not be empty")
     if not user_text.strip() or not assistant_text.strip():
         raise ValueError("user_text and assistant_text must not be empty")
+    if require_durable_acceptance:
+        import os
+        from config.schema import load_config
+
+        if not load_config(
+            os.getenv("APP_CONFIG", "config/app.yaml")
+        ).engine.memory.features.reliable_retention:
+            raise ValueError("reliable delivery is disabled")
     try:
         result = await _get_conversation_memory_service().enqueue_conversation_turn(
             ConversationTurn(
@@ -146,6 +177,8 @@ async def enqueue_conversation_turn(
                 turn_id=turn_id,
                 user_text=user_text,
                 assistant_text=assistant_text,
+                source_timestamp=source_timestamp,
+                reference_timezone=reference_timezone,
             )
         )
     except (ValueError, RuntimeError) as error:
@@ -154,7 +187,24 @@ async def enqueue_conversation_turn(
         raise _conversation_operation_failed("enqueue", error) from error
     except Exception as error:
         raise _conversation_operation_failed("enqueue", error) from error
-    return asdict(result)
+    response = asdict(result)
+    operation_id = response.pop("operation_id", None)
+    if require_durable_acceptance:
+        import hashlib
+        import json
+
+        response.update(
+            durable_acceptance=True,
+            operation_id=operation_id or result.document_id,
+            content_hash=hashlib.sha256(
+                json.dumps(
+                    [user_text, assistant_text],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest(),
+        )
+    return response
 
 
 async def forget_conversation_memory(session_id: str) -> dict[str, Any]:
@@ -172,6 +222,22 @@ async def forget_conversation_memory(session_id: str) -> dict[str, Any]:
     except Exception as error:
         raise _conversation_operation_failed("forget", error) from error
     return asdict(result)
+
+
+async def retry_memory_extraction(document_id: str) -> dict[str, Any]:
+    """Retry a failed conversation extraction in the caller's trusted scope."""
+    import uuid
+
+    try:
+        document_id = str(uuid.UUID(document_id))
+    except ValueError:
+        raise ValueError("invalid document_id") from None
+    service = _get_conversation_memory_service()
+    try:
+        scheduled = await service.retry_extraction(document_id)
+    except Exception as error:
+        raise _conversation_operation_failed("retry", error) from error
+    return {"document_id": document_id, "scheduled": scheduled}
 
 
 async def get_conversation_memory_status() -> dict[str, Any]:
@@ -420,19 +486,27 @@ async def generate_document(
     """
     from src.agent.artifacts import generate_artifact
 
+    binding = _request_binding()
+
     return asdict(
         generate_artifact(
             format=format,
             title=title,
             content=content,
             file_name=file_name,
+            scope=binding.scope(),
+            write_tags=binding.write_tags,
         )
     )
 
 
 # Register tools (FastMCP introspects signatures). The three memory tools are
 # registered only when a query service is wired (see set_query_service).
-_MEMORY_TOOL_NAMES = ("query_knowledge", "search_knowledge_fast", "search_knowledge_deep")
+_MEMORY_TOOL_NAMES = (
+    "query_knowledge",
+    "search_knowledge_fast",
+    "search_knowledge_deep",
+)
 
 _memory_tools_registered = False
 
@@ -474,6 +548,7 @@ mcp.tool()(recall_conversation_memory)
 mcp.tool()(enqueue_conversation_turn)
 mcp.tool()(forget_conversation_memory)
 mcp.tool()(get_conversation_memory_status)
+mcp.tool()(retry_memory_extraction)
 
 
 def build_app():

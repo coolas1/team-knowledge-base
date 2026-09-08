@@ -1,6 +1,11 @@
 import path from "node:path";
 
 export interface TkbAdapterConfig {
+  /** Trusted HTTP credential, never included in tool arguments or prompts. */
+  scopeToken?: string;
+  /** Stable server binding identity for durable delivery, never caller input. */
+  scopeKey?: string;
+  conversationMemoryReliableDelivery?: boolean;
   mcpUrl: string;
   connectTimeoutMs: number;
   defaultToolTimeoutMs: number;
@@ -102,6 +107,9 @@ function enumValue<T extends string>(
 export function loadTkbAdapterConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): TkbAdapterConfig {
+  if (enabled(env.TKB_CONVERSATION_MEMORY_RELIABLE_DELIVERY) && !enabled(env.TKB_CONVERSATION_MEMORY_ENABLED)) {
+    throw new Error("reliable delivery requires conversation memory");
+  }
   return {
     mcpUrl: env.TKB_MCP_URL?.trim() || "http://localhost:8000/mcp/",
     connectTimeoutMs: positiveInteger(env.TKB_CONNECT_TIMEOUT_MS, 10_000),
@@ -112,6 +120,7 @@ export function loadTkbAdapterConfig(
     enableWriteTools: enabled(env.TKB_ENABLE_WRITE_TOOLS),
     enableFullGraph: enabled(env.TKB_ENABLE_FULL_GRAPH),
     conversationMemoryEnabled: enabled(env.TKB_CONVERSATION_MEMORY_ENABLED),
+    conversationMemoryReliableDelivery: enabled(env.TKB_CONVERSATION_MEMORY_RELIABLE_DELIVERY),
     conversationMemoryRecallTimeoutMs: requiredPositiveInteger(
       env.TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS,
       5_000,

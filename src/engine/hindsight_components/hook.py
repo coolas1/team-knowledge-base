@@ -10,7 +10,8 @@ from src.engine.hindsight_components.providers import ProjectHindsightProviders
 from src.engine.hindsight_components.protocols import MemoryRepository
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
 from src.engine.hindsight_components.service import HindsightService
-from src.engine.hindsight_components.types import RetainInput
+from src.engine.hindsight_components.types import RetainInput, RetentionRevisionConflict
+from src.engine.scope import MemoryScope
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,15 @@ class HindsightRetainHook:
         self._service = service
         self._repository = repository
         self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._write_tags: tuple[str, ...] = ()
+
+    def with_scope(self, scope: MemoryScope, *, write_tags: tuple[str, ...] = ()):
+        hook = HindsightRetainHook(
+            self._service.with_scope(scope), self._repository.with_scope(scope)
+        )
+        hook._semaphore = self._semaphore
+        hook._write_tags = write_tags
+        return hook
 
     async def after_indexed(
         self,
@@ -63,8 +73,11 @@ class HindsightRetainHook:
                         content=content,
                         file_type=file_type,
                         source_type="graphrag-pipeline",
+                        tags=self._write_tags,
                     )
                 )
+        except RetentionRevisionConflict:
+            logger.info("Retain superseded by newer revision for %s", document_id)
         except Exception as error:
             logger.exception("Hindsight retain failed for %s", document_id)
             await self._repository.set_document_state(

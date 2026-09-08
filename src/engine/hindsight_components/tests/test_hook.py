@@ -135,7 +135,10 @@ async def test_build_retain_hook_uses_injected_repository(monkeypatch) -> None:
     hook = build_retain_hook(repository=repo)
 
     await hook.after_indexed(
-        document_id="d1", title="t.md", content="text", file_type="markdown",
+        document_id="d1",
+        title="t.md",
+        content="text",
+        file_type="markdown",
     )
 
     assert repo.states == [("d1", "retaining", None)]

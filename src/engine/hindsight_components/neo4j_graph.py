@@ -9,11 +9,17 @@ from typing import Any
 from neo4j import AsyncGraphDatabase
 
 from config.settings import settings
+from src.engine.scope import MemoryScope
 
 from .graph_projector import MEMORY_LINK_RELATIONSHIPS
 from .graph_types import MemoryGraphProjection
 
 _SCHEMA_QUERIES = (
+    "MATCH (n:HindsightMemory) WHERE n.bank_id IS NULL SET n.bank_id = 'default-team'",
+    "MATCH (n:HindsightEntity) WHERE n.bank_id IS NULL SET n.bank_id = 'default-team'",
+    "MATCH (n:Document) WHERE n.bank_id IS NULL SET n.bank_id = 'default-team'",
+    "DROP CONSTRAINT hindsight_entity_normalized_name IF EXISTS",
+    "DROP CONSTRAINT hindsight_entity_bank_name IF EXISTS",
     """
     CREATE CONSTRAINT hindsight_memory_id IF NOT EXISTS
     FOR (memory:HindsightMemory) REQUIRE memory.id IS UNIQUE
@@ -23,8 +29,8 @@ _SCHEMA_QUERIES = (
     FOR (entity:HindsightEntity) REQUIRE entity.id IS UNIQUE
     """,
     """
-    CREATE CONSTRAINT hindsight_entity_normalized_name IF NOT EXISTS
-    FOR (entity:HindsightEntity) REQUIRE entity.normalized_name IS UNIQUE
+    CREATE INDEX hindsight_entity_bank_name_lookup IF NOT EXISTS
+    FOR (entity:HindsightEntity) ON (entity.bank_id, entity.normalized_name)
     """,
     """
     CREATE CONSTRAINT tkb_document_id IF NOT EXISTS
@@ -41,21 +47,22 @@ _SCHEMA_QUERIES = (
 )
 
 _UPSERT_DOCUMENT = """
-MERGE (document:Document {doc_id: $document_id})
+MERGE (document:Document {doc_id: $document_id, bank_id: $bank_id})
 SET document.title = $title,
+    document.tags = $document_tags,
     document.file_type = $file_type,
     document.overview = $overview
 """
 
 _DELETE_DOCUMENT_MEMORIES = """
-MATCH (memory:HindsightMemory {document_id: $document_id})
+MATCH (memory:HindsightMemory {document_id: $document_id, bank_id: $bank_id})
 DETACH DELETE memory
 """
 
 _UPSERT_MEMORIES = """
-MATCH (document:Document {doc_id: $document_id})
+MATCH (document:Document {doc_id: $document_id, bank_id: $bank_id})
 UNWIND $memories AS item
-MERGE (memory:HindsightMemory {id: item.id})
+MERGE (memory:HindsightMemory {id: item.id, bank_id: $bank_id})
 SET memory.document_id = $document_id,
     memory.memory_type = item.memory_type,
     memory.text = item.text,
@@ -73,8 +80,8 @@ MERGE (document)-[:CONTAINS_MEMORY]->(memory)
 
 _UPSERT_ENTITIES = """
 UNWIND $entities AS item
-MERGE (entity:HindsightEntity {normalized_name: item.normalized_name})
-SET entity.id = item.id,
+MERGE (entity:HindsightEntity {id: item.id, bank_id: $bank_id})
+SET entity.normalized_name = item.normalized_name,
     entity.canonical_name = item.canonical_name,
     entity.entity_type = item.entity_type,
     entity.metadata_json = item.metadata_json
@@ -82,20 +89,20 @@ SET entity.id = item.id,
 
 _UPSERT_MENTIONS = """
 UNWIND $mentions AS item
-MATCH (memory:HindsightMemory {id: item.memory_id})
-MATCH (entity:HindsightEntity {id: item.entity_id})
+MATCH (memory:HindsightMemory {id: item.memory_id, bank_id: $bank_id})
+MATCH (entity:HindsightEntity {id: item.entity_id, bank_id: $bank_id})
 MERGE (memory)-[mention:MENTIONS]->(entity)
 SET mention.role = item.role
 """
 
 _DELETE_ORPHANS = """
-MATCH (entity:HindsightEntity)
+MATCH (entity:HindsightEntity {bank_id: $bank_id})
 WHERE NOT (entity)<-[:MENTIONS]-(:HindsightMemory)
 DETACH DELETE entity
 """
 
 _DELETE_ORPHAN_PLACEHOLDERS = """
-MATCH (memory:HindsightMemory {placeholder: true})
+MATCH (memory:HindsightMemory {placeholder: true, bank_id: $bank_id})
 WHERE NOT (memory)--()
 DETACH DELETE memory
 """
@@ -108,11 +115,17 @@ class HindsightNeo4jGraphStore:
     ``HindsightMemory``/``HindsightEntity`` labels and their relationships.
     """
 
-    def __init__(self, driver: Any | None = None) -> None:
+    def __init__(
+        self, driver: Any | None = None, *, scope: MemoryScope | None = None
+    ) -> None:
+        self.scope = scope or MemoryScope()
         self._driver = driver or AsyncGraphDatabase.driver(
             settings.neo4j_uri,
             auth=(settings.neo4j_user, settings.neo4j_password),
         )
+
+    def with_scope(self, scope: MemoryScope) -> HindsightNeo4jGraphStore:
+        return HindsightNeo4jGraphStore(self._driver, scope=scope)
 
     async def close(self) -> None:
         await self._driver.close()
@@ -123,26 +136,37 @@ class HindsightNeo4jGraphStore:
                 await session.run(query)
 
     async def replace_document(self, projection: MemoryGraphProjection) -> None:
+        if not self.scope.permits(
+            projection.document.bank_id, projection.document.tags
+        ):
+            raise ValueError("projection is outside the graph store scope")
         async with self._driver.session() as session:
             await session.execute_write(self._replace_document, projection)
 
     async def delete_document(self, document_id: str) -> None:
         async with self._driver.session() as session:
-            await session.execute_write(self._delete_document, document_id)
+            await session.execute_write(
+                self._delete_document, document_id, self.scope.bank_id
+            )
 
     @staticmethod
     async def _replace_document(tx: Any, projection: MemoryGraphProjection) -> None:
         document = projection.document
         await tx.run(
             _UPSERT_DOCUMENT,
+            bank_id=document.bank_id,
+            document_tags=list(document.tags),
             document_id=document.id,
             title=document.title,
             file_type=document.file_type,
             overview=document.overview,
         )
-        await tx.run(_DELETE_DOCUMENT_MEMORIES, document_id=document.id)
+        await tx.run(
+            _DELETE_DOCUMENT_MEMORIES, document_id=document.id, bank_id=document.bank_id
+        )
         await tx.run(
             _UPSERT_MEMORIES,
+            bank_id=document.bank_id,
             document_id=document.id,
             memories=[
                 {
@@ -165,6 +189,7 @@ class HindsightNeo4jGraphStore:
         )
         await tx.run(
             _UPSERT_ENTITIES,
+            bank_id=document.bank_id,
             entities=[
                 {
                     "id": entity.id,
@@ -180,6 +205,7 @@ class HindsightNeo4jGraphStore:
         )
         await tx.run(
             _UPSERT_MENTIONS,
+            bank_id=document.bank_id,
             mentions=[
                 {
                     "memory_id": mention.memory_id,
@@ -205,17 +231,21 @@ class HindsightNeo4jGraphStore:
         for link_type, links in links_by_type.items():
             relationship = MEMORY_LINK_RELATIONSHIPS[link_type]
             await tx.run(
-                HindsightNeo4jGraphStore._link_query(relationship), links=links
+                HindsightNeo4jGraphStore._link_query(relationship),
+                links=links,
+                bank_id=document.bank_id,
             )
 
-        await tx.run(_DELETE_ORPHANS)
-        await tx.run(_DELETE_ORPHAN_PLACEHOLDERS)
+        await tx.run(_DELETE_ORPHANS, bank_id=document.bank_id)
+        await tx.run(_DELETE_ORPHAN_PLACEHOLDERS, bank_id=document.bank_id)
 
     @staticmethod
-    async def _delete_document(tx: Any, document_id: str) -> None:
-        await tx.run(_DELETE_DOCUMENT_MEMORIES, document_id=document_id)
-        await tx.run(_DELETE_ORPHANS)
-        await tx.run(_DELETE_ORPHAN_PLACEHOLDERS)
+    async def _delete_document(tx: Any, document_id: str, bank_id: str) -> None:
+        await tx.run(
+            _DELETE_DOCUMENT_MEMORIES, document_id=document_id, bank_id=bank_id
+        )
+        await tx.run(_DELETE_ORPHANS, bank_id=bank_id)
+        await tx.run(_DELETE_ORPHAN_PLACEHOLDERS, bank_id=bank_id)
 
     @staticmethod
     def _link_query(relationship: str) -> str:
@@ -223,8 +253,8 @@ class HindsightNeo4jGraphStore:
             raise ValueError(f"unsupported Neo4j relationship: {relationship}")
         return f"""
         UNWIND $links AS item
-        MATCH (source:HindsightMemory {{id: item.source_memory_id}})
-        MERGE (target:HindsightMemory {{id: item.target_memory_id}})
+        MATCH (source:HindsightMemory {{id: item.source_memory_id, bank_id: $bank_id}})
+        MERGE (target:HindsightMemory {{id: item.target_memory_id, bank_id: $bank_id}})
         ON CREATE SET target.placeholder = true
         MERGE (source)-[relation:{relationship}]->(target)
         SET relation.weight = item.weight,

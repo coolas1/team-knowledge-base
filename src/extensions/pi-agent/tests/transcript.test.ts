@@ -5,6 +5,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   foldTranscript,
+  completedTurnDelivery,
   legacyEventsFromBranch,
   TranscriptStore,
   MAX_TRANSCRIPT_RECORD_BYTES,
@@ -25,6 +26,21 @@ function accepted(turnId: string, clientMessageId = turnId): TranscriptEvent {
 }
 
 describe("transcript journal", () => {
+  it("recovers delivery intent from the same durable completion record", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "tkb-delivery-intent-"));
+    const store = new TranscriptStore(directory);
+    await store.initialize("s1");
+    const { turn } = await store.accept("s1", "question", "client");
+    const delivery = completedTurnDelivery("scope-A", "s1", turn.id, "question", "answer");
+    await store.append({ type: "assistant.completed", sessionId: "s1", turnId: turn.id,
+      messageId: "answer", text: "answer", timestamp: new Date().toISOString(), delivery });
+    const restored = await new TranscriptStore(directory).snapshot("s1");
+    expect(restored?.turns[0]).toMatchObject({ status: "completed", delivery });
+    expect(JSON.stringify(restored?.messages)).not.toContain("scope-A");
+    expect(completedTurnDelivery("scope-B", "s1", turn.id, "question", "answer").key).not.toBe(delivery.key);
+    const incomplete = await store.accept("s1", "unfinished", "next");
+    expect(incomplete.turn.delivery).toBeUndefined();
+  });
   it("folds every lifecycle state deterministically", () => {
     const statuses = ["accepted", "running", "completed", "failed", "cancelled", "interrupted"] as const;
     for (const status of statuses) {

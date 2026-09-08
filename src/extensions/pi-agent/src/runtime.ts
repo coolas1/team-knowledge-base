@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -28,6 +28,7 @@ import {
   validateEngineContract,
 } from "./contract.js";
 import { TkbMcpClient } from "./mcp-client.js";
+import { ConversationDeliveryWorker } from "./delivery.js";
 import { buildModelServices, type ModelServices } from "./model.js";
 import { buildSkillReadTool } from "./skill-reader.js";
 import { enabledTkbTools } from "./tools.js";
@@ -37,6 +38,7 @@ import { RunnerClient, type RunnerHealth } from "./runner-client.js";
 import { buildConversationMemoryExtension } from "./conversation-memory.js";
 import {
   assertSafeTranscriptId,
+  completedTurnDelivery,
   TranscriptStore,
   type AcceptedTurn,
   type TranscriptSnapshot,
@@ -138,6 +140,7 @@ export interface RuntimeConversationMemoryForgetResult {
 }
 
 export interface RuntimeHealth {
+  memoryDelivery?: Record<string, number>;
   toolAuthoring?: { enabled: boolean; runner: RunnerHealth; library: { available: boolean } };
   status: "ok" | "degraded";
   model: { provider: string; id: string; baseUrl: string };
@@ -183,6 +186,7 @@ export class RuntimeLimitError extends Error {
 }
 
 interface ManagedSession {
+  mcpClient: TkbMcpClient;
   authoringBudget: AuthoringBudget;
   session: AgentSession;
   budget: ExecutionBudget;
@@ -294,6 +298,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
   private library?: ToolLibrary;
   private readonly runner: RunnerClient;
   private readonly transcripts: TranscriptStore;
+  private delivery?: ConversationDeliveryWorker;
 
   constructor(
     readonly config: PiAgentConfig = loadPiAgentConfig(),
@@ -321,7 +326,16 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     this.modelServices = await buildModelServices(this.config);
     if (this.config.toolAuthoringEnabled) this.library = new ToolLibrary(this.config.toolLibraryDir);
     const runnerHealth = await this.runner.health();
-    this.resourceLoader = new DefaultResourceLoader({
+    this.resourceLoader = await this.buildResourceLoader(this.mcpClient, runnerHealth);
+    if (this.adapterConfig.conversationMemoryEnabled && this.adapterConfig.conversationMemoryReliableDelivery) {
+      this.delivery = new ConversationDeliveryWorker(this.transcripts, new TkbMcpClient(this.adapterConfig),
+        this.adapterConfig.scopeKey ?? "default-team");
+      this.delivery.start();
+    }
+  }
+
+  private async buildResourceLoader(client: TkbMcpClient, runnerHealth: RunnerHealth): Promise<DefaultResourceLoader> {
+    const resourceLoader = new DefaultResourceLoader({
       cwd: this.config.cwd,
       agentDir: this.config.dataDir,
       additionalSkillPaths: [this.skillsDir],
@@ -330,7 +344,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       noThemes: true,
       noContextFiles: true,
       extensionFactories: [
-        buildConversationMemoryExtension(this.mcpClient, this.adapterConfig),
+        buildConversationMemoryExtension(client, this.adapterConfig),
         (pi) => { pi.on("tool_result", async (event) => {
           if ((event.details as { limit?: string } | undefined)?.limit) return { isError: true };
         }); },
@@ -338,7 +352,8 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       systemPromptOverride: () => SYSTEM_PROMPT + (this.config.toolAuthoringEnabled
         ? AUTHORING_PROMPT + `\n执行环境状态：${JSON.stringify(runnerHealth)}\n` : ""),
     });
-    await this.resourceLoader.reload();
+    await resourceLoader.reload();
+    return resourceLoader;
   }
 
   async health(): Promise<RuntimeHealth> {
@@ -376,6 +391,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       },
       mcp,
       loadedSessions: this.sessions.size,
+      ...(this.delivery ? { memoryDelivery: await this.delivery.status() } : {}),
       conversationMemory: this.conversationMemoryStatus,
       toolAuthoring: { enabled: this.config.toolAuthoringEnabled, runner: await this.runner.health(), library: this.library?.health() ?? { available: false } },
     };
@@ -386,6 +402,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     await this.evictIfNeeded();
     const manager = SessionManager.create(this.config.cwd, this.config.sessionDir);
     await this.transcripts.initialize(manager.getSessionId());
+    await this.recordOwnership(manager.getSessionId());
     const managed = await this.buildManagedSession(manager);
     this.sessions.set(managed.session.sessionId, managed);
     return this.describe(managed);
@@ -521,6 +538,10 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       await this.transcripts.append({
         type: "assistant.completed", sessionId: id, turnId: accepted.id,
         messageId: assistantMessageId, text: answerText, timestamp: new Date().toISOString(),
+        ...(this.adapterConfig.conversationMemoryEnabled && this.adapterConfig.conversationMemoryReliableDelivery ? {
+          delivery: completedTurnDelivery(this.adapterConfig.scopeKey ?? "default-team", id,
+            accepted.id, accepted.userText, answerText),
+        } : {}),
       });
       this.logTranscript("completed", id, accepted.id);
       await this.enqueueCompletedTurn(id, accepted.id, accepted.userText, answerText);
@@ -590,13 +611,22 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       }
       await rm(sessionFile, { force: true });
     }
-    await this.transcripts.delete(id);
+    if (this.delivery) await this.delivery.deleteHistory(id, () => this.transcripts.delete(id));
+    else await this.transcripts.delete(id);
     return true;
   }
 
   async forgetSessionMemory(id: string): Promise<RuntimeConversationMemoryForgetResult> {
     this.ensureInitialized();
-    const result = await this.mcpClient.forgetConversationMemory(id, {
+    assertSafeTranscriptId(id, "sessionId");
+    try {
+      await readFile(path.join(this.config.transcriptDir, ".owners", id), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await this.loadSession(id); // Recover legacy ownership only from this namespace.
+    }
+    await this.delivery?.cancelPending(id);
+    const result = await new TkbMcpClient(this.adapterConfig).forgetConversationMemory(id, {
       timeoutMs: this.adapterConfig.defaultToolTimeoutMs,
     });
     return {
@@ -607,6 +637,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
   }
 
   async close(): Promise<void> {
+    await this.delivery?.close();
     for (const managed of this.sessions.values()) {
       if (managed.active) await managed.session.abort().catch(() => undefined);
       managed.session.dispose();
@@ -624,6 +655,8 @@ export class PiAgentRuntime implements AgentRuntimeApi {
 
   private async buildManagedSession(manager: SessionManager): Promise<ManagedSession> {
     this.ensureInitialized();
+    const mcpClient = new TkbMcpClient(this.adapterConfig);
+    const resourceLoader = await this.buildResourceLoader(mcpClient, await this.runner.health());
     const budget = new ExecutionBudget(this.config.maxToolCalls);
     const turnDeadline = new TurnDeadlineBudget(
       this.config.maxRunSeconds,
@@ -634,7 +667,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     const tools = enforceToolBudget(
       [
         ...enabledTkbTools({
-          client: this.mcpClient,
+          client: mcpClient,
           config: this.adapterConfig,
           turnDeadline,
           fallbackBudget,
@@ -650,13 +683,14 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       modelRuntime: this.modelServices!.runtime,
       model: this.modelServices!.model,
       thinkingLevel: this.config.thinkingLevel,
-      resourceLoader: this.resourceLoader!,
+      resourceLoader,
       sessionManager: manager,
       noTools: "builtin",
       tools: tools.map((tool) => tool.name),
       customTools: tools,
     });
     return {
+      mcpClient,
       session,
       budget,
       authoringBudget,
@@ -673,13 +707,18 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     assistantText: string,
   ): Promise<void> {
     if (!this.adapterConfig.conversationMemoryEnabled) return;
+    if (this.delivery) {
+      await this.delivery.run(sessionId).catch(() => undefined);
+      return;
+    }
     try {
-      await this.mcpClient.enqueueConversationTurn(
+      await (await this.loadSession(sessionId)).mcpClient.enqueueConversationTurn(
         {
           sessionId,
           turnId,
           userText,
           assistantText,
+          sourceTimestamp: (await this.findSubmissionByTurn(sessionId, turnId))?.timestamp,
         },
         { timeoutMs: this.adapterConfig.defaultToolTimeoutMs },
       );
@@ -688,7 +727,19 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     }
   }
 
+  private async recordOwnership(id: string): Promise<void> {
+    assertSafeTranscriptId(id, "sessionId");
+    const directory = path.join(this.config.transcriptDir, ".owners");
+    await mkdir(directory, { recursive: true });
+    try {
+      await writeFile(path.join(directory, id), "owned\n", { flag: "wx" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+
   private async loadSession(id: string): Promise<ManagedSession> {
+    assertSafeTranscriptId(id, "sessionId");
     const loaded = this.sessions.get(id);
     if (loaded) {
       loaded.lastAccess = Date.now();
@@ -700,6 +751,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     );
     const transcript = await this.transcripts.snapshot(id);
     if (!info && !transcript) throw new RuntimeNotFoundError(`session not found: ${id}`);
+    await this.recordOwnership(id);
     await this.evictIfNeeded();
     const manager = info
       ? SessionManager.open(info.path, this.config.sessionDir, this.config.cwd)
@@ -745,6 +797,10 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     const snapshot = await this.requireSnapshot(id);
     const turnId = snapshot.submissions[clientMessageId];
     return turnId ? snapshot.turns.find((turn) => turn.id === turnId) : undefined;
+  }
+
+  private async findSubmissionByTurn(id: string, turnId: string): Promise<TranscriptTurn | undefined> {
+    return (await this.requireSnapshot(id)).turns.find((turn) => turn.id === turnId);
   }
 
   private async emitReplay(

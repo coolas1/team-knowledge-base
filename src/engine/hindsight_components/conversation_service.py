@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Protocol
+from hashlib import sha256
+import json
 
 from src.engine.interface import (
     ConversationEnqueueResult,
@@ -28,7 +30,14 @@ from .types import (
 
 class ConversationQueue(Protocol):
     async def enqueue(
-        self, *, session_id: str, turn_id: str, content: str, title: str | None = None
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        content: str,
+        title: str | None = None,
+        request_fingerprint: str | None = None,
+        source_context: dict | None = None,
     ) -> ConversationMemoryJob: ...
 
     async def session_document_ids(self, session_id: str) -> list[str]: ...
@@ -71,6 +80,14 @@ class ConversationMemoryService:
         self._repository = repository
         self._max_recall_results = max_recall_results
 
+    def with_scope(self, scope, *, write_tags=()):
+        return ConversationMemoryService(
+            self._queue.with_scope(scope, write_tags=write_tags),
+            self._recall_service.with_scope(scope),
+            self._repository.with_scope(scope),
+            max_recall_results=self._max_recall_results,
+        )
+
     async def recall_conversation_memory(
         self, request: ConversationMemoryRecallRequest
     ) -> ConversationMemoryRecallResult:
@@ -78,9 +95,7 @@ class ConversationMemoryService:
         if not query:
             raise ValueError("query cannot be empty")
         if request.top_k < 1 or request.top_k > self._max_recall_results:
-            raise ValueError(
-                f"top_k must be between 1 and {self._max_recall_results}"
-            )
+            raise ValueError(f"top_k must be between 1 and {self._max_recall_results}")
         if request.mode not in {"fast", "deep"}:
             raise ValueError(f"unsupported retrieval mode: {request.mode}")
         recalled = await self._recall_service.recall(
@@ -121,16 +136,56 @@ class ConversationMemoryService:
             raise ValueError("session_id and turn_id must not be empty")
         if not user_text or not assistant_text:
             raise ValueError("user_text and assistant_text must not be empty")
+        from src.engine.scope import MemoryScope
+        from .types import RetainInput
+        from datetime import datetime
+
+        scope = getattr(self._queue, "scope", MemoryScope())
+        timestamp = (
+            datetime.fromisoformat(turn.source_timestamp.replace("Z", "+00:00"))
+            if turn.source_timestamp
+            else None
+        )
+        if turn.source_timestamp is not None and timestamp is None:
+            raise ValueError("invalid source timestamp")
+        RetainInput(
+            document_id="validation",
+            title="",
+            content="",
+            file_type="conversation",
+            source_timestamp=timestamp,
+            reference_timezone=turn.reference_timezone,
+        )
         job = await self._queue.enqueue(
             session_id=session_id,
             turn_id=turn_id,
             content=(f"[user]\n{user_text}\n\n[assistant]\n{assistant_text}"),
             title="Conversation turn",
+            source_context={
+                "source_timestamp": timestamp.isoformat() if timestamp else None,
+                "reference_timezone": turn.reference_timezone,
+                "policy_version": scope.policy_version,
+                "agent_name": scope.agent_name,
+                "speakers": {"user": scope.subject_id, "assistant": scope.agent_name},
+            },
+            request_fingerprint=sha256(
+                json.dumps(
+                    [turn.user_text, turn.assistant_text],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest(),
         )
         return ConversationEnqueueResult(
             document_id=job.document_id,
             status=job.status,
+            operation_id=job.operation_id,
         )
+
+    async def retry_extraction(
+        self, document_id: str, *, stage: str = "extract"
+    ) -> bool:
+        return await self._queue.retry_stage(document_id, stage=stage)
 
     async def forget_conversation_memory(
         self, request: ConversationForgetRequest

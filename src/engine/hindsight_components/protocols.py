@@ -6,6 +6,18 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from .types import RecallCandidate, ReflectionContext, RetainPlan
+from src.engine.scope import MemoryScope
+
+
+class ScopedMemoryRepository(Protocol):
+    """Bound repository contract used by scope-aware host wiring.
+
+    Introduced separately from the legacy port so an unscoped implementation
+    cannot accidentally advertise that it enforces a requested scope.
+    """
+
+    @property
+    def scope(self) -> MemoryScope: ...
 
 
 class HindsightProviders(Protocol):

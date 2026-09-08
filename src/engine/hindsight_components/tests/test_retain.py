@@ -7,6 +7,27 @@ from src.engine.hindsight_components.types import RetainInput
 from src.engine.hindsight_components.tests.fakes import FakeProviders, FakeRepository
 
 
+async def test_repeated_extraction_has_stable_fact_and_chunk_references():
+    repository = FakeRepository()
+    engine = RetainEngine(repository, FakeProviders(), HindsightOptions())
+    value = RetainInput(
+        document_id="stable-doc",
+        title="source",
+        content="Alice ran a survey",
+        file_type="text",
+    )
+    await engine.retain(value)
+    first = {
+        m.text: (m.id, m.metadata.get("chunk_id")) for m in repository.plan.memories
+    }
+    await engine.retain(value)
+    second = {
+        m.text: (m.id, m.metadata.get("chunk_id")) for m in repository.plan.memories
+    }
+    assert first == second
+    assert all(chunk_id for _, chunk_id in first.values() if chunk_id is not None)
+
+
 async def test_retain_builds_atomic_memories_observation_and_links() -> None:
     repository = FakeRepository()
     engine = RetainEngine(repository, FakeProviders(), HindsightOptions())

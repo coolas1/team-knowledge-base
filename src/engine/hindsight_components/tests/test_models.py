@@ -108,7 +108,7 @@ def test_conversation_memory_source_schema_has_queue_constraints() -> None:
 
     assert "foreign key(document_id) references documents" in ddl
     assert "on delete cascade" in ddl
-    assert "unique (session_id, turn_id)" in ddl
+    assert "unique (bank_id, session_id, turn_id)" in ddl
     for status in ("pending", "processing", "completed", "failed", "cancelled"):
         assert status in ddl
     assert {index.name for index in ConversationMemorySource.__table__.indexes} == {

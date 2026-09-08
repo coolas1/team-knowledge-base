@@ -2,9 +2,12 @@
 
 memory flags come from AppConfig.engine.memory; everything runs in one
 process. No HTTP fallbacks: the engine/plugin containers are gone."""
+
 from __future__ import annotations
 
 import os
+from fastapi import Request, HTTPException
+from src.engine.trusted_scope import bind_service, resolve_binding
 from pathlib import Path
 
 from src.engine.config import build_engine, engine_config_from_app
@@ -68,7 +71,9 @@ async def startup() -> None:
         and cfg.engine.memory.graph_worker
         and settings.hindsight_graph_worker_enabled
     ):
-        from src.engine.hindsight_components.graph_runtime import build_graph_worker_runtime
+        from src.engine.hindsight_components.graph_runtime import (
+            build_graph_worker_runtime,
+        )
 
         _graph_worker = build_graph_worker_runtime(
             poll_seconds=settings.hindsight_graph_worker_poll_seconds,
@@ -77,10 +82,7 @@ async def startup() -> None:
         )
         await _graph_worker.start()
 
-    if (
-        cfg.engine.memory.enabled
-        and settings.hindsight_conversation_memory_enabled
-    ):
+    if cfg.engine.memory.enabled and settings.hindsight_conversation_memory_enabled:
         from src.engine.hindsight_components.conversation_service import (
             build_conversation_memory_service,
         )
@@ -95,20 +97,14 @@ async def startup() -> None:
         )
         _conversation_worker = build_conversation_worker_runtime(
             poll_seconds=settings.hindsight_conversation_worker_poll_seconds,
-            max_concurrent=(
-                settings.hindsight_conversation_worker_max_concurrent
-            ),
+            max_concurrent=(settings.hindsight_conversation_worker_max_concurrent),
             lease_seconds=settings.hindsight_conversation_worker_lease_seconds,
             max_attempts=settings.hindsight_conversation_worker_max_attempts,
-            retry_delay_seconds=(
-                settings.hindsight_conversation_worker_retry_seconds
-            ),
+            retry_delay_seconds=(settings.hindsight_conversation_worker_retry_seconds),
             max_retry_delay_seconds=(
                 settings.hindsight_conversation_worker_max_retry_seconds
             ),
-            retention_context=(
-                settings.hindsight_conversation_retention_context
-            ),
+            retention_context=(settings.hindsight_conversation_retention_context),
         )
         await _conversation_worker.start()
     else:
@@ -133,9 +129,20 @@ async def shutdown() -> None:
         _query = None
 
 
-def get_kb() -> KnowledgeBase:
+def _binding(request: Request | None):
+    try:
+        return resolve_binding(
+            request.headers if request is not None else {},
+            enabled=app_config().engine.memory.features.scope,
+            bindings=settings.memory_scope_bindings,
+        )
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+
+
+def get_kb(request: Request = None) -> KnowledgeBase:
     assert _kb is not None, "engine not initialized"
-    return _kb
+    return bind_service(_kb, _binding(request), writes=True)
 
 
 def get_plugin() -> LoadedPlugin:
@@ -147,8 +154,8 @@ def get_llm():
     return _llm
 
 
-def get_query() -> KnowledgeQuery | None:
-    return _query
+def get_query(request: Request = None) -> KnowledgeQuery | None:
+    return bind_service(_query, _binding(request))
 
 
 def engine_initialized() -> bool:

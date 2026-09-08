@@ -153,9 +153,7 @@ class _FakeEmbedder:
 
 def _multi_chunk_text() -> str:
     # chunk_size=500 tokens ≈ 1000 字符，每段 ~1200 字符确保切成多块
-    return "# T\n\n" + "\n\n".join(
-        f"段落 {i} " + "内容文字" * 150 for i in range(8)
-    )
+    return "# T\n\n" + "\n\n".join(f"段落 {i} " + "内容文字" * 150 for i in range(8))
 
 
 async def test_analyze_document_runs_chunks_parallel_and_bounded(monkeypatch):
@@ -304,16 +302,14 @@ class _ThreadRecordingRegistry:
         return "# T\n\n" + "内容文字" * 300
 
 
-async def test_process_file_indexes_document_with_fakes(
-    monkeypatch, tmp_path
-):
+async def test_process_file_indexes_document_with_fakes(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from src.engine.graphrag import pipeline as pipeline_mod
 
     doc_id = uuid4()
     doc = SimpleNamespace(
-        id=doc_id, content_hash=None, status="pending"
+        id=doc_id, content_hash=None, status="pending", bank_id="default-team", tags=[]
     )
     session = _PipelineSession({doc_id: doc})
     monkeypatch.setattr(pipeline_mod, "async_session_factory", lambda: session)
@@ -366,7 +362,13 @@ async def test_process_file_doc_semaphore_serializes(monkeypatch, tmp_path):
     analyzer.analyze_overview = gated_overview
 
     docs = {
-        doc_id: SimpleNamespace(id=doc_id, content_hash=None, status="pending")
+        doc_id: SimpleNamespace(
+            id=doc_id,
+            content_hash=None,
+            status="pending",
+            bank_id="default-team",
+            tags=[],
+        )
         for doc_id in [uuid4(), uuid4()]
     }
     sessions = []

@@ -59,7 +59,7 @@ export interface McpClientLike {
 
 export interface McpClientDependencies {
   createClient(): McpClientLike;
-  createTransport(url: URL): unknown;
+  createTransport(url: URL, headers?: Record<string, string>): unknown;
 }
 
 export class McpTimeoutError extends Error {
@@ -79,7 +79,9 @@ export class McpAbortedError extends Error {
 const defaultDependencies: McpClientDependencies = {
   createClient: () =>
     new Client({ name: "tkb-pi-agent-adapter", version: "0.1.0" }) as McpClientLike,
-  createTransport: (url) => new StreamableHTTPClientTransport(url),
+  createTransport: (url, headers) => new StreamableHTTPClientTransport(url, {
+    requestInit: { headers },
+  }),
 };
 
 async function withDeadline<T>(
@@ -185,9 +187,12 @@ export class TkbMcpClient {
       turnId: string;
       userText: string;
       assistantText: string;
+      requireDurableAcceptance?: boolean;
+      sourceTimestamp?: string;
+      referenceTimezone?: string;
     },
     options: { signal?: AbortSignal; timeoutMs?: number } = {},
-  ): Promise<{ document_id: string; status: string }> {
+  ): Promise<{ document_id: string; status: string; durable_acceptance?: boolean; content_hash?: string; operation_id?: string }> {
     return this.callJsonTool(
       "enqueue_conversation_turn",
       {
@@ -195,6 +200,9 @@ export class TkbMcpClient {
         turn_id: input.turnId,
         user_text: input.userText,
         assistant_text: input.assistantText,
+        ...(input.requireDurableAcceptance ? { require_durable_acceptance: true } : {}),
+        ...(input.sourceTimestamp ? { source_timestamp: input.sourceTimestamp } : {}),
+        ...(input.referenceTimezone ? { reference_timezone: input.referenceTimezone } : {}),
       },
       options,
     );
@@ -227,7 +235,13 @@ export class TkbMcpClient {
     options: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<T> {
     const result = await this.callTool(toolName, args, options);
-    if (result.isError) throw new Error(`${toolName} returned an MCP error`);
+    if (result.isError) {
+      // Preserve only the stable conflict code, never the raw MCP error payload.
+      if (toolName === "enqueue_conversation_turn" && result.text.includes("conversation_delivery_conflict")) {
+        throw new Error("conversation_delivery_conflict");
+      }
+      throw new Error(`${toolName} returned an MCP error`);
+    }
     try {
       return JSON.parse(result.text) as T;
     } catch (error) {
@@ -254,7 +268,8 @@ export class TkbMcpClient {
         this.config.connectTimeoutMs,
         signal,
         close,
-        () => client.connect(this.dependencies.createTransport(new URL(this.config.mcpUrl))),
+        () => client.connect(this.dependencies.createTransport(new URL(this.config.mcpUrl),
+          this.config.scopeToken ? { "X-TKB-Scope-Token": this.config.scopeToken } : undefined)),
       );
       return await withDeadline(
         "TKB MCP operation",

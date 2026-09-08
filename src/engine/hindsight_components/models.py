@@ -29,13 +29,14 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.engine.components.store.models import EMBEDDING_DIM, Base
+from src.engine.components.store.ownership import BankOwned
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class MemoryUnit(Base):
+class MemoryUnit(BankOwned, Base):
     __tablename__ = "memory_units"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -72,6 +73,9 @@ class MemoryUnit(Base):
         ARRAY(UUID(as_uuid=True)), nullable=False, default=list
     )
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    scope_tags: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
     state: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
@@ -95,14 +99,17 @@ class MemoryUnit(Base):
     )
 
 
-class MemoryEntity(Base):
+class MemoryEntity(BankOwned, Base):
     __tablename__ = "memory_entities"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     canonical_name: Mapped[str] = mapped_column(Text, nullable=False)
-    normalized_name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    normalized_name: Mapped[str] = mapped_column(Text, nullable=False)
+    identity_key: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     entity_type: Mapped[str] = mapped_column(Text, nullable=False, default="Entity")
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
@@ -112,11 +119,28 @@ class MemoryEntity(Base):
         nullable=False,
     )
 
-    __table_args__ = (Index("idx_memory_entities_name", "normalized_name"),)
+    __table_args__ = (
+        Index("idx_memory_entities_name", "normalized_name"),
+        UniqueConstraint(
+            "bank_id",
+            "normalized_name",
+            "identity_key",
+            name="uq_memory_entities_bank_identity",
+        ),
+    )
 
 
-class MemoryUnitEntity(Base):
+class MemoryUnitEntity(BankOwned, Base):
     __tablename__ = "memory_unit_entities"
+    original_name: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+    aliases: Mapped[list[str]] = mapped_column(
+        ARRAY(Text),
+        nullable=False,
+        default=list,
+        server_default=sql_text("'{}'::text[]"),
+    )
 
     memory_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -131,7 +155,30 @@ class MemoryUnitEntity(Base):
     role: Mapped[str] = mapped_column(Text, nullable=False, default="mention")
 
 
-class MemoryLink(Base):
+class MemoryEntityCorrection(BankOwned, Base):
+    __tablename__ = "memory_entity_corrections"
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source_entity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    target_entity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    memory_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+
+
+class MemoryLink(BankOwned, Base):
     __tablename__ = "memory_links"
 
     source_memory_id: Mapped[uuid.UUID] = mapped_column(
@@ -154,10 +201,16 @@ class MemoryLink(Base):
     )
 
 
-class MentalModel(Base):
+class MentalModel(BankOwned, Base):
     __tablename__ = "mental_models"
+    tags: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
+    bank_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, default="default-team", server_default="default-team"
+    )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -182,10 +235,13 @@ class MentalModel(Base):
     )
 
 
-class MemoryProfile(Base):
+class MemoryProfile(BankOwned, Base):
     __tablename__ = "memory_profiles"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True, default="default")
+    bank_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, default="default-team", server_default="default-team"
+    )
     background: Mapped[str] = mapped_column(Text, nullable=False, default="")
     skepticism: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     literalism: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
@@ -199,8 +255,44 @@ class MemoryProfile(Base):
     )
 
 
-class HindsightDocumentState(Base):
+class RetentionRequest(BankOwned, Base):
+    __tablename__ = "retention_requests"
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    request_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    result_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=sql_text("now()"),
+        nullable=False,
+    )
+
+
+class HindsightDocumentState(BankOwned, Base):
     __tablename__ = "hindsight_document_state"
+    extraction_cache: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    source_context: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
+    )
+    stage_results: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
+    )
+    operation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        default=uuid.uuid4,
+        server_default=sql_text("gen_random_uuid()"),
+    )
 
     document_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -224,16 +316,30 @@ class HindsightDocumentState(Base):
     __table_args__ = (Index("idx_hindsight_document_state_status", "status"),)
 
 
-class ConversationMemorySource(Base):
+class ConversationMemorySource(BankOwned, Base):
     """Internal conversation document plus its durable retention queue state."""
 
     __tablename__ = "conversation_memory_sources"
+    source_context: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
+    )
 
     document_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("documents.id", ondelete="CASCADE"),
         primary_key=True,
     )
+    operation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        default=uuid.uuid4,
+        server_default=sql_text("gen_random_uuid()"),
+    )
+    stage_results: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
+    )
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     session_id: Mapped[str] = mapped_column(Text, nullable=False)
     turn_id: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(
@@ -266,7 +372,7 @@ class ConversationMemorySource(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "session_id", "turn_id", name="uq_conversation_memory_session_turn"
+            "bank_id", "session_id", "turn_id", name="uq_conversation_memory_bank_turn"
         ),
         CheckConstraint(
             "status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')",
@@ -282,7 +388,7 @@ class ConversationMemorySource(Base):
     )
 
 
-class HindsightGraphOutbox(Base):
+class HindsightGraphOutbox(BankOwned, Base):
     """Durable PostgreSQL event for rebuilding the disposable Neo4j projection.
 
     ``document_id`` intentionally has no foreign key: delete events must survive

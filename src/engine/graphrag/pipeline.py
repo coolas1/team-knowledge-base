@@ -28,6 +28,7 @@ from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
 from src.engine.graphrag.progress import clear_progress, set_progress
 from src.engine.interface import DocumentIndexHook
+from src.engine.scope import MemoryScope, TagFilter
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +59,7 @@ class Pipeline:
 
     async def _analyze_document(
         self, raw_text: str, title: str, doc_id: UUID
-    ) -> tuple[
-        AnalysisResult, list, list[ChunkAnalysisResult], list[list[float]]
-    ]:
+    ) -> tuple[AnalysisResult, list, list[ChunkAnalysisResult], list[list[float]]]:
         """分块后并行执行：overview ∥ 逐 chunk 分析（信号量限流）∥ embedding。
 
         返回 (doc_analysis, chunks, chunk_analyses, embeddings)；
@@ -209,6 +208,9 @@ class Pipeline:
     ) -> None:
         """chunk 行写入 + 文档状态更新为 indexed（两条入库路径共用）。"""
         set_progress(str(doc_id), "writing_postgres", "写入数据库")
+        owner = await session.get(Document, doc_id)
+        if owner is None:
+            raise ValueError(f"文档不存在: {doc_id}")
         await session.execute(
             Chunk.__table__.delete().where(Chunk.doc_id == doc_id)  # type: ignore[union-attr]
         )
@@ -217,6 +219,8 @@ class Pipeline:
         for chunk, embedding in zip(chunks, embeddings):
             session.add(
                 Chunk(
+                    bank_id=owner.bank_id,
+                    tags=list(owner.tags or []),
                     doc_id=doc_id,
                     chunk_index=chunk.index,
                     chunk_text=chunk.text,
@@ -335,7 +339,8 @@ class Pipeline:
         if self._index_hook is None:
             return
         try:
-            await self._index_hook.after_indexed(
+            hook = await self._document_hook(document_id)
+            await hook.after_indexed(
                 document_id=document_id,
                 title=title,
                 content=content,
@@ -349,10 +354,25 @@ class Pipeline:
         if self._index_hook is None:
             return
         try:
-            await self._index_hook.before_remove(document_id)
+            hook = await self._document_hook(document_id)
+            await hook.before_remove(document_id)
         except Exception:
             # Document FK cascade remains the final cleanup guarantee.
             logger.exception("文档 %s 的附加索引清理钩子失败", document_id)
+
+    async def _document_hook(self, document_id: str):
+        hook = self._index_hook
+        if not hasattr(hook, "with_scope"):
+            return hook
+        async with async_session_factory() as session:
+            owner = await session.get(Document, UUID(document_id))
+            if owner is None:
+                raise ValueError("document does not exist")
+            tags = tuple(owner.tags or [])
+            return hook.with_scope(
+                MemoryScope(bank_id=owner.bank_id, visibility=TagFilter(tags, "exact")),
+                write_tags=tags,
+            )
 
     async def _write_chunk_graph(
         self,
@@ -397,6 +417,9 @@ class Pipeline:
         self, doc_id: str, file_relations: list, session
     ) -> None:
         """解析 file_relations 并写入 Document↔Document 边。"""
+        owner = await session.get(Document, UUID(doc_id))
+        if owner is None:
+            raise ValueError("document does not exist")
         for fr in file_relations:
             target_title = fr.related_doc_title
             if not target_title:
@@ -404,7 +427,16 @@ class Pipeline:
 
             # 通过 Postgres 按 title 查找目标文档
             result = await session.execute(
-                select(Document.id).where(Document.title == target_title).limit(1)
+                select(Document.id)
+                .where(
+                    Document.title == target_title,
+                    Document.bank_id == owner.bank_id,
+                    Document.tags.contains(owner.tags or []),
+                    Document.tags.contained_by(owner.tags or []),
+                    Document.id != UUID(doc_id),
+                )
+                .order_by(Document.id)
+                .limit(1)
             )
             target_doc = result.scalar_one_or_none()
 

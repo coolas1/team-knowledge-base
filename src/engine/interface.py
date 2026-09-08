@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
+from src.engine.scope import MemoryScope as MemoryScope
+from src.engine.scope import TagExpression as TagExpression
+from src.engine.scope import TagFilter as TagFilter
+from src.engine.scope import TagGroup as TagGroup
+
 
 class NotSupported(Exception):
     """Raised by an optional KnowledgeBase method the backend does not support."""
@@ -145,12 +150,15 @@ class ConversationTurn:
     turn_id: str
     user_text: str
     assistant_text: str
+    source_timestamp: str | None = None
+    reference_timezone: str = "UTC"
 
 
 @dataclass(frozen=True, slots=True)
 class ConversationEnqueueResult:
     document_id: str
     status: str
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

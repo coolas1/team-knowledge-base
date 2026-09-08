@@ -12,6 +12,7 @@ from sqlalchemy.orm import aliased
 from .graph_projector import MemoryGraphProjector
 from .graph_types import MemoryGraphProjection
 from .models import HindsightGraphOutbox
+from src.engine.scope import DEFAULT_BANK_ID, MemoryScope
 
 
 def _utcnow() -> datetime:
@@ -24,6 +25,7 @@ class GraphOutboxEvent:
     document_id: str
     operation: str
     attempts: int
+    bank_id: str = DEFAULT_BANK_ID
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,8 @@ class GraphOutbox(Protocol):
 
 
 class GraphProjectionSource(Protocol):
+    def with_scope(self, scope: MemoryScope) -> GraphProjectionSource: ...
+
     async def graph_projection(
         self, document_id: str
     ) -> MemoryGraphProjection | None: ...
@@ -105,6 +109,7 @@ class PostgresGraphOutbox:
             select(earlier.id)
             .where(
                 earlier.document_id == HindsightGraphOutbox.document_id,
+                earlier.bank_id == HindsightGraphOutbox.bank_id,
                 earlier.id < HindsightGraphOutbox.id,
                 earlier.status != "completed",
                 earlier.attempts < max_attempts,
@@ -188,6 +193,7 @@ class PostgresGraphOutbox:
             document_id=str(row.document_id),
             operation=row.operation,
             attempts=row.attempts,
+            bank_id=getattr(row, "bank_id", None) or DEFAULT_BANK_ID,
         )
 
 
@@ -217,15 +223,25 @@ class GraphProjectionWorker:
         if event is None:
             return None
         try:
+            source = self._source
+            projector = self._projector
+            if event.bank_id != DEFAULT_BANK_ID:
+                # Never reinterpret a background event as default-team. A legacy
+                # source/store fails here and leaves the durable event retryable.
+                scope = MemoryScope(bank_id=event.bank_id)
+                source = source.with_scope(scope)
+                projector = projector.with_scope(scope)
             if event.operation == "delete":
-                await self._projector.delete_document(event.document_id)
+                await projector.delete_document(event.document_id)
             elif event.operation == "replace":
-                projection = await self._source.graph_projection(event.document_id)
+                projection = await source.graph_projection(event.document_id)
                 if projection is None:
                     # The document may have been deleted after this replace event.
-                    await self._projector.delete_document(event.document_id)
+                    await projector.delete_document(event.document_id)
                 else:
-                    await self._projector.replace_document(projection)
+                    if projection.document.bank_id != event.bank_id:
+                        raise ValueError("graph event and projection bank disagree")
+                    await projector.replace_document(projection)
             else:
                 raise ValueError(f"unsupported graph operation: {event.operation}")
         except Exception as error:

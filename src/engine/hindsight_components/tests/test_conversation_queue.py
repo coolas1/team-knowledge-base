@@ -34,6 +34,9 @@ class _Result:
     def one(self):
         return self._one
 
+    def scalar_one_or_none(self):
+        return self._one
+
     def all(self):
         return self._rows
 
@@ -93,7 +96,9 @@ async def test_enqueue_uses_idempotent_upserts_and_returns_source_job() -> None:
 
         async def execute(self, statement):
             self.statements.append(statement)
-            if len(self.statements) == 3:
+            if len(self.statements) == 2:
+                return _Result(one=document)
+            if len(self.statements) == 4:
                 return _Result(one=(source, document))
             return _Result()
 
@@ -108,7 +113,7 @@ async def test_enqueue_uses_idempotent_upserts_and_returns_source_job() -> None:
 
     sql = [
         str(statement.compile(dialect=postgresql.dialect())).lower()
-        for statement in session.statements[:2]
+        for statement in (session.statements[0], session.statements[2])
     ]
     assert all("on conflict" in statement for statement in sql)
     assert result.document_id == str(source.document_id)
@@ -149,7 +154,7 @@ async def test_claim_recovers_expired_work_and_increments_attempt() -> None:
     )
 
     sql = str(session.statement.compile(dialect=postgresql.dialect())).lower()
-    assert "for update skip locked" in sql
+    assert "for update of conversation_memory_sources skip locked" in sql
     assert "attempts" in sql and "locked_at" in sql
     assert source.status == "processing"
     assert source.attempts == 3

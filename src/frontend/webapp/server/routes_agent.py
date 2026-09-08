@@ -1,5 +1,6 @@
 """Webapp host agent routes: invoke plugin skills in-process AND proxy to the
 optional Pi Agent runtime (session management, SSE streaming)."""
+
 from __future__ import annotations
 
 import json
@@ -8,17 +9,27 @@ import re
 from collections.abc import AsyncIterator
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.agent.interface import LlmClient, SkillContext
 from src.frontend.webapp.server import deps
 
+
+def _scope_headers(request: Request) -> dict[str, str]:
+    deps._binding(
+        request
+    )  # Validate before forwarding; body/query fields have no authority.
+    token = request.headers.get("x-tkb-scope-token")
+    return {"X-TKB-Scope-Token": token} if token is not None else {}
+
+
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 
 # ── In-process skill routes ──────────────────────────────────────────
+
 
 class AskRequest(BaseModel):
     query: str
@@ -34,14 +45,24 @@ def _get_skill(name: str):
 
 
 @router.post("/ask")
-async def ask(body: AskRequest, kb=Depends(deps.get_kb), llm: LlmClient | None = Depends(deps.get_llm)):
+async def ask(
+    body: AskRequest,
+    kb=Depends(deps.get_kb),
+    llm: LlmClient | None = Depends(deps.get_llm),
+):
     skill = _get_skill("search_and_answer")
-    ctx = SkillContext(kb=kb, llm=llm, params={"query": body.query, "top_k": body.top_k})
+    ctx = SkillContext(
+        kb=kb, llm=llm, params={"query": body.query, "top_k": body.top_k}
+    )
     return (await skill.run(ctx)).output
 
 
 @router.post("/ingest-summarize")
-async def ingest_summarize(file: UploadFile = File(...), kb=Depends(deps.get_kb), llm: LlmClient | None = Depends(deps.get_llm)):
+async def ingest_summarize(
+    file: UploadFile = File(...),
+    kb=Depends(deps.get_kb),
+    llm: LlmClient | None = Depends(deps.get_llm),
+):
     if not file.filename:
         raise HTTPException(400, "文件名不能为空")
     data = await file.read()
@@ -51,6 +72,7 @@ async def ingest_summarize(file: UploadFile = File(...), kb=Depends(deps.get_kb)
 
 
 # ── Pi Agent proxy routes ────────────────────────────────────────────
+
 
 class AgentMessageRequest(BaseModel):
     message: str
@@ -91,6 +113,7 @@ async def _proxy_json(
     path: str,
     *,
     body: dict | None = None,
+    headers: dict[str, str] | None = None,
 ):
     try:
         async with _pi_client() as client:
@@ -98,6 +121,7 @@ async def _proxy_json(
                 method,
                 f"{_pi_agent_url()}{path}",
                 json=body,
+                headers=headers,
             )
     except httpx.RequestError as exc:
         raise HTTPException(503, "Pi Agent 当前不可用") from exc
@@ -120,50 +144,62 @@ async def _relay_sse(
 
 
 @router.post("/sessions", status_code=201)
-async def create_agent_session():
-    return await _proxy_json("POST", "/v1/sessions")
+async def create_agent_session(request: Request):
+    return await _proxy_json("POST", "/v1/sessions", headers=_scope_headers(request))
 
 
 @router.get("/sessions")
-async def list_agent_sessions():
-    return await _proxy_json("GET", "/v1/sessions")
+async def list_agent_sessions(request: Request):
+    return await _proxy_json("GET", "/v1/sessions", headers=_scope_headers(request))
 
 
 @router.get("/sessions/{session_id}")
-async def get_agent_session(session_id: str):
+async def get_agent_session(session_id: str, request: Request):
     session_id = _checked_session_id(session_id)
-    return await _proxy_json("GET", f"/v1/sessions/{session_id}")
+    return await _proxy_json(
+        "GET", f"/v1/sessions/{session_id}", headers=_scope_headers(request)
+    )
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_agent_session(session_id: str):
+async def delete_agent_session(session_id: str, request: Request):
     session_id = _checked_session_id(session_id)
-    return await _proxy_json("DELETE", f"/v1/sessions/{session_id}")
+    return await _proxy_json(
+        "DELETE", f"/v1/sessions/{session_id}", headers=_scope_headers(request)
+    )
 
 
 @router.delete("/sessions/{session_id}/memory")
-async def forget_agent_session_memory(session_id: str):
+async def forget_agent_session_memory(session_id: str, request: Request):
     session_id = _checked_session_id(session_id)
-    return await _proxy_json("DELETE", f"/v1/sessions/{session_id}/memory")
+    return await _proxy_json(
+        "DELETE", f"/v1/sessions/{session_id}/memory", headers=_scope_headers(request)
+    )
 
 
 @router.post("/sessions/{session_id}/cancel")
-async def cancel_agent_session(session_id: str):
+async def cancel_agent_session(session_id: str, request: Request):
     session_id = _checked_session_id(session_id)
-    return await _proxy_json("POST", f"/v1/sessions/{session_id}/cancel")
+    return await _proxy_json(
+        "POST", f"/v1/sessions/{session_id}/cancel", headers=_scope_headers(request)
+    )
 
 
 @router.post("/sessions/{session_id}/messages")
-async def stream_agent_message(session_id: str, body: AgentMessageRequest):
+async def stream_agent_message(
+    session_id: str, body: AgentMessageRequest, request: Request
+):
+    scope_headers = _scope_headers(request)
     session_id = _checked_session_id(session_id)
     if not body.message.strip():
         raise HTTPException(400, "message must not be empty")
 
     client = _pi_client()
     try:
-        request = client.build_request(
+        upstream_request = client.build_request(
             "POST",
             f"{_pi_agent_url()}/v1/sessions/{session_id}/messages",
+            headers=scope_headers,
             json={
                 "message": body.message,
                 **(
@@ -173,7 +209,7 @@ async def stream_agent_message(session_id: str, body: AgentMessageRequest):
                 ),
             },
         )
-        response = await client.send(request, stream=True)
+        response = await client.send(upstream_request, stream=True)
     except httpx.RequestError as exc:
         await client.aclose()
         raise HTTPException(503, "Pi Agent 当前不可用") from exc

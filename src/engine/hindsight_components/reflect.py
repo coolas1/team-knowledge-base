@@ -6,7 +6,10 @@ from collections import defaultdict
 from typing import Any, Protocol
 
 from src.engine.hindsight_components.config import HindsightOptions
-from src.engine.hindsight_components.protocols import HindsightProviders, MemoryRepository
+from src.engine.hindsight_components.protocols import (
+    HindsightProviders,
+    MemoryRepository,
+)
 from src.engine.hindsight_components.types import RecallResult, ReflectResult
 from src.engine.hindsight_components.utils import cosine
 

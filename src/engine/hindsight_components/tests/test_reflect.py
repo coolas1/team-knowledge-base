@@ -4,7 +4,11 @@ from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.reflect import ReflectEngine
 from src.engine.hindsight_components.types import RecallResult
 
-from src.engine.hindsight_components.tests.fakes import FakeProviders, FakeRepository, candidate
+from src.engine.hindsight_components.tests.fakes import (
+    FakeProviders,
+    FakeRepository,
+    candidate,
+)
 
 
 class RecallSpy:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -83,6 +84,21 @@ class FakeCleaner:
         self.deleted.append(document_id)
 
 
+@pytest.mark.parametrize("status", ["degraded", "failed"])
+async def test_incomplete_extraction_is_retried_instead_of_completed(status):
+    class IncompleteService(FakeService):
+        async def retain(self, retain_input):
+            return SimpleNamespace(status=status, stage_results={"extract": status})
+
+    queue = FakeQueue([_job()])
+    result = await ConversationRetentionWorker(
+        queue, IncompleteService(), FakeCleaner()
+    ).run_once()
+    assert result.retried == 1
+    assert result.completed == 0
+    assert queue.statuses["document-1"] == "pending"
+
+
 async def test_worker_retains_conversation_provenance_and_completes_job() -> None:
     queue = FakeQueue([_job()])
     service = FakeService()
@@ -93,7 +109,10 @@ async def test_worker_retains_conversation_provenance_and_completes_job() -> Non
     assert result == ConversationRetentionBatchResult(claimed=1, completed=1)
     retain_input = service.inputs[0]
     assert retain_input.source_type == "conversation"
-    assert retain_input.metadata == {"session_id": "session-1", "turn_id": "turn-document-1"}
+    assert retain_input.metadata == {
+        "session_id": "session-1",
+        "turn_id": "turn-document-1",
+    }
     assert "session:session-1" in retain_input.tags
 
 
