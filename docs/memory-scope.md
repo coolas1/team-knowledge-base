@@ -160,3 +160,37 @@ revision increment. Reusing the key with changed input raises a request conflict
 The request record, memory writes, revision and graph outbox commit together.
 Degraded results remain degraded on replay; use explicit reprocessing for recovery.
 Requests that fail before publication leave no accepted ledger entry.
+
+`retain(..., update_mode="append", request_id="...")` adds only the supplied
+content to the retained document; `update_mode="replace"` remains the default.
+Append requires a request key. Read `retention_revision(document_id)` when callers
+need an explicit compare-and-swap. After a revision conflict, fetch the new revision
+and retry the unaccepted request. A previously accepted key always returns its
+original result; it does not append again or refresh degraded extraction.
+
+Content snapshots preserve chunk boundaries, source time, timezone and speakers.
+Append does not re-anchor old facts to the new source time. Replace reuses complete
+unchanged blocks and extracts changed gaps. Indistinguishable repeated blocks are
+matched in saved order; retained block/fact IDs survive moves, while newly added
+occurrences receive distinct identities. Removed source IDs invalidate dependent
+observations and queue graph updates.
+
+Successful and empty extraction responses are cached by content, source context
+and policy/schema version; degraded responses are retried. `force_extraction=True`
+bypasses extraction cache. `reprocess_document(document_id, stage="extract")`
+reuses retained snapshots and original per-chunk provenance rather than newer
+ordinary file text. Conversation jobs use their durable queue's stage retry path.
+
+Older rows without snapshots recover saved source blocks and semantic ID mappings
+on their first upgraded write. Missing historical time/speaker context stays
+unknown. A legacy extraction without validated cache may require one fresh
+extraction; matching facts keep their old UUIDs. These operations publish snapshot,
+memory, revision, request ledger and graph outbox together. They do not rewrite
+the ordinary file Document.raw_text; source expansion must respect the retained
+snapshot and document revision instead of assuming file text is identical.
+
+Apply additive migrations before using append or correction. Rollback should
+disable the new entry points/worker features while retaining a scope- and
+snapshot-compatible runtime and all durable intent, request and source records.
+Do not restore an older writer that unconditionally deletes all document memories
+or uses entity names as unique identities. Deployment remains pipeline-managed.

@@ -74,6 +74,7 @@ class HindsightService:
         expected_revision: int | None = None,
         request_id: str | None = None,
         force_extraction: bool = False,
+        update_mode: str = "replace",
     ) -> RetainResult:
         if retain_input is None:
             if None in (document_id, title, content, file_type):
@@ -101,6 +102,7 @@ class HindsightService:
                 expected_revision=expected_revision,
                 request_id=request_id,
                 force_extraction=force_extraction,
+                update_mode=update_mode,
             )
         return await self._retain.retain(retain_input)
 
@@ -111,11 +113,12 @@ class HindsightService:
             raise ValueError("unsupported retention stage")
         from dataclasses import replace
 
-        return await self.retain(
+        return await self._retain.retain(
             replace(
                 await self._repository.retention_input(document_id),
                 force_extraction=True,
-            )
+            ),
+            replay_snapshot=True,
         )
 
     async def retention_revision(self, document_id: str) -> int:

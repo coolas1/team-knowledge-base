@@ -83,11 +83,16 @@ class RetainInput:
     expected_revision: int | None = None
     request_id: str | None = None
     force_extraction: bool = False
+    update_mode: str = "replace"
 
     def __post_init__(self):
         from zoneinfo import ZoneInfo
 
         ZoneInfo(self.reference_timezone)
+        if self.update_mode not in {"append", "replace"}:
+            raise ValueError("update_mode must be append or replace")
+        if self.update_mode == "append" and not self.request_id:
+            raise ValueError("append requires a request_id")
         if self.source_timestamp is not None and self.source_timestamp.tzinfo is None:
             raise ValueError("source_timestamp must include a timezone")
         if self.policy_version < 1:
@@ -168,6 +173,7 @@ class RetainPlan:
     request_hash: str | None = None
     result_payload: dict[str, Any] = field(default_factory=dict)
     extraction_cache: dict[str, Any] = field(default_factory=dict)
+    content_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

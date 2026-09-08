@@ -13,9 +13,13 @@ def request_fingerprint(value) -> str:
             return item.isoformat() if isinstance(item, datetime) else str(item)
         raise TypeError("retain metadata must be JSON serializable")
 
+    payload = asdict(value)
+    # Preserve pre-append request hashes for the existing default operation.
+    if payload.get("update_mode") == "replace":
+        payload.pop("update_mode")
     return sha256(
         json.dumps(
-            asdict(value),
+            payload,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),

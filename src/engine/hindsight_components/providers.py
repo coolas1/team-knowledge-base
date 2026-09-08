@@ -88,6 +88,9 @@ class ProjectHindsightProviders:
             ],
         }
         if json_mode:
+            # Some compatible endpoints reject JSON mode unless a message
+            # explicitly requests JSON, even when the prompt includes a schema.
+            payload["messages"][0]["content"] += "\nReturn a valid JSON object."
             payload["response_format"] = {"type": "json_object"}
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(

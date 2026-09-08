@@ -1,0 +1,13 @@
+{
+  "status": "accepted_for_B2",
+  "selection": "first complete post-fix repetition, all eight planned attribution/time cases; no best-of selection",
+  "authorization": "User explicitly requested fewer validation/review rounds and efficiency",
+  "records": 16,
+  "tkb_attribution_passed": 4,
+  "tkb_attribution_total": 4,
+  "tkb_time_passed": 4,
+  "tkb_time_total": 4,
+  "remaining_raw_records_preserved": 11,
+  "results_sha256": "52ccbb58e49995c1eddf33730d8f024409de84a9f9efe6b54f7959e86960a5c1",
+  "limitations": "One fixed post-fix pass is regression evidence, not statistical proof or whole-engine parity. Earlier failed baseline and transient parsing degradation remain recorded."
+}

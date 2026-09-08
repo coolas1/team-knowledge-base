@@ -40,9 +40,16 @@ class RetainEngine:
         self._providers = providers
         self._options = options
 
-    async def retain(self, retain_input: RetainInput) -> RetainResult:
+    async def retain(
+        self, retain_input: RetainInput, *, replay_snapshot: bool = False
+    ) -> RetainResult:
         from .types import RetentionRevisionConflict
         from .request_identity import request_fingerprint
+        from .retention_snapshot import (
+            content_snapshot,
+            snapshot_chunks,
+            replace_snapshot,
+        )
 
         request_hash = (
             request_fingerprint(retain_input) if retain_input.request_id else None
@@ -59,10 +66,18 @@ class RetainEngine:
                 return RetainResult(**cached)
 
         revision = retain_input.expected_revision
-        if hasattr(self._repository, "retention_revision"):
+        snapshot = {}
+        if hasattr(self._repository, "retention_content_snapshot"):
+            current, snapshot = await self._repository.retention_content_snapshot(
+                retain_input.document_id
+            )
+        elif hasattr(self._repository, "retention_revision"):
             current = await self._repository.retention_revision(
                 retain_input.document_id
             )
+        else:
+            current = revision
+        if current is not None:
             if revision is not None and revision != current:
                 if retain_input.request_id:
                     cached = await self._repository.retention_request_result(
@@ -77,6 +92,51 @@ class RetainEngine:
             chunk_size=self._options.chunk_tokens,
             overlap=self._options.chunk_overlap_tokens,
         )
+        prepared_snapshot = content_snapshot(retain_input, chunks)
+        chunk_sources = [retain_input for _ in chunks]
+        if snapshot and retain_input.update_mode == "replace" and not replay_snapshot:
+            prepared_snapshot = replace_snapshot(
+                retain_input,
+                snapshot,
+                chunk_size=self._options.chunk_tokens,
+                overlap=self._options.chunk_overlap_tokens,
+            )
+            chunks, chunk_sources = snapshot_chunks(
+                prepared_snapshot, policy_version=retain_input.policy_version
+            )
+        if replay_snapshot or retain_input.update_mode == "append":
+            if snapshot:
+                old_chunks, old_sources = snapshot_chunks(
+                    snapshot, policy_version=retain_input.policy_version
+                )
+                if replay_snapshot:
+                    chunks, chunk_sources = old_chunks, old_sources
+                    prepared_snapshot = snapshot
+                else:
+                    chunks = old_chunks + [
+                        Chunk(len(old_chunks) + c.index, c.text, c.token_count)
+                        for c in chunks
+                    ]
+                    chunk_sources = old_sources + chunk_sources
+                    prepared_snapshot = {
+                        "version": 1,
+                        "content": snapshot["content"]
+                        + (
+                            "\n\n"
+                            if snapshot["content"] and retain_input.content
+                            else ""
+                        )
+                        + retain_input.content,
+                        "chunks": snapshot["chunks"] + prepared_snapshot["chunks"],
+                    }
+            elif retain_input.update_mode == "append" and revision:
+                raise ValueError(
+                    "legacy retention has no content snapshot; replace before append"
+                )
+            elif retain_input.update_mode == "append" and not hasattr(
+                self._repository, "retention_content_snapshot"
+            ):
+                raise ValueError("repository does not support append")
         if not chunks:
             # No extractable text (e.g. an image-only document whose OCR found
             # nothing). Persist an empty plan so the document reaches the
@@ -93,6 +153,7 @@ class RetainEngine:
                 source_context=json.loads(extraction_context(retain_input)),
                 expected_revision=revision,
             )
+            plan.content_snapshot = prepared_snapshot
             result = RetainResult(
                 document_id=retain_input.document_id,
                 chunks=0,
@@ -113,7 +174,7 @@ class RetainEngine:
             else {}
         )
         facts_by_chunk, chunk_outcomes, extraction_cache = await self._extract_facts(
-            retain_input, chunks, cached
+            retain_input, chunks, cached, chunk_sources=chunk_sources
         )
         facts = [fact for group in facts_by_chunk for fact in group]
         observations, consolidation_status = await self._consolidate(facts)
@@ -130,6 +191,9 @@ class RetainEngine:
                 chunks=chunks,
                 facts_by_chunk=facts_by_chunk,
                 observations=observations,
+                chunk_sources=chunk_sources,
+                chunk_records=prepared_snapshot["chunks"],
+                generation=revision if snapshot else None,
             )
         except Exception:
             if hasattr(self._repository, "set_document_state"):
@@ -184,6 +248,10 @@ class RetainEngine:
             )
         plan.expected_revision = revision
         plan.extraction_cache = extraction_cache
+        plan.content_snapshot = prepared_snapshot
+        from .retention_snapshot import remember_ids
+
+        remember_ids(plan.content_snapshot, plan.memories)
         result = RetainResult(
             document_id=retain_input.document_id,
             chunks=len(chunks),
@@ -214,6 +282,8 @@ class RetainEngine:
         retain_input: RetainInput,
         chunks: list[Chunk],
         cache: dict | None = None,
+        *,
+        chunk_sources: list[RetainInput] | None = None,
     ) -> tuple[list[list[ExtractedFact]], list[str], dict]:
         from hashlib import sha256
 
@@ -222,11 +292,13 @@ class RetainEngine:
         results: list[list[ExtractedFact]] = []
         outcomes: list[str] = []
         for chunk in chunks:
+            if chunk_sources is not None:
+                retain_input = chunk_sources[chunk.index]
             try:
                 key = sha256(
                     json.dumps(
                         [
-                            "tkb-extraction-v2",
+                            "tkb-extraction-v3",
                             extraction_context(retain_input),
                             retain_input.source_type,
                             retain_input.title,
@@ -244,6 +316,11 @@ class RetainEngine:
                         "contradictions and cross-source references. Classify each as world or experience. "
                         "For conversations, preserve speaker attribution and do not turn assistant questions "
                         "or suggestions into user facts. User preferences, rules and external facts are world. "
+                        "Actions and personal experiences of the user or other humans are also world, "
+                        "including completed travel, purchases and work. Experience is reserved for the memory-owning "
+                        "Agent's own actions, recommendations and observations; it does not mean any person's experience. "
+                        "Classify by the actor described, not merely the message speaker: a user reporting an "
+                        "Agent action can describe experience, while an Agent reporting a human action describes world. "
                         "Agent actions, recommendations and observations are experience: a recommendation is "
                         "an act of recommending, never proof the suggested task was executed. "
                         "Preserve completed/suggested/planned/unknown modality and speaker_role. "
@@ -394,6 +471,9 @@ class RetainEngine:
         chunks: list[Chunk],
         facts_by_chunk: list[list[ExtractedFact]],
         observations: list[dict],
+        chunk_sources: list[RetainInput] | None = None,
+        chunk_records: list[dict] | None = None,
+        generation: int | None = None,
     ) -> RetainPlan:
         memories: list[MemoryDraft] = []
         links: list[MemoryLinkDraft] = []
@@ -456,6 +536,14 @@ class RetainEngine:
         chunk_ids = {}
         repetitions = defaultdict(int)
         for chunk in chunks:
+            existing_id = (
+                chunk_records[chunk.index].get("chunk_id")
+                if chunk_records is not None
+                else None
+            )
+            if existing_id:
+                chunk_ids[chunk.index] = existing_id
+                continue
             occurrence = repetitions[chunk.text]
             repetitions[chunk.text] += 1
             chunk_ids[chunk.index] = str(
@@ -467,14 +555,33 @@ class RetainEngine:
                             retain_input.document_id,
                             chunk.text,
                             occurrence,
+                            *(
+                                [generation, chunk.index]
+                                if generation is not None
+                                else []
+                            ),
                         ],
                         ensure_ascii=False,
                     ),
                 )
             )
         fact_repetitions = defaultdict(int)
+        legacy_repetitions = defaultdict(int)
         for spec, embedding in zip(specs, embeddings, strict=True):
             chunk, memory_index, fact, is_source_chunk, fact_index = spec
+            source = (
+                chunk_sources[chunk.index]
+                if chunk_sources is not None
+                else retain_input
+            )
+            chunk_metadata = {
+                **source.metadata,
+                "title": source.title,
+                "file_type": source.file_type,
+                "source_type": source.source_type,
+                **json.loads(extraction_context(source)),
+            }
+            chunk_metadata.pop("resolved_entities", None)
             identity = json.dumps(
                 [
                     chunk_ids[chunk.index],
@@ -491,15 +598,36 @@ class RetainEngine:
             )
             occurrence = fact_repetitions[identity]
             fact_repetitions[identity] += 1
+            memory_id = str(uuid5(NAMESPACE_URL, f"{identity}:{occurrence}"))
+            if chunk_records is not None:
+                from .retention_snapshot import memory_signature
+
+                signature = memory_signature(
+                    text=fact.text,
+                    memory_type=fact.fact_type,
+                    is_source_chunk=is_source_chunk,
+                    occurred_start=fact.occurred_start,
+                    occurred_end=fact.occurred_end,
+                    location=fact.location,
+                    speaker_role=fact.speaker_role,
+                    modality=fact.modality,
+                )
+                matches = (
+                    chunk_records[chunk.index].get("memory_ids", {}).get(signature, [])
+                )
+                match_index = legacy_repetitions[(chunk.index, signature)]
+                legacy_repetitions[(chunk.index, signature)] += 1
+                if match_index < len(matches):
+                    memory_id = matches[match_index]
             memory = MemoryDraft(
-                id=str(uuid5(NAMESPACE_URL, f"{identity}:{occurrence}")),
+                id=memory_id,
                 document_id=retain_input.document_id,
                 chunk_index=chunk.index,
                 memory_index=memory_index,
                 memory_type=fact.fact_type,
                 text=fact.text,
                 source_text=chunk.text,
-                context=context,
+                context=source.context or f"Knowledge-base document: {source.title}",
                 embedding=embedding,
                 entities=list(fact.entities),
                 occurred_start=fact.occurred_start,
@@ -509,13 +637,13 @@ class RetainEngine:
                 location=fact.location,
                 tags=list(tags),
                 metadata={
-                    **metadata,
+                    **chunk_metadata,
                     "chunk_id": chunk_ids[chunk.index],
                     "speaker_role": fact.speaker_role,
                     "modality": fact.modality,
-                    "speaker_id": metadata["speakers"].get(fact.speaker_role),
+                    "speaker_id": chunk_metadata["speakers"].get(fact.speaker_role),
                     "entity_aliases": {
-                        **metadata.get("entity_aliases", {}),
+                        **chunk_metadata.get("entity_aliases", {}),
                         **fact.entity_aliases,
                     },
                 },

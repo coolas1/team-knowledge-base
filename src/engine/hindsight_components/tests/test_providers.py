@@ -96,3 +96,16 @@ async def test_enabled_llm_without_model_raises(
 
     with pytest.raises(ValueError, match="LLM_MODEL"):
         await provider.text("system", "user")
+
+
+async def test_json_mode_explicitly_requests_json(monkeypatch):
+    monkeypatch.setattr(settings.llm, "base_url", "https://llm.example/v1")
+    monkeypatch.setattr(settings.llm, "model", "remote-model")
+    monkeypatch.setattr(provider_module.httpx, "AsyncClient", FakeClient)
+    FakeClient.response = {"choices": [{"message": {"content": '{"facts": []}'}}]}
+    assert await ProjectHindsightProviders(FakeEmbedder()).json(
+        "Extract facts.", "Source"
+    ) == {"facts": []}
+    payload = FakeClient.request[1]
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "json" in payload["messages"][0]["content"].lower()

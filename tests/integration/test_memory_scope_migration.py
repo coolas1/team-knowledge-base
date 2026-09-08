@@ -22,6 +22,587 @@ from src.engine.hindsight_components.types import MemoryDraft, RetainPlan
 pytestmark = pytest.mark.integration
 
 
+async def test_pi_process_replays_ack_through_production_mcp_to_postgres(
+    scope_database, tmp_path, monkeypatch
+):
+    import asyncio
+    import json
+    from pathlib import Path
+    import socket
+    import uvicorn
+    from src.agent.tkb.mcp import server as mcp_module
+    from src.engine.components.store.retention_migration import migrate_retention
+    from src.engine.hindsight_components.conversation_queue import (
+        PostgresConversationMemoryQueue,
+    )
+    from src.engine.hindsight_components.conversation_service import (
+        ConversationMemoryService,
+    )
+    from src.engine.hindsight_components.models import ConversationMemorySource
+    from src.engine.hindsight_components.service import HindsightService
+    from src.engine.hindsight_components.providers import ProjectHindsightProviders
+
+    engine, schema = scope_database
+    await migrate_scope(engine, schema=schema)
+    await migrate_retention(engine, schema=schema)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    repo = PostgresMemoryRepository(sessions)
+    service = ConversationMemoryService(
+        PostgresConversationMemoryQueue(sessions),
+        HindsightService(repo, ProjectHindsightProviders()),
+        repo,
+    )
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "engine:\n  memory:\n    enabled: true\n    features:\n      scope: true\n      reliable_retention: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APP_CONFIG", str(config))
+    monkeypatch.setattr(mcp_module, "_conversation_memory_service", service)
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    url = f"http://127.0.0.1:{sock.getsockname()[1]}/"
+    host = uvicorn.Server(
+        uvicorn.Config(mcp_module.mcp.streamable_http_app(), log_level="error")
+    )
+    task = asyncio.create_task(host.serve(sockets=[sock]))
+    transcript = tmp_path / "pi-transcript"
+    script = Path("src/extensions/pi-agent/scripts/delivery-fault-smoke.mjs").resolve()
+
+    async def run_node(mode):
+        process = await asyncio.create_subprocess_exec(
+            "node",
+            str(script),
+            mode,
+            str(transcript),
+            url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            output, errors = await asyncio.wait_for(process.communicate(), timeout=20)
+            return process.returncode, output, errors
+        finally:
+            if process.returncode is None:
+                process.terminate()
+                await process.wait()
+
+    try:
+        async with asyncio.timeout(10):
+            while not host.started:
+                if task.done():
+                    await task
+                await asyncio.sleep(0.01)
+        code, _, errors = await run_node("seed")
+        assert code == 0, errors.decode()
+        code, _, errors = await run_node("crash")
+        assert code == 86, errors.decode()
+        async with sessions() as session:
+            before = list(await session.scalars(select(ConversationMemorySource)))
+            assert len(before) == 1
+            operation_id = before[0].operation_id
+            document_id = before[0].document_id
+        for _ in range(2):
+            code, output, errors = await run_node("recover")
+            assert code == 0, errors.decode()
+            assert json.loads(output)["accepted"] == 1
+        async with sessions() as session:
+            after = list(await session.scalars(select(ConversationMemorySource)))
+            assert len(after) == 1
+            assert after[0].operation_id == operation_id
+            assert after[0].document_id == document_id
+            assert after[0].status == "pending"
+    finally:
+        host.should_exit = True
+        await asyncio.wait_for(task, timeout=10)
+        sock.close()
+
+
+async def test_expired_worker_process_cannot_publish_after_takeover(scope_database):
+    import asyncio
+    import json
+    import sys
+    import textwrap
+    from src.engine.components.store.retention_migration import migrate_retention
+    from src.engine.hindsight_components.conversation_queue import (
+        PostgresConversationMemoryQueue,
+    )
+
+    engine, schema = scope_database
+    await migrate_scope(engine, schema=schema)
+    await migrate_retention(engine, schema=schema)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    queue = PostgresConversationMemoryQueue(sessions)
+    pending = await queue.enqueue(
+        session_id="process-lease", turn_id="turn", content="Source"
+    )
+    script = textwrap.dedent("""
+        import asyncio, json, sys
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from src.engine.hindsight_components.conversation_queue import PostgresConversationMemoryQueue
+        from src.engine.hindsight_components.repository import PostgresMemoryRepository
+        from src.engine.hindsight_components.types import RetainPlan, RetentionLeaseLost
+        async def main():
+            engine = create_async_engine(sys.argv[1], connect_args={"server_settings": {"search_path": sys.argv[2]}})
+            sessions = async_sessionmaker(engine, expire_on_commit=False)
+            queue = PostgresConversationMemoryQueue(sessions)
+            job = (await queue.claim(lease_seconds=1))[0]
+            print(json.dumps({"document_id": job.document_id, "operation_id": job.operation_id}), flush=True)
+            await asyncio.to_thread(sys.stdin.readline)
+            repo = PostgresMemoryRepository(sessions).with_lease(job.document_id, job.lease_token)
+            try:
+                await repo.replace_document(RetainPlan(document_id=job.document_id, title="late", file_type="conversation", source_type="conversation", memories=[], links=[]))
+            except RetentionLeaseLost:
+                print("publication_fenced", flush=True)
+            else:
+                raise AssertionError("expired process published memories")
+            assert await queue.fail(job.document_id, "late failure", lease_token=job.lease_token) == "cancelled"
+            await engine.dispose()
+        asyncio.run(main())
+    """)
+    child = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        script,
+        os.environ["SCOPE_TEST_DSN"],
+        schema,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        ready = json.loads(await asyncio.wait_for(child.stdout.readline(), timeout=15))
+        assert ready["document_id"] == pending.document_id
+        await asyncio.sleep(
+            1.2
+        )  # Real lease expiry; no mocked clock/database deadline.
+        fresh = (await queue.claim(lease_seconds=60))[0]
+        assert fresh.operation_id == ready["operation_id"]
+        await (
+            PostgresMemoryRepository(sessions)
+            .with_lease(fresh.document_id, fresh.lease_token)
+            .replace_document(
+                RetainPlan(
+                    document_id=fresh.document_id,
+                    title="fresh",
+                    file_type="conversation",
+                    source_type="conversation",
+                    memories=[],
+                    links=[],
+                )
+            )
+        )
+        assert await queue.complete(fresh.document_id, lease_token=fresh.lease_token)
+        child.stdin.write(b"resume\n")
+        await child.stdin.drain()
+        stdout, stderr = await asyncio.wait_for(child.communicate(), timeout=15)
+        assert child.returncode == 0, stderr.decode()
+        assert b"publication_fenced" in stdout
+        assert await queue.get_status(fresh.document_id) == "completed"
+        assert (
+            await PostgresMemoryRepository(sessions).retention_revision(
+                fresh.document_id
+            )
+            == 1
+        )
+    finally:
+        if child.returncode is None:
+            child.terminate()
+            await child.wait()
+
+
+async def test_legacy_append_recovers_original_source_and_random_ids(scope_database):
+    from src.engine.components.store.models import EMBEDDING_DIM
+    from src.engine.components.store.retention_migration import migrate_retention
+    from src.engine.hindsight_components.service import HindsightService
+    from src.engine.hindsight_components.types import RetainInput
+
+    engine, schema = scope_database
+    await migrate_scope(engine, schema=schema)
+    await migrate_retention(engine, schema=schema)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    doc_id = uuid.uuid4()
+    async with sessions() as session:
+        session.add(
+            Document(
+                id=doc_id,
+                title="Legacy",
+                file_type="text",
+                raw_text="New file text that was never retained",
+            )
+        )
+        await session.commit()
+    repo = PostgresMemoryRepository(sessions)
+    vector = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
+    ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    await repo.replace_document(
+        RetainPlan(
+            document_id=str(doc_id),
+            title="Legacy",
+            file_type="text",
+            source_type="upload",
+            memories=[
+                MemoryDraft(
+                    id=ids[i],
+                    document_id=str(doc_id),
+                    chunk_index=0,
+                    memory_index=i,
+                    memory_type="world",
+                    text="Original source" if i == 0 else "Original fact",
+                    source_text="Original source",
+                    context="Legacy source context",
+                    embedding=vector,
+                    is_source_chunk=i == 0,
+                )
+                for i in range(2)
+            ],
+            links=[],
+        )
+    )
+
+    class Provider:
+        prompts = []
+
+        async def json(self, system, user, **kwargs):
+            if "TEXT:\n" not in user:
+                return {"observations": []}
+            self.prompts.append(user)
+            return {
+                "facts": [
+                    {
+                        "text": "Original fact"
+                        if "TEXT:\nOriginal source" in user
+                        else "New fact",
+                        "type": "world",
+                    }
+                ]
+            }
+
+        async def embed(self, texts, **kwargs):
+            return [vector for _ in texts]
+
+    provider = Provider()
+    service = HindsightService(repo, provider)
+    value = RetainInput(
+        document_id=str(doc_id),
+        title="Legacy",
+        content="New source",
+        file_type="text",
+        update_mode="append",
+        request_id="legacy-append",
+    )
+    result = await service.retain(value)
+    assert result.facts == 2
+    assert all("never retained" not in prompt for prompt in provider.prompts)
+    async with sessions() as session:
+        rows = list(
+            await session.scalars(
+                select(MemoryUnit).where(MemoryUnit.document_id == doc_id)
+            )
+        )
+        assert set(ids).issubset({str(row.id) for row in rows})
+    revision, snapshot = await repo.retention_content_snapshot(str(doc_id))
+    assert revision == 2
+    assert snapshot["content"] == "Original source\n\nNew source"
+    assert await service.retain(value) == result
+    assert len(provider.prompts) == 2
+
+    from dataclasses import replace
+
+    duplicate = replace(value, content="Original source", request_id="duplicate")
+    await service.retain(duplicate)
+    snapshot = (await repo.retention_content_snapshot(str(doc_id)))[1]
+    original_blocks = [
+        item for item in snapshot["chunks"] if item["text"] == "Original source"
+    ]
+    assert len({item["chunk_id"] for item in original_blocks}) == 2
+    original_fact_ids = {
+        memory_id
+        for item in original_blocks
+        for values in item["memory_ids"].values()
+        for memory_id in values
+    }
+    assert len(original_fact_ids) == 4
+    # With indistinguishable duplicate text, replace consistently keeps the first
+    # saved occurrence. Adding a new occurrence must not steal that ID.
+    await service.retain(
+        replace(
+            value,
+            update_mode="replace",
+            request_id="remove-duplicate",
+            content="Original source",
+        )
+    )
+    retained = (await repo.retention_content_snapshot(str(doc_id)))[1]["chunks"][0]
+    assert retained["chunk_id"] == original_blocks[0]["chunk_id"]
+    await service.retain(replace(duplicate, request_id="duplicate-again"))
+    final_blocks = (await repo.retention_content_snapshot(str(doc_id)))[1]["chunks"]
+    assert final_blocks[0]["chunk_id"] == retained["chunk_id"]
+    assert final_blocks[1]["chunk_id"] not in {
+        item["chunk_id"] for item in original_blocks
+    }
+
+
+async def test_append_replay_preserves_chunk_provenance_and_reprocess(scope_database):
+    import asyncio
+    from dataclasses import replace
+    from datetime import datetime, timezone
+    from src.engine.components.store.models import EMBEDDING_DIM
+    from src.engine.components.store.retention_migration import migrate_retention
+    from src.engine.hindsight_components.service import HindsightService
+    from src.engine.hindsight_components.types import (
+        RetainInput,
+        RetentionRequestConflict,
+        RetentionRevisionConflict,
+    )
+
+    engine, schema = scope_database
+    await migrate_scope(engine, schema=schema)
+    await migrate_retention(engine, schema=schema)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    doc_id = uuid.uuid4()
+    async with sessions() as session:
+        session.add(
+            Document(
+                id=doc_id, title="Append", file_type="text", raw_text="Old raw file"
+            )
+        )
+        await session.commit()
+
+    class Provider:
+        prompts = []
+        race = False
+        arrivals = 0
+        barrier = asyncio.Event()
+
+        async def json(self, system, user, **kwargs):
+            if "TEXT:\n" not in user:
+                return {"observations": []}
+            self.prompts.append(user)
+            text_value = user.split("TEXT:\n", 1)[1].split("\n\nReturn", 1)[0]
+            if self.race:
+                self.arrivals += 1
+                if self.arrivals == 2:
+                    self.barrier.set()
+                await asyncio.wait_for(self.barrier.wait(), timeout=5)
+            return {
+                "facts": [
+                    {
+                        "text": text_value,
+                        "type": "world",
+                        "occurred_start": "yesterday",
+                        "speaker_role": "user",
+                    }
+                ]
+            }
+
+        async def embed(self, texts, **kwargs):
+            return [[1.0] + [0.0] * (EMBEDDING_DIM - 1) for _ in texts]
+
+    provider = Provider()
+    repo = PostgresMemoryRepository(sessions)
+    service = HindsightService(repo, provider)
+    first = RetainInput(
+        document_id=str(doc_id),
+        title="Append",
+        content="First event",
+        file_type="text",
+        source_timestamp=datetime(2020, 1, 2, tzinfo=timezone.utc),
+        speakers={"user": "alice"},
+    )
+    await service.retain(first)
+    appended = replace(
+        first,
+        content="Second event",
+        source_timestamp=datetime(2021, 2, 3, tzinfo=timezone.utc),
+        speakers={"user": "bob"},
+        request_id="append-1",
+        update_mode="append",
+    )
+    result = await service.retain(appended)
+    assert result.facts == 2
+    assert len(provider.prompts) == 2
+    assert await service.retain(appended) == result
+    assert len(provider.prompts) == 2
+    with pytest.raises(RetentionRequestConflict):
+        await service.retain(replace(appended, content="Other event"))
+    revision, snapshot = await repo.retention_content_snapshot(str(doc_id))
+    assert revision == 2
+    assert snapshot["content"] == "First event\n\nSecond event"
+    async with sessions() as session:
+        facts = list(
+            (
+                await session.scalars(
+                    select(MemoryUnit)
+                    .where(
+                        MemoryUnit.document_id == doc_id,
+                        MemoryUnit.is_source_chunk.is_(False),
+                    )
+                    .order_by(MemoryUnit.chunk_index)
+                )
+            ).all()
+        )
+        ids = [row.id for row in facts]
+        assert [row.occurred_start.year for row in facts] == [2020, 2021]
+        assert [row.metadata_json["speaker_id"] for row in facts] == ["alice", "bob"]
+    await service.reprocess_document(str(doc_id))
+    assert len(provider.prompts) == 4
+    async with sessions() as session:
+        facts = list(
+            (
+                await session.scalars(
+                    select(MemoryUnit)
+                    .where(
+                        MemoryUnit.document_id == doc_id,
+                        MemoryUnit.is_source_chunk.is_(False),
+                    )
+                    .order_by(MemoryUnit.chunk_index)
+                )
+            ).all()
+        )
+        assert [row.id for row in facts] == ids
+        assert [row.occurred_start.year for row in facts] == [2020, 2021]
+    assert (await repo.retention_content_snapshot(str(doc_id)))[1][
+        "content"
+    ] == snapshot["content"]
+    await service.retain(
+        replace(appended, content="", request_id="policy-2", policy_version=2)
+    )
+    assert len(provider.prompts) == 6
+    assert '"source_timestamp": "2020-01-02' in provider.prompts[-2]
+    assert '"source_timestamp": "2021-02-03' in provider.prompts[-1]
+    assert all('"policy_version": 2' in p for p in provider.prompts[-2:])
+    # Replacing the combined content must not collapse the append boundaries.
+    await service.retain(replace(first, content=snapshot["content"], policy_version=2))
+    assert len(provider.prompts) == 6
+    await service.retain(
+        replace(first, content="Updated first\n\nSecond event", policy_version=2)
+    )
+    assert len(provider.prompts) == 7
+    current = await repo.retention_revision(str(doc_id))
+    contenders = [
+        replace(
+            appended,
+            content=f"Concurrent {i}",
+            request_id=f"race-{i}",
+            policy_version=2,
+            expected_revision=current,
+        )
+        for i in range(2)
+    ]
+    provider.race = True
+    results = await asyncio.gather(
+        *(service.retain(value) for value in contenders), return_exceptions=True
+    )
+    provider.race = False
+    assert sum(isinstance(value, RetentionRevisionConflict) for value in results) == 1
+    assert await repo.retention_revision(str(doc_id)) == current + 1
+    loser = next(
+        i
+        for i, value in enumerate(results)
+        if isinstance(value, RetentionRevisionConflict)
+    )
+    content = (await repo.retention_content_snapshot(str(doc_id)))[1]["content"]
+    assert contenders[loser].content not in content
+    assert contenders[1 - loser].content in content
+    # The rejected request has no committed ledger entry and can retry the new revision.
+    await service.retain(replace(contenders[loser], expected_revision=current + 1))
+    content = (await repo.retention_content_snapshot(str(doc_id)))[1]["content"]
+    assert all(content.count(value.content) == 1 for value in contenders)
+
+
+async def test_unchanged_rows_keep_external_evidence_during_reordering(scope_database):
+    from dataclasses import replace
+    from src.engine.components.store.models import EMBEDDING_DIM
+    from src.engine.components.store.retention_migration import migrate_retention
+    from src.engine.hindsight_components.models import MemoryLink
+    from src.engine.hindsight_components.types import MemoryLinkDraft
+
+    engine, schema = scope_database
+    await migrate_scope(engine, schema=schema)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE memory_units DROP CONSTRAINT uq_memory_source_index, ADD CONSTRAINT uq_memory_source_index UNIQUE(document_id, chunk_index, memory_index)"
+            )
+        )
+    await migrate_retention(engine, schema=schema)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    a, b = uuid.uuid4(), uuid.uuid4()
+    async with sessions() as session:
+        session.add_all(
+            [Document(id=d, title="source", file_type="text") for d in (a, b)]
+        )
+        await session.commit()
+    repo = PostgresMemoryRepository(sessions)
+    facts = [
+        MemoryDraft(
+            id=str(uuid.uuid4()),
+            document_id=str(a),
+            chunk_index=i,
+            memory_index=0,
+            memory_type="world",
+            text=f"fact {i}",
+            source_text=f"source {i}",
+            context="",
+            embedding=[0.1] * EMBEDDING_DIM,
+        )
+        for i in range(2)
+    ]
+    plan = RetainPlan(
+        document_id=str(a),
+        title="source",
+        file_type="text",
+        source_type="test",
+        memories=facts,
+        links=[],
+    )
+    await repo.replace_document(plan)
+    observation = MemoryDraft(
+        id=str(uuid.uuid4()),
+        document_id=str(b),
+        chunk_index=-1,
+        memory_index=1,
+        memory_type="observation",
+        text="Both facts",
+        source_text="Both sources",
+        context="",
+        embedding=[0.1] * EMBEDDING_DIM,
+        source_memory_ids=[fact.id for fact in facts],
+    )
+    await repo.replace_document(
+        RetainPlan(
+            document_id=str(b),
+            title="derived",
+            file_type="text",
+            source_type="test",
+            memories=[observation],
+            links=[MemoryLinkDraft(observation.id, facts[0].id, "evidence")],
+        )
+    )
+    async with sessions() as session:
+        original = (await session.get(MemoryUnit, uuid.UUID(facts[0].id))).mentioned_at
+    reordered = [replace(facts[0], chunk_index=1), replace(facts[1], chunk_index=0)]
+    await repo.replace_document(replace(plan, memories=reordered, expected_revision=1))
+    async with sessions() as session:
+        row = await session.get(MemoryUnit, uuid.UUID(facts[0].id))
+        assert row.mentioned_at == original
+        assert row.chunk_index == 1
+        assert await session.get(MemoryUnit, uuid.UUID(observation.id)) is not None
+        assert (
+            await session.get(
+                MemoryLink,
+                (uuid.UUID(observation.id), uuid.UUID(facts[0].id), "evidence"),
+            )
+            is not None
+        )
+    await repo.replace_document(
+        replace(plan, memories=[reordered[0]], expected_revision=2)
+    )
+    async with sessions() as session:
+        assert await session.get(MemoryUnit, uuid.UUID(observation.id)) is None
+
+
 async def test_extraction_cache_reuses_content_and_invalidates_policy(scope_database):
     from dataclasses import replace
     from src.engine.components.store.models import EMBEDDING_DIM
@@ -60,9 +641,15 @@ async def test_extraction_cache_reuses_content_and_invalidates_policy(scope_data
     assert (await service.retain(value)).status == "success"
     assert (await service.retain(value)).status == "success"
     assert provider.calls == 1
+    revision, snapshot = await repo.retention_content_snapshot(str(doc_id))
+    assert revision == 2
+    assert snapshot["content"] == value.content
+    assert snapshot["chunks"][0]["source"]["policy_version"] == 1
     assert (await service.retain(replace(value, policy_version=2))).status == "success"
     assert provider.calls == 2
     hidden = repo.with_scope(MemoryScope(bank_id="other"))
+    with pytest.raises(ValueError, match="document does not exist"):
+        await hidden.retention_content_snapshot(str(doc_id))
     with pytest.raises(ValueError, match="document does not exist"):
         await hidden.retention_extraction_cache(str(doc_id))
     provider.fail = True
@@ -423,6 +1010,12 @@ async def test_contextual_entities_aliases_and_equal_names_persist_separately(
         reason="Split the ambiguous person",
     )
     assert separated["target_entity_id"] != moved["target_entity_id"]
+    await service.retain(
+        document_id=str(documents[1]),
+        title="source",
+        content="AC shipped the Acme project",
+        file_type="text",
+    )
     projection = await repo.graph_projection(str(documents[1]))
     assert {entity.id for entity in projection.entities} == {
         separated["target_entity_id"]

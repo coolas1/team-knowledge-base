@@ -85,6 +85,8 @@ class MemoryUnit(BankOwned, Base):
             "chunk_index",
             "memory_index",
             name="uq_memory_source_index",
+            deferrable=True,
+            initially="DEFERRED",
         ),
         Index("idx_memory_units_document", "document_id"),
         Index("idx_memory_units_type", "memory_type"),
@@ -275,6 +277,9 @@ class RetentionRequest(BankOwned, Base):
 
 class HindsightDocumentState(BankOwned, Base):
     __tablename__ = "hindsight_document_state"
+    content_snapshot: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
+    )
     extraction_cache: Mapped[dict] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
     )

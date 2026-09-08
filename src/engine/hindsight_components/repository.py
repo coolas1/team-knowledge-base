@@ -180,6 +180,58 @@ class PostgresMemoryRepository:
                 or 0
             )
 
+    async def retention_content_snapshot(self, document_id: str) -> tuple[int, dict]:
+        """Read content and its CAS revision in the same scoped SQL statement."""
+        async with self._session_factory() as session:
+            # Legacy reconstruction spans state and source rows. The same lock
+            # used by publication keeps both reads at one document revision.
+            await session.execute(
+                select(
+                    func.pg_advisory_xact_lock(
+                        document_lock_key(uuid.UUID(document_id))
+                    )
+                )
+            )
+            row = (
+                await session.execute(
+                    select(
+                        HindsightDocumentState.revision,
+                        HindsightDocumentState.content_snapshot,
+                    )
+                    .select_from(Document)
+                    .outerjoin(
+                        HindsightDocumentState,
+                        HindsightDocumentState.document_id == Document.id,
+                    )
+                    .where(
+                        Document.id == uuid.UUID(document_id), self._document_scope()
+                    )
+                )
+            ).one_or_none()
+            if row is None:
+                raise ValueError("document does not exist")
+            if not row[1]:
+                document = await session.get(Document, uuid.UUID(document_id))
+                memories = list(
+                    await session.scalars(
+                        select(MemoryUnit)
+                        .where(
+                            MemoryUnit.document_id == document.id, self._memory_scope()
+                        )
+                        .order_by(MemoryUnit.chunk_index, MemoryUnit.memory_index)
+                    )
+                )
+                if memories:
+                    from .retention_snapshot import legacy_content_snapshot
+
+                    state = await session.get(HindsightDocumentState, document.id)
+                    return int(row[0] or 0), legacy_content_snapshot(
+                        document,
+                        memories,
+                        dict(state.source_context or {}) if state else {},
+                    )
+            return int(row[0] or 0), dict(row[1] or {})
+
     async def retention_extraction_cache(self, document_id: str) -> dict:
         async with self._session_factory() as session:
             visible = await session.scalar(
@@ -355,26 +407,35 @@ class PostgresMemoryRepository:
                         )
                     )
                 )
+                retained_ids = {uuid.UUID(memory.id) for memory in plan.memories} & set(
+                    old_ids
+                )
+                removed_ids = list(set(old_ids) - retained_ids)
                 impacted_documents = await self._dependent_graph_documents(
                     session,
-                    old_ids,
+                    removed_ids,
                     exclude_document_id=document_id,
                 )
-                if old_ids:
+                if removed_ids:
                     await session.execute(
                         delete(MemoryUnit).where(
                             MemoryUnit.memory_type == "observation",
                             self._memory_scope(),
-                            MemoryUnit.source_memory_ids.overlap(old_ids),
+                            MemoryUnit.source_memory_ids.overlap(removed_ids),
                         )
                     )
                 await session.execute(
                     delete(MemoryUnit).where(
-                        MemoryUnit.document_id == document_id, self._memory_scope()
+                        MemoryUnit.document_id == document_id,
+                        self._memory_scope(),
+                        MemoryUnit.id.in_(removed_ids),
                     )
                 )
                 await self._insert_memories(
-                    session, plan, scope_tags=getattr(document, "tags", None) or []
+                    session,
+                    plan,
+                    scope_tags=getattr(document, "tags", None) or [],
+                    retained_ids=retained_ids,
                 )
                 await self._insert_links(session, plan)
                 await session.execute(
@@ -394,6 +455,7 @@ class PostgresMemoryRepository:
                         stage_results=dict(plan.stage_results),
                         source_context=dict(plan.source_context),
                         extraction_cache=dict(plan.extraction_cache),
+                        content_snapshot=dict(plan.content_snapshot),
                         status="degraded"
                         if plan.extraction_status == "degraded"
                         else "indexed",
@@ -409,6 +471,7 @@ class PostgresMemoryRepository:
                             "stage_results": dict(plan.stage_results),
                             "source_context": dict(plan.source_context),
                             "extraction_cache": dict(plan.extraction_cache),
+                            "content_snapshot": dict(plan.content_snapshot),
                             "status": "degraded"
                             if plan.extraction_status == "degraded"
                             else "indexed",
@@ -671,7 +734,7 @@ class PostgresMemoryRepository:
         return self._graph_projection(document, memories, mention_rows, links)
 
     async def _insert_memories(
-        self, session: AsyncSession, plan: RetainPlan, *, scope_tags=()
+        self, session: AsyncSession, plan: RetainPlan, *, scope_tags=(), retained_ids=()
     ) -> None:
         for draft in plan.memories:
             row = MemoryUnit(
@@ -700,6 +763,30 @@ class PostgresMemoryRepository:
                     "entity_mentions": list(draft.entities),
                 },
             )
+            if row.id in retained_ids:
+                existing = await session.get(MemoryUnit, row.id)
+                preserved = dict(existing.metadata_json or {})
+                # A stable fact keeps its manually corrected ownership and source
+                # timestamp. Updating its position must not cascade external links.
+                for key in (
+                    "entity_correction_id",
+                    "resolved_entities",
+                    "entity_mentions",
+                ):
+                    if key in preserved:
+                        row.metadata_json[key] = preserved[key]
+                for attribute in (
+                    "chunk_index",
+                    "memory_index",
+                    "context",
+                    "embedding",
+                    "confidence",
+                    "tags",
+                    "scope_tags",
+                    "metadata_json",
+                ):
+                    setattr(existing, attribute, getattr(row, attribute))
+                continue
             session.add(row)
             for entity_name in draft.entities:
                 normalized = normalize_entity(entity_name)
@@ -953,6 +1040,21 @@ class PostgresMemoryRepository:
             target_id = uuid.UUID(link.target_memory_id)
             if source_id not in valid_ids or target_id not in valid_ids:
                 continue
+            if link.link_type == "entity":
+                shared = await session.scalar(
+                    select(MemoryUnitEntity.entity_id)
+                    .where(
+                        MemoryUnitEntity.memory_id == source_id,
+                        MemoryUnitEntity.entity_id.in_(
+                            select(MemoryUnitEntity.entity_id)
+                            .where(MemoryUnitEntity.memory_id == target_id)
+                            .correlate(None)
+                        ),
+                    )
+                    .limit(1)
+                )
+                if shared is None:
+                    continue
             await session.execute(
                 insert(MemoryLink)
                 .values(

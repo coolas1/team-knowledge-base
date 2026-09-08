@@ -27,10 +27,28 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
             )
         ''')
         )
+        memory_table = f'"{schema}"."memory_units"'
+        immediate = await conn.scalar(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass(:table) AND conname='uq_memory_source_index' AND NOT condeferrable)"
+            ),
+            {"table": memory_table},
+        )
+        if immediate:
+            await conn.execute(
+                text(
+                    f"ALTER TABLE {memory_table} DROP CONSTRAINT uq_memory_source_index, ADD CONSTRAINT uq_memory_source_index UNIQUE(document_id, chunk_index, memory_index) DEFERRABLE INITIALLY DEFERRED"
+                )
+            )
         if (
             await conn.scalar(text("SELECT to_regclass(:name)"), {"name": state_table})
             is not None
         ):
+            await conn.execute(
+                text(
+                    f"ALTER TABLE {state_table} ADD COLUMN IF NOT EXISTS content_snapshot JSONB NOT NULL DEFAULT '{{}}'::jsonb"
+                )
+            )
             await conn.execute(
                 text(
                     f"ALTER TABLE {state_table} ADD COLUMN IF NOT EXISTS extraction_cache JSONB NOT NULL DEFAULT '{{}}'::jsonb"
