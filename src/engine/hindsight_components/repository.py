@@ -729,6 +729,15 @@ class PostgresMemoryRepository:
     async def purge_orphaned_observations(self) -> int:
         """Physically remove stale observations after all evidence is deleted."""
         async with self._session_factory() as session, session.begin():
+            await session.execute(
+                delete(ObservationEvidence).where(
+                    ObservationEvidence.bank_id == self.scope.bank_id,
+                    ObservationEvidence.active.is_(False),
+                    ~select(MemoryUnit.id)
+                    .where(MemoryUnit.id == ObservationEvidence.fact_id)
+                    .exists(),
+                )
+            )
             orphaned = list(
                 await session.scalars(
                     select(ObservationRecord.memory_id)
