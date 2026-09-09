@@ -5,6 +5,7 @@ import pytest
 from src.engine.hindsight_components.mental_models import (
     MentalModelClaim,
     MentalModelDefinition,
+    MentalModelRefreshOptions,
     MentalModelRefreshWorker,
     apply_delta,
 )
@@ -99,3 +100,58 @@ async def test_invalid_delta_falls_back_to_full_refresh():
     assert repository.published["source_versions"] == {
         "00000000-0000-0000-0000-000000000001": 3
     }
+
+
+@pytest.mark.asyncio
+async def test_refresh_can_use_adaptive_reasoner_with_valid_sources():
+    claim = MentalModelClaim(
+        bank_id="bank",
+        model_id="project",
+        lease_token="lease",
+        requested_watermark=4,
+        base_version=1,
+        name="Project",
+        source_query="Status?",
+        tags=(),
+        refresh_mode="full",
+        current_summary="Old",
+    )
+
+    class Repository:
+        async def claim(self, _options):
+            return claim
+
+        async def publish(self, _claim, **kwargs):
+            return kwargs
+
+        async def fail(self, _claim, error):
+            raise error
+
+    item = SimpleNamespace(
+        id="00000000-0000-0000-0000-000000000001",
+        text="Current evidence",
+        memory_type="world",
+        metadata={"memory_version": 3},
+    )
+
+    class Core:
+        async def recall(self, *_args, **_kwargs):
+            return SimpleNamespace(results=[item])
+
+        async def reflect(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                text="Adaptive model",
+                actual_citations=[{"type": "memory", "id": item.id}],
+            )
+
+    worker = MentalModelRefreshWorker(
+        Repository(),
+        lambda _scope: Core(),
+        SimpleNamespace(),
+        MentalModelRefreshOptions(use_adaptive_reflect=True),
+        reflect_factory=lambda _scope: Core(),
+    )
+
+    result = await worker.run_once()
+    assert result["mode"] == "adaptive"
+    assert result["summary"] == "Adaptive model"

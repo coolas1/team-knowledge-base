@@ -136,6 +136,7 @@ async def startup() -> None:
             output_cost_usd_per_million=(
                 cfg.engine.memory.mental_model_output_cost_usd_per_million
             ),
+            use_adaptive_reflect=cfg.engine.memory.mental_model_use_adaptive_reflect,
         )
         await _mental_model_worker.start()
 

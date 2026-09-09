@@ -86,6 +86,7 @@ class MentalModelRefreshOptions:
     max_attempts: int = 5
     input_cost_usd_per_million: float = 0
     output_cost_usd_per_million: float = 0
+    use_adaptive_reflect: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -545,11 +546,19 @@ class PostgresMentalModelRepository:
 
 
 class MentalModelRefreshWorker:
-    def __init__(self, repository, recall_factory, providers, options=None):
+    def __init__(
+        self,
+        repository,
+        recall_factory,
+        providers,
+        options=None,
+        reflect_factory=None,
+    ):
         self.repository = repository
         self.recall_factory = recall_factory
         self.providers = providers
         self.options = options or MentalModelRefreshOptions()
+        self.reflect_factory = reflect_factory
 
     async def run_once(self) -> MentalModelView | None:
         claim = await self.repository.claim(self.options)
@@ -584,7 +593,34 @@ class MentalModelRefreshWorker:
             mode = "full"
             payload = None
             usage = {}
-            if claim.refresh_mode == "delta" and claim.base_version > 0:
+            if self.options.use_adaptive_reflect and self.reflect_factory is not None:
+                reflected = await self.reflect_factory(scope).reflect(
+                    claim.source_query,
+                    mode="deep",
+                    top_k=self.options.recall_results,
+                    filters=RecallFilter(
+                        include=("source_facts",),
+                        max_tokens=self.options.max_evidence_tokens,
+                    ),
+                )
+                if not reflected.actual_citations:
+                    raise RuntimeError("adaptive refresh returned no valid citations")
+                cited = {
+                    item["id"]
+                    for item in reflected.actual_citations
+                    if item.get("type") == "memory"
+                }
+                source_versions = {
+                    identity: version
+                    for identity, version in source_versions.items()
+                    if identity in cited
+                }
+                if not source_versions:
+                    raise RuntimeError("adaptive refresh cited no current facts")
+                summary = reflected.text
+                mode = "adaptive"
+                payload = {"summary": summary}
+            elif claim.refresh_mode == "delta" and claim.base_version > 0:
                 try:
                     payload, usage = await self._json(
                         "Update the existing model with a minimal structured delta. "

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class HindsightOptions:
+    adaptive_reflect_enabled: bool = False
     consolidation_enabled: bool = False
     entity_resolution_enabled: bool = False
     entity_candidate_limit: int = 10
@@ -40,6 +41,9 @@ class HindsightOptions:
     rerank_semantic_margin: float = 0.25
     reflect_subquery_limit: int = 3
     reflect_model_limit: int = 5
+    reflect_max_iterations: int = 8
+    reflect_max_tokens: int = 8192
+    reflect_total_timeout_seconds: float = 60
 
     def __post_init__(self) -> None:
         if self.entity_candidate_limit > 100:
@@ -59,6 +63,9 @@ class HindsightOptions:
             "recall_max_results": self.recall_max_results,
             "recall_max_candidates": self.recall_max_candidates,
             "recall_max_tokens": self.recall_max_tokens,
+            "reflect_max_iterations": self.reflect_max_iterations,
+            "reflect_max_tokens": self.reflect_max_tokens,
+            "reflect_total_timeout_seconds": self.reflect_total_timeout_seconds,
         }
         invalid = [name for name, value in positive.items() if value <= 0]
         if invalid:

@@ -364,6 +364,7 @@ class ReflectResult:
     text: str
     based_on: dict[str, list[dict[str, Any]]]
     tool_trace: list[dict[str, Any]]
+    actual_citations: list[dict[str, str]] = field(default_factory=list)
 
 
 class RetentionLeaseLost(RuntimeError):

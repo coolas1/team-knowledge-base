@@ -39,6 +39,10 @@ class MemoryCfg(BaseModel):
     mental_model_max_attempts: int = Field(default=5, ge=1, le=100)
     mental_model_input_cost_usd_per_million: float = Field(default=0, ge=0)
     mental_model_output_cost_usd_per_million: float = Field(default=0, ge=0)
+    mental_model_use_adaptive_reflect: bool = False
+    reflect_max_iterations: int = Field(default=8, ge=1, le=100)
+    reflect_max_tokens: int = Field(default=8192, ge=1)
+    reflect_total_timeout_seconds: float = Field(default=60, gt=0, le=3600)
     features: MemoryFeatures = Field(default_factory=MemoryFeatures)
 
     @model_validator(mode="after")

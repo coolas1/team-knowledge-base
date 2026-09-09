@@ -1,0 +1,65 @@
+{
+  "batch": "B6",
+  "repetitions": 25,
+  "semantic_contract_accuracy": 1.0,
+  "failed_cases": [],
+  "latency_ms": {
+    "p50": 0.05720000081055332,
+    "p95": 0.07969999933266081
+  },
+  "mean_tool_calls": 3,
+  "results": [
+    {
+      "id": "parity-041",
+      "passed": true,
+      "tool_calls": 3,
+      "actual_citations": 1,
+      "elapsed_ms": 0.2103000006172806,
+      "tool_sequence": [
+        "recall",
+        "recall",
+        "done",
+        "budget"
+      ]
+    },
+    {
+      "id": "parity-042",
+      "passed": true,
+      "tool_calls": 3,
+      "actual_citations": 1,
+      "elapsed_ms": 0.09240000144927762,
+      "tool_sequence": [
+        "search_mental_models",
+        "recall",
+        "done",
+        "budget"
+      ]
+    },
+    {
+      "id": "parity-043",
+      "passed": true,
+      "tool_calls": 3,
+      "actual_citations": 1,
+      "elapsed_ms": 0.18069999896397348,
+      "tool_sequence": [
+        "recall",
+        "done",
+        "done",
+        "budget"
+      ]
+    },
+    {
+      "id": "parity-044",
+      "passed": true,
+      "tool_calls": 3,
+      "actual_citations": 0,
+      "elapsed_ms": 0.07300000106624793,
+      "tool_sequence": [
+        "recall",
+        "recall",
+        "recall",
+        "budget"
+      ]
+    }
+  ]
+}

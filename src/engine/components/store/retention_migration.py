@@ -23,6 +23,7 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
             FactTombstone,
             MentalModelRefreshJob,
             MentalModelVersion,
+            MemoryDirective,
             ObservationEvidence,
             ObservationHistory,
             ObservationRecord,
@@ -37,6 +38,7 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
             ConsolidationJob,
             MentalModelVersion,
             MentalModelRefreshJob,
+            MemoryDirective,
         ):
             await conn.run_sync(
                 lambda sync_conn, table=model.__table__: table.create(
@@ -82,6 +84,19 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
                     "freshness=CASE WHEN summary='' THEN 'empty' ELSE 'active' END, "
                     "last_success_at=CASE WHEN summary='' THEN NULL ELSE updated_at END "
                     "WHERE source_query=''"
+                )
+            )
+            await conn.execute(
+                text(
+                    f'''INSERT INTO "{schema}"."memory_directives"
+                    (id, bank_id, name, content, trigger, priority, is_active, tags,
+                     created_at, updated_at)
+                    SELECT id, bank_id, name,
+                           CASE WHEN summary='' THEN description ELSE summary END,
+                           trigger, 0, true, tags, created_at, updated_at
+                    FROM {mental_table}
+                    WHERE is_directive=true
+                    ON CONFLICT (id, bank_id) DO NOTHING'''
                 )
             )
         await conn.execute(

@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from src.engine.interface import (
+    DirectiveDefinition as PublicDirectiveDefinition,
+    DirectiveRecord,
     KnowledgeQueryRequest,
     KnowledgeQueryResult,
     KnowledgeSource,
@@ -15,6 +17,7 @@ from src.engine.interface import (
     MentalModelDefinition as PublicMentalModelDefinition,
     MentalModelRecord,
 )
+from src.engine.hindsight_components.directives import DirectiveDefinition
 from src.engine.hindsight_components.mental_models import MentalModelDefinition
 
 from src.engine.hindsight_components.config import HindsightOptions
@@ -98,6 +101,45 @@ class HindsightQueryService:
 
     async def refresh_mental_model(self, model_id: str) -> bool:
         return await self._core.refresh_mental_model(model_id)
+
+    @staticmethod
+    def _directive_definition(value: PublicDirectiveDefinition) -> DirectiveDefinition:
+        return DirectiveDefinition(
+            **{
+                field: getattr(value, field)
+                for field in DirectiveDefinition.__dataclass_fields__
+            }
+        )
+
+    @staticmethod
+    def _directive_record(value) -> DirectiveRecord:
+        return DirectiveRecord(
+            **{
+                field: getattr(value, field)
+                for field in DirectiveRecord.__dataclass_fields__
+            }
+        )
+
+    async def create_directive(self, definition):
+        value = await self._core.create_directive(
+            self._directive_definition(definition)
+        )
+        return self._directive_record(value)
+
+    async def list_directives(self):
+        return [
+            self._directive_record(value)
+            for value in await self._core.list_directives()
+        ]
+
+    async def update_directive(self, directive_id: str, definition):
+        value = await self._core.update_directive(
+            directive_id, self._directive_definition(definition)
+        )
+        return self._directive_record(value)
+
+    async def delete_directive(self, directive_id: str) -> bool:
+        return await self._core.delete_directive(directive_id)
 
     async def expand_memory(
         self, request: MemoryExpansionRequest
@@ -263,12 +305,27 @@ class HindsightQueryService:
     def _sources_from_reflection(reflected: ReflectResult) -> list[KnowledgeSource]:
         sources: list[KnowledgeSource] = []
         seen: set[str] = set()
+        actual_ids = {
+            str(item["id"])
+            for item in reflected.actual_citations
+            if item.get("type") == "memory" and item.get("id")
+        }
+        validated_citations = "actual_citations" in reflected.based_on
         for memory_type, items in reflected.based_on.items():
-            if memory_type in {"directives", "mental_models"}:
+            if memory_type in {
+                "directives",
+                "mental_models",
+                "retrieved_mental_models",
+                "actual_citations",
+            }:
                 continue
             for item in items:
                 memory_id = str(item.get("id", ""))
-                if not memory_id or memory_id in seen:
+                if (
+                    not memory_id
+                    or memory_id in seen
+                    or (validated_citations and memory_id not in actual_ids)
+                ):
                     continue
                 seen.add(memory_id)
                 metadata = item.get("metadata", {})
@@ -310,9 +367,13 @@ def build_query_service(
         os.getenv("APP_CONFIG", "config/app.yaml")
     ).engine.memory
     options = HindsightOptions(
+        adaptive_reflect_enabled=memory_config.features.adaptive_reflect,
         recall_max_results=memory_config.recall_max_results,
         recall_max_candidates=memory_config.recall_max_candidates,
         recall_max_tokens=memory_config.recall_max_tokens,
+        reflect_max_iterations=memory_config.reflect_max_iterations,
+        reflect_max_tokens=memory_config.reflect_max_tokens,
+        reflect_total_timeout_seconds=memory_config.reflect_total_timeout_seconds,
         recall_min_semantic=settings.hindsight_recall_min_semantic,
         recall_min_score=settings.hindsight_recall_min_score,
         rerank_semantic_margin=settings.hindsight_rerank_semantic_margin,

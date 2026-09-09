@@ -195,6 +195,28 @@ class MentalModelRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class DirectiveDefinition:
+    id: str
+    name: str
+    content: str
+    trigger: str | None = None
+    priority: int = 0
+    is_active: bool = True
+    tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DirectiveRecord:
+    id: str
+    name: str
+    content: str
+    trigger: str | None
+    priority: int
+    is_active: bool
+    tags: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ConversationMemoryRecallRequest:
     query: str
     top_k: int = 5
@@ -352,6 +374,18 @@ class KnowledgeQuery(Protocol):
     async def delete_mental_model(self, model_id: str) -> bool: ...
 
     async def refresh_mental_model(self, model_id: str) -> bool: ...
+
+    async def create_directive(
+        self, definition: DirectiveDefinition
+    ) -> DirectiveRecord: ...
+
+    async def list_directives(self) -> list[DirectiveRecord]: ...
+
+    async def update_directive(
+        self, directive_id: str, definition: DirectiveDefinition
+    ) -> DirectiveRecord: ...
+
+    async def delete_directive(self, directive_id: str) -> bool: ...
 
 
 class ConversationMemory(Protocol):

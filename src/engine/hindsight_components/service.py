@@ -27,6 +27,7 @@ class HindsightService:
         providers: HindsightProviders,
         options: HindsightOptions | None = None,
         mental_models=None,
+        directives=None,
     ) -> None:
         if options is None:
             import os
@@ -38,13 +39,13 @@ class HindsightService:
             options = HindsightOptions(
                 entity_resolution_enabled=features.entity_resolution,
                 consolidation_enabled=features.consolidation,
+                adaptive_reflect_enabled=features.adaptive_reflect,
             )
         self.options = options
         self._repository = repository
         self._providers = providers
         self._retain = RetainEngine(repository, providers, self.options)
         self._recall = RecallEngine(repository, providers, self.options)
-        self._reflect = ReflectEngine(self._recall, repository, providers, self.options)
         if mental_models is None:
             from .mental_models import PostgresMentalModelRepository
 
@@ -53,6 +54,17 @@ class HindsightService:
                 scope=getattr(repository, "scope", None),
             )
         self._mental_models = mental_models
+        if directives is None:
+            from .directives import PostgresDirectiveRepository
+
+            directives = PostgresDirectiveRepository(
+                getattr(repository, "_session_factory", None),
+                scope=getattr(repository, "scope", None),
+            )
+        self._directives = directives
+        self._reflect = ReflectEngine(
+            self._recall, repository, providers, self.options, directives
+        )
 
     def with_scope(self, scope):
         return HindsightService(
@@ -60,6 +72,7 @@ class HindsightService:
             self._providers,
             self.options,
             mental_models=self._mental_models.with_scope(scope),
+            directives=self._directives.with_scope(scope),
         )
 
     def with_lease(self, document_id: str, lease_token: str):
@@ -68,6 +81,7 @@ class HindsightService:
             self._providers,
             self.options,
             mental_models=self._mental_models,
+            directives=self._directives,
         )
 
     async def create_mental_model(self, definition):
@@ -87,6 +101,18 @@ class HindsightService:
 
     async def refresh_mental_model(self, model_id: str) -> bool:
         return await self._mental_models.enqueue(model_id)
+
+    async def create_directive(self, definition):
+        return await self._directives.create(definition)
+
+    async def list_directives(self):
+        return await self._directives.list()
+
+    async def update_directive(self, directive_id: str, definition):
+        return await self._directives.update(directive_id, definition)
+
+    async def delete_directive(self, directive_id: str) -> bool:
+        return await self._directives.delete(directive_id)
 
     async def retain(
         self,

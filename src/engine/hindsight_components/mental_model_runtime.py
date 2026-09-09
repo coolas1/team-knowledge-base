@@ -77,10 +77,12 @@ def build_mental_model_worker_runtime(
     max_attempts: int = 5,
     input_cost_usd_per_million: float = 0,
     output_cost_usd_per_million: float = 0,
+    use_adaptive_reflect: bool = False,
 ) -> MentalModelWorkerRuntime:
     repository = PostgresMentalModelRepository()
     providers = ProjectHindsightProviders()
     recall_options = HindsightOptions(
+        adaptive_reflect_enabled=use_adaptive_reflect,
         recall_max_results=max(recall_results, 1),
         recall_max_candidates=max(recall_results * 4, recall_results),
         recall_max_tokens=max_evidence_tokens,
@@ -103,7 +105,9 @@ def build_mental_model_worker_runtime(
             max_attempts=max_attempts,
             input_cost_usd_per_million=input_cost_usd_per_million,
             output_cost_usd_per_million=output_cost_usd_per_million,
+            use_adaptive_reflect=use_adaptive_reflect,
         ),
+        reflect_factory=recall_factory,
     )
     return MentalModelWorkerRuntime(
         repository, worker, poll_seconds=poll_seconds, max_concurrent=max_concurrent

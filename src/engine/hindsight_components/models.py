@@ -333,6 +333,40 @@ class MentalModelRefreshJob(BankOwned, Base):
     )
 
 
+class MemoryDirective(BankOwned, Base):
+    __tablename__ = "memory_directives"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    bank_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, default="default-team", server_default="default-team"
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger: Mapped[str | None] = mapped_column(Text)
+    priority: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    tags: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+        onupdate=_utcnow,
+    )
+
+
 class MemoryProfile(BankOwned, Base):
     __tablename__ = "memory_profiles"
 

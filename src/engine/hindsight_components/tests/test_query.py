@@ -163,6 +163,18 @@ async def test_query_validates_input() -> None:
         await service.query(KnowledgeQueryRequest(query="q", top_k=0))
 
 
+def test_adaptive_reflection_exposes_only_actual_citations() -> None:
+    item = candidate("retrieved", "retrieved but unused")
+    reflected = ReflectResult(
+        text="insufficient",
+        based_on={"world": [item.as_evidence()], "actual_citations": []},
+        tool_trace=[],
+        actual_citations=[],
+    )
+
+    assert HindsightQueryService._sources_from_reflection(reflected) == []
+
+
 async def test_build_query_service_accepts_repository(monkeypatch):
     """build_query_service should accept an optional repository parameter."""
     from src.engine.hindsight_components.query import build_query_service
