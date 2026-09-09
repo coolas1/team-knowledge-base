@@ -101,9 +101,8 @@ async def startup() -> None:
             observation_limit=cfg.engine.memory.consolidation_observation_limit,
             max_iterations=cfg.engine.memory.consolidation_max_iterations,
             max_tokens=cfg.engine.memory.consolidation_max_tokens,
-            llm_timeout_seconds=(
-                cfg.engine.memory.consolidation_llm_timeout_seconds
-            ),
+            llm_timeout_seconds=(cfg.engine.memory.consolidation_llm_timeout_seconds),
+            lease_seconds=cfg.engine.memory.consolidation_lease_seconds,
             max_output_tokens=cfg.engine.memory.consolidation_max_output_tokens,
             max_cost_usd=cfg.engine.memory.consolidation_max_cost_usd,
             input_cost_usd_per_million=(

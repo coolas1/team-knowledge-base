@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Text, bindparam, delete, func, or_, select, text
+from sqlalchemy import Text, bindparam, case, delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1122,6 +1122,11 @@ class PostgresMemoryRepository:
 
             if pending_through is None:
                 continue
+            active_lease = (
+                (ConsolidationJob.status == "processing")
+                & ConsolidationJob.lease_expires_at.is_not(None)
+                & (ConsolidationJob.lease_expires_at > func.clock_timestamp())
+            )
             await session.execute(
                 insert(ConsolidationJob)
                 .values(
@@ -1143,17 +1148,40 @@ class PostgresMemoryRepository:
                         "pending_through": func.greatest(
                             ConsolidationJob.pending_through, pending_through
                         ),
-                        "status": "pending",
-                        "attempts": 0,
-                        "iterations": 0,
-                        "tokens_used": 0,
-                        "cost_microusd": 0,
-                        "available_at": func.now(),
-                        "error_msg": None,
-                        "lease_token": None,
-                        "lease_expires_at": None,
+                        "status": case(
+                            (active_lease, ConsolidationJob.status), else_="pending"
+                        ),
+                        "attempts": case(
+                            (active_lease, ConsolidationJob.attempts), else_=0
+                        ),
+                        "iterations": case(
+                            (active_lease, ConsolidationJob.iterations), else_=0
+                        ),
+                        "tokens_used": case(
+                            (active_lease, ConsolidationJob.tokens_used), else_=0
+                        ),
+                        "cost_microusd": case(
+                            (active_lease, ConsolidationJob.cost_microusd), else_=0
+                        ),
+                        "available_at": case(
+                            (active_lease, ConsolidationJob.available_at),
+                            else_=func.now(),
+                        ),
+                        "error_msg": case(
+                            (active_lease, ConsolidationJob.error_msg), else_=None
+                        ),
+                        "lease_token": case(
+                            (active_lease, ConsolidationJob.lease_token), else_=None
+                        ),
+                        "lease_expires_at": case(
+                            (active_lease, ConsolidationJob.lease_expires_at),
+                            else_=None,
+                        ),
                         "updated_at": func.now(),
-                        "operation_id": operation_id or ConsolidationJob.operation_id,
+                        "operation_id": case(
+                            (active_lease, ConsolidationJob.operation_id),
+                            else_=operation_id or ConsolidationJob.operation_id,
+                        ),
                     },
                 )
             )

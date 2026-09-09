@@ -42,7 +42,7 @@ class ConsolidationOptions:
     observation_limit: int = 1000
     max_iterations: int = 8
     max_tokens: int = 32000
-    llm_timeout_seconds: float = 180
+    llm_timeout_seconds: float = 300
     max_output_tokens: int = 65536
     max_cost_microusd: int = 0
     input_cost_usd_per_million: float = 0
@@ -50,7 +50,7 @@ class ConsolidationOptions:
     semantic_dedup_enabled: bool = True
     semantic_threshold: float = 0.9
     candidate_limit: int = 40
-    lease_seconds: int = 300
+    lease_seconds: int = 720
     max_attempts: int = 10
 
     def __post_init__(self) -> None:
@@ -185,6 +185,7 @@ class PostgresConsolidationRepository:
                 token = uuid.uuid4()
                 job.status = "processing"
                 job.attempts += 1
+                job.error_msg = None
                 job.lease_token = token
                 job.lease_expires_at = now + timedelta(seconds=options.lease_seconds)
                 return ConsolidationClaim(
@@ -917,8 +918,7 @@ class ConsolidationWorker:
                         or 0
                     )
                     cost_microusd += round(
-                        repair_prompt_tokens
-                        * self.options.input_cost_usd_per_million
+                        repair_prompt_tokens * self.options.input_cost_usd_per_million
                         + repair_completion_tokens
                         * self.options.output_cost_usd_per_million
                     )
@@ -970,10 +970,7 @@ class ConsolidationWorker:
             else []
         )
         vector_by_action = (
-            {
-                id(item): vector
-                for item, vector in zip(comparable, vectors, strict=True)
-            }
+            {id(item): vector for item, vector in zip(comparable, vectors, strict=True)}
             if candidates
             else {}
         )
