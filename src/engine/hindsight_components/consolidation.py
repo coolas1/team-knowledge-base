@@ -512,12 +512,15 @@ class PostgresConsolidationRepository:
     async def _create_observation(
         self, session, claim, read_set, action, embedding, watermark
     ):
+        normalized_text = exact_key(action.text)
         existing = await session.scalar(
             select(ObservationRecord)
             .where(
                 ObservationRecord.bank_id == claim.bank_id,
                 ObservationRecord.write_scope == list(claim.write_scope),
-                ObservationRecord.normalized_text == exact_key(action.text),
+                func.md5(ObservationRecord.normalized_text)
+                == func.md5(normalized_text),
+                ObservationRecord.normalized_text == normalized_text,
                 ObservationRecord.freshness != "tombstoned",
             )
             .with_for_update()

@@ -80,6 +80,15 @@ def test_memory_schema_compiles_for_postgresql_with_expected_vector_dimension() 
         "using gin"
         in str(CreateIndex(lexical_index).compile(dialect=postgresql.dialect())).lower()
     )
+    observation_index = next(
+        index
+        for index in ObservationRecord.__table__.indexes
+        if index.name == "idx_observation_exact"
+    )
+    observation_ddl = str(
+        CreateIndex(observation_index).compile(dialect=postgresql.dialect())
+    ).lower()
+    assert "(bank_id, md5(normalized_text))" in observation_ddl
 
 
 def test_all_hindsight_model_tables_are_distinct() -> None:

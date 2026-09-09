@@ -23,6 +23,7 @@ from sqlalchemy import (
     Integer,
     Text,
     UniqueConstraint,
+    func,
     text as sql_text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -460,7 +461,11 @@ class ObservationRecord(BankOwned, Base):
             name="ck_observation_freshness",
         ),
         Index("idx_observation_scope", "bank_id", "write_scope", "freshness"),
-        Index("idx_observation_exact", "bank_id", "normalized_text"),
+        Index(
+            "idx_observation_exact",
+            "bank_id",
+            func.md5(normalized_text),
+        ),
     )
 
 

@@ -161,6 +161,41 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
                     f"ALTER TABLE {memory_table} DROP CONSTRAINT uq_memory_source_index, ADD CONSTRAINT uq_memory_source_index UNIQUE(document_id, chunk_index, memory_index) DEFERRABLE INITIALLY DEFERRED"
                 )
             )
+        # A btree cannot store arbitrarily long observation text. Older
+        # deployments indexed the full value and fail while backfilling a long
+        # legacy observation. Replace that definition once with a compact hash;
+        # callers retain a full-text equality predicate to guard collisions.
+        observation_index = f'"{schema}"."idx_observation_exact"'
+        index_definition = await conn.scalar(
+            text("SELECT pg_get_indexdef(to_regclass(:name))"),
+            {"name": observation_index},
+        )
+        if index_definition and "md5(normalized_text)" not in index_definition.replace(
+            '"', ""
+        ):
+            await conn.execute(text(f"DROP INDEX {observation_index}"))
+        await conn.execute(
+            text(
+                f'CREATE INDEX IF NOT EXISTS "idx_observation_exact" '
+                f'ON "{schema}"."observation_records" '
+                "(bank_id, md5(normalized_text))"
+            )
+        )
+        state_exists = (
+            await conn.scalar(
+                text("SELECT to_regclass(:name)"), {"name": state_table}
+            )
+            is not None
+        )
+        if state_exists:
+            # The event backfill below reads revision, so this additive column
+            # must exist before the backfill runs on a pre-B2 deployment.
+            await conn.execute(
+                text(
+                    f"ALTER TABLE {state_table} ADD COLUMN IF NOT EXISTS "
+                    "revision INTEGER NOT NULL DEFAULT 0"
+                )
+            )
         # Legacy one-shot observations become version 1 heads with queryable
         # evidence. Existing atomic facts enter the default write-scope queue;
         # the unique event constraint makes an interrupted migration resumable.
@@ -233,10 +268,7 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
                     )
             ''')
         )
-        if (
-            await conn.scalar(text("SELECT to_regclass(:name)"), {"name": state_table})
-            is not None
-        ):
+        if state_exists:
             await conn.execute(
                 text(
                     f"ALTER TABLE {state_table} ADD COLUMN IF NOT EXISTS content_snapshot JSONB NOT NULL DEFAULT '{{}}'::jsonb"
@@ -245,11 +277,6 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
             await conn.execute(
                 text(
                     f"ALTER TABLE {state_table} ADD COLUMN IF NOT EXISTS extraction_cache JSONB NOT NULL DEFAULT '{{}}'::jsonb"
-                )
-            )
-            await conn.execute(
-                text(
-                    f"ALTER TABLE {state_table} ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0"
                 )
             )
             await conn.execute(
