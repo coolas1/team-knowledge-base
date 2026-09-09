@@ -169,11 +169,23 @@ def build_query_service(
 ) -> HindsightQueryService:
     from config.settings import settings
 
-    repository = repository or PostgresMemoryRepository()
+    repository = repository or PostgresMemoryRepository(
+        keyword_index_enabled=settings.hindsight_keyword_index_enabled,
+        keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
+    )
     options = HindsightOptions(
         recall_min_semantic=settings.hindsight_recall_min_semantic,
         recall_min_score=settings.hindsight_recall_min_score,
         rerank_semantic_margin=settings.hindsight_rerank_semantic_margin,
+        deep_total_timeout_seconds=settings.hindsight_deep_total_timeout_seconds,
+        query_analysis_timeout_seconds=settings.hindsight_query_analysis_timeout_seconds,
+        query_embedding_timeout_seconds=settings.hindsight_query_embedding_timeout_seconds,
+        retrieval_arm_timeout_seconds=settings.hindsight_retrieval_arm_timeout_seconds,
+        rerank_timeout_seconds=settings.hindsight_rerank_timeout_seconds,
+        rerank_candidate_limit=settings.hindsight_rerank_candidate_limit,
+        rerank_text_limit_chars=settings.hindsight_rerank_text_limit_chars,
+        rerank_total_chars=settings.hindsight_rerank_total_chars,
+        keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
     )
     core = HindsightService(repository, ProjectHindsightProviders(), options)
     return HindsightQueryService(core)

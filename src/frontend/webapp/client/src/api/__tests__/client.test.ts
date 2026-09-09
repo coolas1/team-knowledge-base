@@ -174,12 +174,14 @@ describe('api client', () => {
     const events: string[] = []
     const controller = new AbortController()
 
-    await api.streamAgentMessage('s1', 'hello', (event) => events.push(event.type), controller.signal)
+    await api.streamAgentMessage(
+      's1', 'hello', (event) => events.push(event.type), controller.signal, 'client-1',
+    )
 
     expect(events).toEqual(['assistant.delta', 'message.completed'])
     const [, init] = mockFetch.mock.calls[0]
     expect(init.signal).toBe(controller.signal)
-    expect(init.body).toBe(JSON.stringify({ message: 'hello' }))
+    expect(init.body).toBe(JSON.stringify({ message: 'hello', clientMessageId: 'client-1' }))
   })
 
   it('surfaces message.failed SSE events as errors', async () => {

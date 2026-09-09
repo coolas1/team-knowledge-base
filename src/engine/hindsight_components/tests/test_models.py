@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.schema import CreateTable
+from sqlalchemy.schema import CreateIndex, CreateTable
 
 from src.engine.components.store.models import Base, Document, EMBEDDING_DIM
 from src.engine.hindsight_components.models import (
@@ -58,6 +58,16 @@ def test_memory_schema_compiles_for_postgresql_with_expected_vector_dimension() 
     assert f"vector({EMBEDDING_DIM})" in ddl
     assert "on delete cascade" in ddl
     assert MemoryUnit.__table__.c.embedding.type.dim == EMBEDDING_DIM
+    assert "lexical_tokens" in MemoryUnit.__table__.c
+    lexical_index = next(
+        index
+        for index in MemoryUnit.__table__.indexes
+        if index.name == "idx_memory_units_lexical_tokens"
+    )
+    assert (
+        "using gin"
+        in str(CreateIndex(lexical_index).compile(dialect=postgresql.dialect())).lower()
+    )
 
 
 def test_all_hindsight_model_tables_are_distinct() -> None:

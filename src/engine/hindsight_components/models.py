@@ -48,6 +48,9 @@ class MemoryUnit(Base):
     memory_index: Mapped[int] = mapped_column(Integer, nullable=False)
     memory_type: Mapped[str] = mapped_column(Text, nullable=False, default="world")
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    lexical_tokens: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True, default=None
+    )
     source_text: Mapped[str] = mapped_column(Text, nullable=False)
     context: Mapped[str] = mapped_column(Text, nullable=False, default="")
     embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
@@ -82,6 +85,11 @@ class MemoryUnit(Base):
         Index("idx_memory_units_document", "document_id"),
         Index("idx_memory_units_type", "memory_type"),
         Index("idx_memory_units_state", "state"),
+        Index(
+            "idx_memory_units_lexical_tokens",
+            "lexical_tokens",
+            postgresql_using="gin",
+        ),
         Index("idx_memory_units_occurred_start", "occurred_start"),
         Index("idx_memory_units_occurred_end", "occurred_end"),
     )

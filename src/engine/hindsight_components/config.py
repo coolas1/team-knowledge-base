@@ -11,6 +11,15 @@ class HindsightOptions:
     recall_max_tokens: int = 4096
     retrieval_arm_minimum: int = 30
     rerank_limit: int = 40
+    deep_total_timeout_seconds: float = 45.0
+    query_analysis_timeout_seconds: float = 8.0
+    query_embedding_timeout_seconds: float = 10.0
+    retrieval_arm_timeout_seconds: float = 5.0
+    rerank_timeout_seconds: float = 12.0
+    rerank_candidate_limit: int = 40
+    rerank_text_limit_chars: int = 4_000
+    rerank_total_chars: int = 60_000
+    keyword_candidate_limit: int = 300
     rrf_k: int = 60
     semantic_link_threshold: float = 0.78
     semantic_neighbor_limit: int = 3
@@ -25,3 +34,21 @@ class HindsightOptions:
     rerank_semantic_margin: float = 0.25
     reflect_subquery_limit: int = 3
     reflect_model_limit: int = 5
+
+    def __post_init__(self) -> None:
+        positive = {
+            "deep_total_timeout_seconds": self.deep_total_timeout_seconds,
+            "query_analysis_timeout_seconds": self.query_analysis_timeout_seconds,
+            "query_embedding_timeout_seconds": self.query_embedding_timeout_seconds,
+            "retrieval_arm_timeout_seconds": self.retrieval_arm_timeout_seconds,
+            "rerank_timeout_seconds": self.rerank_timeout_seconds,
+            "rerank_candidate_limit": self.rerank_candidate_limit,
+            "rerank_text_limit_chars": self.rerank_text_limit_chars,
+            "rerank_total_chars": self.rerank_total_chars,
+            "keyword_candidate_limit": self.keyword_candidate_limit,
+        }
+        invalid = [name for name, value in positive.items() if value <= 0]
+        if invalid:
+            raise ValueError(
+                f"Hindsight timeout and bound settings must be positive: {', '.join(invalid)}"
+            )

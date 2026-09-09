@@ -1,9 +1,11 @@
 import asyncio
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from config.settings import InfraSettings
 from src.engine.config import EngineConfig
 from src.engine.graphrag import backend as backend_mod
 from src.engine.interface import DocumentRef, IngestSource
@@ -287,6 +289,31 @@ async def test_reingest_schedules_the_available_retry_path(
         assert calls == [
             ("extract", document_id, source_path, "week.md", "markdown")
         ]
+
+
+def test_upload_dir_follows_uploads_dir_setting(monkeypatch, tmp_path):
+    # UPLOAD_DIR is settings-driven: an absolute UPLOADS_DIR is honored, and
+    # without it the module keeps the relative default. Both modules are
+    # reloaded (and restored) because the binding happens at import time.
+    import importlib
+
+    import config.settings as settings_mod
+
+    monkeypatch.delenv("UPLOADS_DIR", raising=False)
+    assert backend_mod.UPLOAD_DIR == Path(
+        InfraSettings(_env_file=None).uploads_dir
+    )
+    assert backend_mod.UPLOAD_DIR == Path("uploads")
+
+    monkeypatch.setenv("UPLOADS_DIR", str(tmp_path / "uploads"))
+    try:
+        importlib.reload(settings_mod)
+        importlib.reload(backend_mod)
+        assert backend_mod.UPLOAD_DIR == tmp_path / "uploads"
+    finally:
+        monkeypatch.delenv("UPLOADS_DIR", raising=False)
+        importlib.reload(settings_mod)
+        importlib.reload(backend_mod)
 
 
 def test_remove_upload_directory_only_deletes_uuid_scope(tmp_path):

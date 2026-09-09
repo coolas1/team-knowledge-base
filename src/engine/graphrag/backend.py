@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload  # noqa: F401  (kept for parity with original)
 
+from config.settings import settings
 from src.engine.components.analyzer import Analyzer
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import ExtractorRegistry, registry
@@ -47,7 +48,9 @@ from src.engine.interface import (
 from src.engine.hindsight_components.enrich import MemoryStateEnricher
 from src.engine.hindsight_components.hook import build_retain_hook
 
-UPLOAD_DIR = Path("uploads")
+# Uploaded document originals; settings-driven (UPLOADS_DIR) so the compose
+# deployment can point at its named volume while the default stays relative.
+UPLOAD_DIR = Path(settings.uploads_dir)
 
 logger = logging.getLogger(__name__)
 

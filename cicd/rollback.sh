@@ -2,7 +2,7 @@
 # Rollback the LAN deployment to a previously deployed commit SHA.
 #
 # Usage: rollback.sh <sha>          (full or short SHA, as recorded in
-#                                    /var/tmp/team-kb-cicd/deployed-shas)
+#                                    <repo>/.deploy/deployed-shas)
 #
 # Retags the SHA-tagged images (kept from every pipeline build) as :latest,
 # checks the disposable clone out at that SHA so the compose file matches the
@@ -14,7 +14,12 @@
 # Rollback is manual by design (v1): the pipeline never rolls back on its own.
 set -Eeuo pipefail
 
-TKB_CICD_HOME="${TKB_CICD_HOME:-/var/tmp/team-kb-cicd}"
+# Derive the stable dir from this script's location (clone layout
+# <home>/repo/cicd/rollback.sh); TKB_CICD_HOME overrides for sandbox use.
+# Exported for the snapshot re-exec below, same as pipeline.sh.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TKB_CICD_HOME="${TKB_CICD_HOME:-$(cd "$script_dir/../.." && pwd)}"
+export TKB_CICD_HOME
 TKB_CICD_VENV="${TKB_CICD_VENV:-/var/tmp/tkb-venvs/cicd}"
 TKB_NODE22_BIN="${TKB_NODE22_BIN:-/var/tmp/node22/bin}"
 TKB_HEALTH_TIMEOUT="${TKB_HEALTH_TIMEOUT:-180}"

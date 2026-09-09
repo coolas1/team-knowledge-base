@@ -1,0 +1,25 @@
+FROM node:24-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7 AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY tsconfig*.json ./
+COPY src ./src
+RUN npm run build
+
+FROM node:24-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7 AS job
+WORKDIR /opt/job
+COPY package*.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm audit --omit=dev --audit-level=high
+COPY job/entry.mjs ./entry.mjs
+RUN mkdir /work && chown node:node /work && ln -s /opt/job/node_modules /node_modules
+USER node
+WORKDIR /work
+ENTRYPOINT ["node", "/opt/job/entry.mjs"]
+
+FROM node:24-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7 AS gateway
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm audit --omit=dev --audit-level=high
+COPY --from=build /app/dist ./dist
+ENV RUNNER_HOST=0.0.0.0 RUNNER_PORT=8020
+CMD ["node", "dist/server.js"]

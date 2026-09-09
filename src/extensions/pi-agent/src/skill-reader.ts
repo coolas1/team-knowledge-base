@@ -42,11 +42,7 @@ export function buildSkillReadTool(skillsDir: string): ToolDefinition {
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: "text" as const, text: `Unable to read TKB skill: ${message}` }],
-          details: { path: params.path },
-          isError: true,
-        };
+        throw new Error(`Unable to read TKB skill: ${message}`);
       }
     },
   }) as ToolDefinition;

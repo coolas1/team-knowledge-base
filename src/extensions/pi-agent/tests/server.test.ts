@@ -40,7 +40,11 @@ function fakeRuntime(): AgentRuntimeApi {
     createSession: vi.fn(async () => session),
     listSessions: vi.fn(async () => [session]),
     getSession: vi.fn(async () => sessionDetail),
-    streamMessage: vi.fn(async (_id, _message, emit) => {
+    streamMessage: vi.fn(async (_id, _message, emit, clientMessageId) => {
+      await emit({
+        type: "message.accepted", sessionId: "s1", turnId: "t1", messageId: "u1",
+        clientMessageId: clientMessageId ?? "generated", status: "accepted",
+      });
       await emit({ type: "message.start", sessionId: "s1", name: "知识库文件数量" });
       await emit({ type: "assistant.delta", delta: "hello" });
       await emit({ type: "message.completed", sessionId: "s1", answer: "hello", toolCalls: 0 });
@@ -97,18 +101,86 @@ describe("Pi Agent HTTP service", () => {
     const response = await fetch(`${base}/v1/sessions/s1/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: "question" }),
+      body: JSON.stringify({ message: "question", clientMessageId: "client-1" }),
     });
     const body = await response.text();
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(body).toContain("event: assistant.delta");
+    expect(body).toContain("event: message.accepted");
     expect(body).toContain('"name":"知识库文件数量"');
     expect(body).toContain('"delta":"hello"');
     expect(runtime.streamMessage).toHaveBeenCalledWith(
       "s1",
       "question",
       expect.any(Function),
+      "client-1",
     );
+  });
+
+  it("keeps old message request bodies backward compatible", async () => {
+    const runtime = fakeRuntime();
+    const { base } = await listen(runtime);
+    const response = await fetch(`${base}/v1/sessions/s1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "legacy question" }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('"clientMessageId":"generated"');
+    expect(runtime.streamMessage).toHaveBeenCalledWith(
+      "s1", "legacy question", expect.any(Function), undefined,
+    );
+  });
+
+  it("cancels the runtime when an SSE client disconnects", async () => {
+    const runtime = fakeRuntime();
+    let finish!: () => void;
+    const stopped = new Promise<void>((resolve) => { finish = resolve; });
+    runtime.streamMessage = vi.fn(async (_id, _message, emit) => {
+      await emit({
+        type: "message.accepted", sessionId: "s1", turnId: "t1",
+        messageId: "u1", clientMessageId: "client-disconnect", status: "accepted",
+      });
+      await stopped;
+    });
+    runtime.cancel = vi.fn(async () => {
+      finish();
+      return true;
+    });
+    const { base } = await listen(runtime);
+    const controller = new AbortController();
+    const response = await fetch(`${base}/v1/sessions/s1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "disconnect", clientMessageId: "client-disconnect" }),
+      signal: controller.signal,
+    });
+    const reader = response.body!.getReader();
+    await reader.read();
+    controller.abort();
+    await reader.cancel().catch(() => undefined);
+    await vi.waitFor(() => expect(runtime.cancel).toHaveBeenCalledWith("s1"));
+  });
+
+  it("does not duplicate a structured terminal event", async () => {
+    const runtime = fakeRuntime();
+    runtime.streamMessage = vi.fn(async (_id, _message, emit) => {
+      await emit({
+        type: "message.failed", error: "agent run failed", code: "agent_failed",
+        sessionId: "s1", turnId: "t1", messageId: "u1",
+        clientMessageId: "client-1", status: "failed",
+      });
+      throw new Error("private provider error");
+    });
+    const { base } = await listen(runtime);
+    const response = await fetch(`${base}/v1/sessions/s1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "question", clientMessageId: "client-1" }),
+    });
+    const body = await response.text();
+    expect(body.match(/event: message\.failed/g)).toHaveLength(1);
+    expect(body).not.toContain("private provider error");
   });
 
   it("rejects an empty message before opening SSE", async () => {

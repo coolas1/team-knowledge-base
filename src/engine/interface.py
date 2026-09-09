@@ -97,6 +97,7 @@ class KnowledgeQueryRequest:
     mode: Literal["fast", "deep"] = "deep"
     top_k: int = 10
     needs_answer: bool = True
+    correlation_id: str | None = None
 
 
 @dataclass

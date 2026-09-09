@@ -66,6 +66,17 @@ def test_infra_settings_nests_submodels():
     assert isinstance(s.reranker, RerankerSettings)
 
 
+def test_infra_settings_uploads_dir_default_and_env_override(monkeypatch, tmp_path):
+    # Default keeps the relative dev-checkout behavior; UPLOADS_DIR points
+    # the compose deployment at its absolute volume mount.
+    monkeypatch.delenv("UPLOADS_DIR", raising=False)
+    assert InfraSettings(_env_file=None).uploads_dir == "uploads"
+
+    absolute = tmp_path / "uploads"
+    monkeypatch.setenv("UPLOADS_DIR", str(absolute))
+    assert InfraSettings(_env_file=None).uploads_dir == str(absolute)
+
+
 def test_submodels_are_mutable_for_monkeypatch():
     s = LLMSettings(_env_file=None)
     s.base_url = "http://x/v1"

@@ -4,7 +4,7 @@ Snapshot from the 2026-09-03 live run: native backend on `main` @ `4218e140`
 (BFF+engine+plugin in-process), Postgres+Neo4j via podman, pi-agent container,
 Ollama `nomic-embed-text` @10.201.186.15, LLM `deepseek-v4-flash`,
 reranker disabled (`none` — see R1). Corpus: `benchmark/raw/` (48 files);
-QA eval results in `team-knowledge-base-files/qa/RESULTS.md` (15/40, mean 0.93).
+QA eval results in `bench/qa/RESULTS.md` (15/40, mean 0.93).
 The unchecked items in `docs/upstream-pr-followups.md` are all still open;
 this file adds what the live run verified and what it newly surfaced.
 

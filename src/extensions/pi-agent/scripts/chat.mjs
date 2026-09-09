@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Terminal chat client for the TKB Pi Agent HTTP/SSE API (default :8010).
 //
 // Drives POST /v1/sessions then POST /v1/sessions/:id/messages, rendering the
