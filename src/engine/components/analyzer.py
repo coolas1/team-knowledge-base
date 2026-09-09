@@ -43,6 +43,7 @@ class FileRelation:
 @dataclass
 class ChunkAnalysisResult:
     """单个 chunk 的 LLM 分析结果。"""
+
     chunk_index: int
     entities: list[Entity] = field(default_factory=list)
     relations: list[Relation] = field(default_factory=list)
@@ -257,9 +258,7 @@ class Analyzer:
 
     # ── overview 级分析 ──────────────────────────────────────────
 
-    async def analyze_overview(
-        self, text: str, title: str
-    ) -> AnalysisResult:
+    async def analyze_overview(self, text: str, title: str) -> AnalysisResult:
         """文档级分析，仅提取 overview + file_relations。"""
         if not settings.llm.enabled:
             return AnalysisResult(
@@ -284,9 +283,7 @@ class Analyzer:
         过滤排版/标点/空白等非实质差异。
         """
         if not settings.llm.enabled:
-            return ChangeAnalysisResult(
-                summary=f"[待 LLM 生成] {title} 版本变更"
-            )
+            return ChangeAnalysisResult(summary=f"[待 LLM 生成] {title} 版本变更")
 
         prompt = self._build_changes_prompt(old_text, new_text, title)
         raw = await self._call_openai_compatible(prompt)
@@ -306,7 +303,7 @@ class Analyzer:
             )
 
         prompt = self._build_edit_proposal_prompt(text, edit_request, title)
-        raw = await self._call_openai_compatible(prompt)
+        raw = await self._call_openai_compatible(prompt, reject_truncated=True)
 
         return self._parse_edit_proposal_response(raw)
 
@@ -407,28 +404,9 @@ class Analyzer:
             summary=str(data.get("summary", "")), changes=changes
         )
 
-    async def _call_ollama(self, prompt: str) -> str:
-        """通过 Ollama /api/generate 调用。"""
-        # Ollama's native API lives at /api/* and must not inherit the
-        # OpenAI-compatible LLM_BASE_URL (which commonly ends in /v1).
-        base_url = settings.ollama_base_url.rstrip("/")
-        model = settings.llm_model or "llama3"
-
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(
-                f"{base_url}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": "json",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["response"]
-
-    async def _call_openai_compatible(self, prompt: str) -> str:
+    async def _call_openai_compatible(
+        self, prompt: str, *, reject_truncated: bool = False
+    ) -> str:
         """通过 OpenAI 兼容 API 调用。
 
         推理型模型偶发把输出预算全部耗在思考上（content 为空），
@@ -458,12 +436,15 @@ class Analyzer:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                content = data["choices"][0]["message"]["content"] or ""
+                choice = data["choices"][0]
+                if reject_truncated and choice.get("finish_reason") == "length":
+                    raise RuntimeError(
+                        "LLM 编辑提议超过输出长度限制，未生成完整文档，请缩小修改范围后重试"
+                    )
+                content = choice["message"]["content"] or ""
                 if content.strip():
                     return content
-                logger.warning(
-                    f"LLM 返回空 content（第 {attempt + 1}/3 次尝试）"
-                )
+                logger.warning(f"LLM 返回空 content（第 {attempt + 1}/3 次尝试）")
         return content
 
     @staticmethod

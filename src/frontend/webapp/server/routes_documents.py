@@ -1,4 +1,5 @@
 """Webapp host document routes: call the in-process KnowledgeBase."""
+
 from __future__ import annotations
 
 import logging
@@ -53,14 +54,12 @@ class EditContentRequest(BaseModel):
     content: str
 
 
-class EditContentRequest(BaseModel):
-    content: str
-
-
 @router.get("")
 async def list_documents(
-    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
-    file_type: str | None = None, status: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    file_type: str | None = None,
+    status: str | None = None,
     kb: KnowledgeBase = Depends(deps.get_kb),
 ):
     return await kb.list_documents(page, page_size, file_type, status)
@@ -163,7 +162,9 @@ async def _ingest_uploaded(kb: KnowledgeBase, filename: str, data: bytes):
 
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...), kb: KnowledgeBase = Depends(deps.get_kb)):
+async def upload_document(
+    file: UploadFile = File(...), kb: KnowledgeBase = Depends(deps.get_kb)
+):
     data = await file.read()
     error = _upload_file_error(file.filename, data)
     if error is not None:
@@ -187,9 +188,7 @@ async def upload_documents_batch(
         error = _upload_file_error(file.filename, data)
         if error is not None:
             _status, detail = error
-            items.append(
-                {"ok": False, "error": {**detail, "filename": file.filename}}
-            )
+            items.append({"ok": False, "error": {**detail, "filename": file.filename}})
             continue
         try:
             ref = await _ingest_uploaded(kb, file.filename, data)
@@ -200,18 +199,6 @@ async def upload_documents_batch(
             continue
         items.append({"ok": True, "document": asdict(ref)})
     return {"items": items}
-
-
-@router.put("/{doc_id}/content")
-async def edit_document_content(
-    doc_id: str,
-    body: EditContentRequest,
-    kb: KnowledgeBase = Depends(deps.get_kb),
-):
-    try:
-        return asdict(await kb.edit_content(doc_id, body.content))
-    except ValueError as exc:
-        raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/{doc_id}/retry")

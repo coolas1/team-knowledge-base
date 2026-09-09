@@ -69,9 +69,7 @@ class Pipeline:
 
     async def _analyze_document(
         self, raw_text: str, title: str, doc_id: UUID
-    ) -> tuple[
-        AnalysisResult, list, list[ChunkAnalysisResult], list[list[float]]
-    ]:
+    ) -> tuple[AnalysisResult, list, list[ChunkAnalysisResult], list[list[float]]]:
         """分块后并行执行：overview ∥ 逐 chunk 分析（信号量限流）∥ embedding。
 
         返回 (doc_analysis, chunks, chunk_analyses, embeddings)；
@@ -135,14 +133,10 @@ class Pipeline:
         追加变更抽取（LLM diff）并写入版本图谱。
         """
         async with async_session_factory() as session:
-            # 1. 读取文件并计算 hash
-            raw_bytes = file_path.read_bytes()
-            content_hash = hashlib.sha256(raw_bytes).hexdigest()
-
-            # 检查幂等性
+            # 1. 检查已完成文档；规范化的文本 hash 在提取后计算。
             doc = await session.get(Document, doc_id)
-            if doc and doc.content_hash == content_hash and doc.status == "indexed":
-                logger.info(f"文档 {doc_id} 内容未变，跳过 pipeline")
+            if doc and doc.status == "indexed":
+                logger.info(f"文档 {doc_id} 已完成，跳过 pipeline")
                 return
 
             # 2. 标记为 processing
@@ -158,6 +152,7 @@ class Pipeline:
             set_progress(str(doc_id), "extracting", "提取文本")
             async with self._doc_sem:
                 raw_text = await asyncio.to_thread(registry.extract, file_path)
+                content_hash = hashlib.sha256(raw_text.encode()).hexdigest()
                 logger.info(f"文档 {doc_id} 提取完成, {len(raw_text)} 字符")
                 (
                     doc_analysis,
@@ -193,8 +188,12 @@ class Pipeline:
                     file_type=file_type,
                     overview=doc_analysis.overview,
                     # getattr 容错：tests 用 SimpleNamespace 伪造 Document
-                    version_number=getattr(doc_row, "version_number", 1) if doc_row else 1,
-                    is_current=getattr(doc_row, "is_current", True) if doc_row else True,
+                    version_number=getattr(doc_row, "version_number", 1)
+                    if doc_row
+                    else 1,
+                    is_current=getattr(doc_row, "is_current", True)
+                    if doc_row
+                    else True,
                 )
                 await self._write_chunk_graph(str(doc_id), title, chunk_analyses)
                 if doc_analysis.file_relations:

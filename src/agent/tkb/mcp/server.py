@@ -3,6 +3,7 @@ Relocated from src/engine/mcp.py - MCP belongs to the plugin, not the engine
 (docs/architecture.md §1, §2). remove_document is hook-guarded (policy-as-data).
 When a KnowledgeQuery is wired (hindsight engine), additional recall/reflect
 tools are registered."""
+
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -350,8 +351,11 @@ async def upload_document(file_name: str, content: str) -> dict[str, Any]:
 
 
 async def edit_document_content(doc_id: str, content: str) -> dict[str, Any]:
-    """保存文档正文并在后台重建索引。"""
-    return asdict(await _get_kb().edit_content(doc_id, content))
+    """版本化保存文档正文并在后台重建索引。"""
+    try:
+        return asdict(await _get_kb().edit_content(doc_id, content))
+    except ValueError as exc:
+        return {"error": str(exc)}
 
 
 async def reingest_document(doc_id: str) -> dict[str, Any]:
@@ -382,47 +386,16 @@ async def remove_document(doc_id: str, approved: bool = False) -> dict[str, Any]
     return {"removed": doc_id}
 
 
-async def tkb_edit_document(doc_id: str, new_text: str) -> dict[str, Any]:
-    """版本化编辑文档：编辑保存生成新版本，旧版保留在版本链中，
-    自动记录 LLM 结构化变更（diff）。返回新版本引用。"""
-    try:
-        ref = await _get_kb().edit_document(doc_id, new_text)
-    except ValueError as e:
-        return {"error": str(e)}
-    result = {
-        "id": ref.id,
-        "title": ref.title,
-        "file_type": ref.file_type,
-        "status": ref.status,
-        "version_number": ref.version_number,
-        "is_current": ref.is_current,
-    }
-    if ref.memory_status is not None:
-        result.update(
-            {
-                "memory_status": ref.memory_status,
-                "memory_error_msg": ref.memory_error_msg,
-                "memory_count": ref.memory_count,
-                "memory_link_count": ref.memory_link_count,
-            }
-        )
-    return result
-
-
-async def tkb_propose_edit(
-    doc_id: str, edit_request: str
-) -> dict[str, Any]:
+async def tkb_propose_edit(doc_id: str, edit_request: str) -> dict[str, Any]:
     """生成文档编辑提议（不落库）：定位受影响片段、LLM 生成修改后全文、
-    列出共享实体的关联文档。确认后用 tkb_edit_document 落库。"""
+    列出共享实体的关联文档。确认后用 edit_document_content 落库。"""
     try:
         return await _get_kb().propose_edit(doc_id, edit_request)
     except ValueError as e:
         return {"error": str(e)}
 
 
-async def tkb_confirm_version_match(
-    doc_id: str, parent_doc_id: str
-) -> dict[str, Any]:
+async def tkb_confirm_version_match(doc_id: str, parent_doc_id: str) -> dict[str, Any]:
     """把改名识别的候选文档挂入父文档的版本链（用户确认动作）。
     doc_id 是上传时返回 version_match 的新文档；parent_doc_id 是候选
     中的疑似原文档。挂链后新文档成为该版本链的最新版。"""
@@ -502,7 +475,11 @@ async def generate_document(
 
 # Register tools (FastMCP introspects signatures). The three memory tools are
 # registered only when a query service is wired (see set_query_service).
-_MEMORY_TOOL_NAMES = ("query_knowledge", "search_knowledge_fast", "search_knowledge_deep")
+_MEMORY_TOOL_NAMES = (
+    "query_knowledge",
+    "search_knowledge_fast",
+    "search_knowledge_deep",
+)
 
 _memory_tools_registered = False
 
@@ -538,7 +515,6 @@ mcp.tool()(edit_document_content)
 mcp.tool()(reingest_document)
 mcp.tool()(list_documents)
 mcp.tool()(remove_document)
-mcp.tool()(tkb_edit_document)
 mcp.tool()(tkb_propose_edit)
 mcp.tool()(tkb_confirm_version_match)
 mcp.tool()(tkb_list_versions)

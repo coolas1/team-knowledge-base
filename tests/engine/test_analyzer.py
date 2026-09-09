@@ -1,5 +1,10 @@
 from src.engine.components.analyzer import (
-    Analyzer, AnalysisResult, ChunkAnalysisResult, Entity, FileRelation, Relation,
+    Analyzer,
+    AnalysisResult,
+    ChunkAnalysisResult,
+    Entity,
+    FileRelation,
+    Relation,
 )
 import pytest
 
@@ -80,8 +85,10 @@ async def test_analyze_disabled_llm_returns_placeholder(tmp_path, monkeypatch):
     monkeypatch.setattr(analyzer_module.httpx, "AsyncClient", _NoNetwork)
 
     schema = tmp_path / "entity_schema.yaml"
-    schema.write_text("entity_types:\n  core: [Person]\n  open: true\n"
-                      "relation_types:\n  core: [WORKS_AT]\n  open: true\n")
+    schema.write_text(
+        "entity_types:\n  core: [Person]\n  open: true\n"
+        "relation_types:\n  core: [WORKS_AT]\n  open: true\n"
+    )
     a = Analyzer(schema_path=schema)
 
     res = await a.analyze_overview("some text", "title")
@@ -169,3 +176,41 @@ async def test_enabled_llm_without_model_raises(monkeypatch):
 
     with pytest.raises(ValueError, match="LLM_MODEL"):
         await Analyzer()._call_openai_compatible("test prompt")
+
+
+async def test_edit_proposal_rejects_truncated_response(monkeypatch):
+    from config.settings import settings
+    from src.engine.components import analyzer as analyzer_module
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {"content": '{"new_text":"partial'},
+                    }
+                ]
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(settings.llm, "base_url", "https://llm.example/v1")
+    monkeypatch.setattr(settings.llm, "model", "remote-model")
+    monkeypatch.setattr(
+        analyzer_module.httpx, "AsyncClient", lambda **kwargs: FakeClient()
+    )
+
+    with pytest.raises(RuntimeError, match="输出长度限制"):
+        await Analyzer().propose_edit("original", "change it", "title")

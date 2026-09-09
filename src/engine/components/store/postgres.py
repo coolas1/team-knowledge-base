@@ -50,6 +50,18 @@ async def init_db() -> None:
                 "ON documents (is_current)"
             )
         )
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_group_version "
+                "ON documents (version_group, version_number)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_current_version "
+                "ON documents (version_group) WHERE is_current"
+            )
+        )
 
         # 3. 创建特殊索引（SQLAlchemy DDL 不支持这些 PostgreSQL 特有索引）
         # title 模糊搜索索引

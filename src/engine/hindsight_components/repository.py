@@ -731,7 +731,7 @@ class PostgresMemoryRepository:
                                 MemoryUnit.id.in_(expanded_scores),
                                 MemoryUnit.state == "active",
                                 Document.status == "indexed",
-                    Document.is_current.is_(True),
+                                Document.is_current.is_(True),
                                 *self._recall_source_conditions(source_type),
                             )
                         )

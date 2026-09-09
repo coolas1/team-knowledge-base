@@ -3,12 +3,12 @@
 Migrated from src/core/knowledge_base.py + src/core/search.py. The backend
 owns its own DB sessions (async_session_factory); callers never pass a session.
 """
+
 from __future__ import annotations
 
 import asyncio
 import dataclasses
 import hashlib
-import logging
 import logging
 import shutil
 import uuid
@@ -83,7 +83,9 @@ def _safe_filename(name: str) -> str:
     return base
 
 
-def _to_ref(doc: Document, chunk_count: int = 0, overview: str | None = None) -> DocumentRef:
+def _to_ref(
+    doc: Document, chunk_count: int = 0, overview: str | None = None
+) -> DocumentRef:
     return DocumentRef(
         id=str(doc.id),
         title=doc.title,
@@ -152,8 +154,20 @@ class GraphRAGBackend:
             data = source.path.read_bytes()
         file_type = ExtractorRegistry.guess_file_type(Path(source.name))
 
+        # Version identity is based on extracted text for every input format.
+        # Hashing container bytes (.docx/.pdf) makes a no-op edit/upload look
+        # different because metadata and compression bytes are unstable.
+        extract_dir = UPLOAD_DIR / str(uuid.uuid4())
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        extract_path = extract_dir / _safe_filename(source.name)
+        extract_path.write_bytes(data)
+        try:
+            new_text = await asyncio.to_thread(registry.extract, extract_path)
+        finally:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+
         # 版本链检测：同名文档的当前版本存在时，本次上传成为新版本。
-        content_hash = hashlib.sha256(data).hexdigest()
+        content_hash = hashlib.sha256(new_text.encode()).hexdigest()
         async with async_session_factory() as session:
             parent = (
                 await session.execute(
@@ -164,6 +178,7 @@ class GraphRAGBackend:
                     )
                     .order_by(Document.created_at.desc())
                     .limit(1)
+                    .with_for_update()
                 )
             ).scalar_one_or_none()
 
@@ -172,27 +187,25 @@ class GraphRAGBackend:
             # 挂链；仅相似则返回候选由调用方确认，不自动挂。
             version_match = None
             if parent is None:
-                tmp_dir = UPLOAD_DIR / str(uuid.uuid4())
-                tmp_dir.mkdir(parents=True, exist_ok=True)
-                tmp_path = tmp_dir / _safe_filename(source.name)
-                tmp_path.write_bytes(data)
-                try:
-                    new_text = registry.extract(tmp_path)
-                except Exception:
-                    new_text = ""
-                    logger.exception("改名识别的文本提取失败，跳过相似度检测")
-                finally:
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
                 if new_text:
+                    text_length = len(new_text)
                     existing = (
                         await session.execute(
-                            select(Document.id, Document.title, Document.raw_text).where(
+                            select(Document.id, Document.title, Document.raw_text)
+                            .where(
                                 Document.is_current.is_(True),
                                 Document.status == "indexed",
+                                Document.file_type == file_type,
+                                func.length(Document.raw_text)
+                                >= max(1, text_length // 2),
+                                func.length(Document.raw_text) <= text_length * 2,
                             )
+                            .order_by(Document.updated_at.desc())
+                            .limit(200)
                         )
                     ).all()
-                    version_match = find_version_candidate(
+                    version_match = await asyncio.to_thread(
+                        find_version_candidate,
                         source.name,
                         new_text,
                         [(str(r.id), r.title, r.raw_text or "") for r in existing],
@@ -202,7 +215,9 @@ class GraphRAGBackend:
                             Document, uuid.UUID(version_match.doc_id)
                         )
 
-            if parent is not None and parent.content_hash == content_hash:
+            if parent is not None and (
+                parent.content_hash == content_hash or parent.raw_text == new_text
+            ):
                 # 内容与当前版本一致：不产生新版本，直接返回现有文档。
                 # task 置为已完成（调用方仅持有引用，不 await）。
                 ref = _to_ref(parent)
@@ -304,21 +319,25 @@ class GraphRAGBackend:
             doc = await session.get(Document, uid)
             if not doc:
                 raise ValueError(f"文档不存在: {doc_id}")
+            if not doc.is_current:
+                raise ValueError("只能编辑文档的当前版本")
             title = doc.title
             file_type = doc.file_type
             old_text = doc.raw_text or ""
             content_hash = hashlib.sha256(new_text.encode()).hexdigest()
 
-            if content_hash == doc.content_hash:
+            if content_hash == doc.content_hash or new_text == old_text:
                 # 内容未变：不产生新版本
                 return await self._enrich(_to_ref(doc))
 
             # 新版本行
             new_id = uuid.uuid4()
+            file_path = UPLOAD_DIR / str(new_id) / _safe_filename(title)
             new_doc = Document(
                 id=new_id,
                 title=title,
                 file_type=file_type,
+                file_path=str(file_path),
                 raw_text=new_text,
                 status="pending",
                 version_group=doc.version_group,
@@ -327,9 +346,7 @@ class GraphRAGBackend:
             )
             session.add(new_doc)
             await session.execute(
-                update(Document)
-                .where(Document.id == uid)
-                .values(is_current=False)
+                update(Document).where(Document.id == uid).values(is_current=False)
             )
             await session.commit()
 
@@ -345,18 +362,15 @@ class GraphRAGBackend:
             )
 
         # 同步保存原始文本到上传目录（供后续提取/下载）
-        doc_dir = UPLOAD_DIR / str(new_id)
-        doc_dir.mkdir(parents=True, exist_ok=True)
-        (doc_dir / _safe_filename(title)).write_text(new_text, encoding="utf-8")
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(new_text, encoding="utf-8")
 
-        await self._pipeline.reindex_document(
-            new_id, new_text, previous_version=previous_version
+        asyncio.create_task(
+            self._pipeline.reindex_document(
+                new_id, new_text, previous_version=previous_version
+            )
         )
-
-        async with async_session_factory() as session:
-            new_row = await session.get(Document, new_id)
-            assert new_row is not None
-            return await self._enrich(_to_ref(new_row))
+        return await self._enrich(_to_ref(new_doc))
 
     async def reingest(self, doc_id: str) -> DocumentRef:
         uid = uuid.UUID(doc_id)
@@ -436,9 +450,9 @@ class GraphRAGBackend:
                     select(
                         Chunk.chunk_index,
                         Chunk.chunk_text,
-                        (
-                            1 - Chunk.embedding.cosine_distance(query_embedding)
-                        ).label("score"),
+                        (1 - Chunk.embedding.cosine_distance(query_embedding)).label(
+                            "score"
+                        ),
                     )
                     .where(Chunk.doc_id == uid, Chunk.embedding.is_not(None))
                     .order_by(Chunk.embedding.cosine_distance(query_embedding))
@@ -479,7 +493,7 @@ class GraphRAGBackend:
             "proposed_text": proposal.proposed_text,
             "notes": proposal.notes,
             "next_step": (
-                "确认提议后调用 tkb_edit_document(doc_id, new_text) 落库，"
+                "确认提议后调用 edit_document_content(doc_id, content) 落库，"
                 "将自动创建新版本并记录变更。"
             ),
         }
@@ -493,12 +507,16 @@ class GraphRAGBackend:
                 raise ValueError(f"文档不存在: {doc_id}")
 
             rows = (
-                await session.execute(
-                    select(Document)
-                    .where(Document.version_group == doc.version_group)
-                    .order_by(Document.version_number.asc())
+                (
+                    await session.execute(
+                        select(Document)
+                        .where(Document.version_group == doc.version_group)
+                        .order_by(Document.version_number.asc())
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
             versions = []
             for d in rows:
@@ -519,7 +537,9 @@ class GraphRAGBackend:
                         "status": d.status,
                         "overview": (d.overview or "")[:200],
                         "change_summary": change_row.summary if change_row else "",
-                        "created_at": d.created_at.isoformat() if d.created_at else None,
+                        "created_at": d.created_at.isoformat()
+                        if d.created_at
+                        else None,
                     }
                 )
             return versions
@@ -570,7 +590,9 @@ class GraphRAGBackend:
             doc = await session.get(Document, uid)
             parent = await session.get(Document, pid)
             if doc is None or parent is None:
-                raise ValueError(f"文档不存在: {doc_id if doc is None else parent_doc_id}")
+                raise ValueError(
+                    f"文档不存在: {doc_id if doc is None else parent_doc_id}"
+                )
             if doc.version_group == parent.version_group:
                 return {
                     "doc_id": doc_id,
@@ -578,7 +600,9 @@ class GraphRAGBackend:
                     "already_linked": True,
                 }
             if doc.is_current is False:
-                raise ValueError(f"文档 {doc_id} 自身不是当前版，不能挂为父文档的新版本")
+                raise ValueError(
+                    f"文档 {doc_id} 自身不是当前版，不能挂为父文档的新版本"
+                )
 
             group = parent.version_group
             next_number = (
@@ -685,28 +709,59 @@ class GraphRAGBackend:
             if not details:
                 return GraphData()
             return GraphData(
-                nodes=[GraphNode(
-                    name=details.name, type=details.entity_type,
-                    description=details.properties.get("description", ""),
-                    sources=details.properties.get("sources", [])
-                            if isinstance(details.properties.get("sources"), list) else [],
-                )],
-                links=[GraphLink(source=r.get("other_name", ""), target=details.name,
-                                 type=r.get("type", ""), description=r.get("description", ""))
-                       for r in details.relations if r.get("type")],
+                nodes=[
+                    GraphNode(
+                        name=details.name,
+                        type=details.entity_type,
+                        description=details.properties.get("description", ""),
+                        sources=details.properties.get("sources", [])
+                        if isinstance(details.properties.get("sources"), list)
+                        else [],
+                    )
+                ],
+                links=[
+                    GraphLink(
+                        source=r.get("other_name", ""),
+                        target=details.name,
+                        type=r.get("type", ""),
+                        description=r.get("description", ""),
+                    )
+                    for r in details.relations
+                    if r.get("type")
+                ],
             )
         return GraphData(
-            nodes=[GraphNode(name=n["name"], type=n["type"], description=n.get("description", ""),
-                             sources=n.get("sources", [])) for n in raw.get("nodes", [])],
-            links=[GraphLink(source=link["source"], target=link["target"], type=link["type"],
-                             description=link.get("description", "")) for link in raw.get("links", [])],
+            nodes=[
+                GraphNode(
+                    name=n["name"],
+                    type=n["type"],
+                    description=n.get("description", ""),
+                    sources=n.get("sources", []),
+                )
+                for n in raw.get("nodes", [])
+            ],
+            links=[
+                GraphLink(
+                    source=link["source"],
+                    target=link["target"],
+                    type=link["type"],
+                    description=link.get("description", ""),
+                )
+                for link in raw.get("links", [])
+            ],
         )
 
     async def get_neighbors(self, entity: str) -> GraphData:
         results = await self._neo4j.query_neighbors(entity, hops=2)
         return GraphData(
-            nodes=[GraphNode(name=r.name, type=r.entity_type,
-                             description=r.properties.get("description", "")) for r in results],
+            nodes=[
+                GraphNode(
+                    name=r.name,
+                    type=r.entity_type,
+                    description=r.properties.get("description", ""),
+                )
+                for r in results
+            ],
             links=[],
         )
 
@@ -742,7 +797,9 @@ class GraphRAGBackend:
 
             items: list[dict[str, Any]] = [
                 {
-                    "id": str(d.id), "title": d.title, "file_type": d.file_type,
+                    "id": str(d.id),
+                    "title": d.title,
+                    "file_type": d.file_type,
                     "status": d.status,
                     "overview": (d.overview or "")[:200],
                     "created_at": d.created_at.isoformat() if d.created_at else None,
@@ -753,7 +810,9 @@ class GraphRAGBackend:
         if self._enricher is not None:
             await self._enricher.enrich_dicts(items)
         return {
-            "total": total, "page": page, "page_size": page_size,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
             "items": items,
         }
 
@@ -766,10 +825,15 @@ class GraphRAGBackend:
             count_stmt = select(func.count(Chunk.id)).where(Chunk.doc_id == uid)
             chunk_count = (await session.execute(count_stmt)).scalar() or 0
             result: dict[str, Any] = {
-                "id": str(doc.id), "title": doc.title, "file_type": doc.file_type,
-                "raw_text": doc.raw_text, "overview": doc.overview,
-                "file_path": doc.file_path, "content_hash": doc.content_hash,
-                "status": doc.status, "error_msg": doc.error_msg,
+                "id": str(doc.id),
+                "title": doc.title,
+                "file_type": doc.file_type,
+                "raw_text": doc.raw_text,
+                "overview": doc.overview,
+                "file_path": doc.file_path,
+                "content_hash": doc.content_hash,
+                "status": doc.status,
+                "error_msg": doc.error_msg,
                 "chunk_count": chunk_count,
                 "created_at": doc.created_at.isoformat() if doc.created_at else None,
                 "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,

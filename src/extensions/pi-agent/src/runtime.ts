@@ -60,7 +60,7 @@ const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent
 - 问两个版本的区别、某版本之前是什么、何时变更时用 tkb_diff_versions，
   from_version 在前、to_version 在后。
 - 用户要求修改文档时先用 tkb_propose_edit 生成提议，确认后再
-  tkb_edit_document 落库（保存即新版本）。
+  edit_document_content 落库（保存即新版本）。
 - 回答内容类问题时默认依据当前版；涉及历史状态先查版本链。
 - 知识库回答必须列出依据的文档标题和 doc_id；没有充分证据时明确说明“知识库中未找到充分依据”。
 - 达到调用限制时，停止探索并依据已经获得的证据作答；工具错误必须如实处理。

@@ -41,6 +41,7 @@ class EntityData:
 @dataclass
 class EntitySource:
     """实体溯源信息。"""
+
     doc_id: str
     chunk_index: int
     doc_title: str
@@ -252,7 +253,9 @@ class Neo4jClient:
                 delay = TRANSIENT_RETRY_BASE_DELAY * (2**attempt)
                 logger.warning(
                     "删除文档图谱遭遇瞬态错误（第 %s 次），%.1fs 后重试: %s",
-                    attempt + 1, delay, error.code,
+                    attempt + 1,
+                    delay,
+                    error.code,
                 )
                 await asyncio.sleep(delay)
 
@@ -326,9 +329,7 @@ class Neo4jClient:
 
     # ── 实体 ────────────────────────────────────────────────────
 
-    async def upsert_entity(
-        self, entity: EntityData, source: EntitySource
-    ) -> None:
+    async def upsert_entity(self, entity: EntityData, source: EntitySource) -> None:
         """创建/更新实体节点，追加溯源来源。
 
         MERGE by name → 同名实体全局唯一。
@@ -534,9 +535,7 @@ class Neo4jClient:
             return
         by_type: dict[str, list[tuple[RelationData, list[dict]]]] = {}
         for relation, sources in _group_relation_items(items):
-            by_type.setdefault(relation.relation_type, []).append(
-                (relation, sources)
-            )
+            by_type.setdefault(relation.relation_type, []).append((relation, sources))
 
         for relation_type, group in by_type.items():
             rel_label = _quote_cypher_identifier(relation_type, "RELATED_TO")
@@ -631,9 +630,7 @@ class Neo4jClient:
 
     # ── 查询 ────────────────────────────────────────────────────
 
-    async def query_neighbors(
-        self, name: str, hops: int = 2
-    ) -> list[GraphQueryResult]:
+    async def query_neighbors(self, name: str, hops: int = 2) -> list[GraphQueryResult]:
         """获取实体 N 跳内的所有邻居。"""
         async with self._driver.session() as session:
             result = await session.run(
@@ -775,7 +772,8 @@ class Neo4jClient:
                     for s in sources
                 ):
                     entity_type = next(
-                        (label for label in labels if label not in ("Document",)), "Entity"
+                        (label for label in labels if label not in ("Document",)),
+                        "Entity",
                     )
                     results.append(
                         GraphQueryResult(
@@ -811,12 +809,14 @@ class Neo4jClient:
                     (label for label in labels if label != "Document"), "Unknown"
                 )
                 sources_raw = r["sources"] or "[]"
-                nodes.append({
-                    "name": r["name"],
-                    "type": entity_type,
-                    "description": r["description"] or "",
-                    "sources": json.loads(sources_raw),
-                })
+                nodes.append(
+                    {
+                        "name": r["name"],
+                        "type": entity_type,
+                        "description": r["description"] or "",
+                        "sources": json.loads(sources_raw),
+                    }
+                )
 
             # 2. 查询所有实体间关系（排除 Document 节点和 RELATED_TO）
             link_result = await session.run(
@@ -900,7 +900,7 @@ class Neo4jClient:
                 WHERE e.sources IS NOT NULL
                   AND e.sources CONTAINS $doc_id
                   AND d.doc_id <> $doc_id
-                  AND d.is_current <> false
+                  AND coalesce(d.is_current, true) <> false
                   AND e.sources CONTAINS d.doc_id
                 RETURN d.doc_id AS doc_id,
                        d.title AS title,

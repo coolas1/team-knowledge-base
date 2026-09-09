@@ -32,8 +32,16 @@ def test_parse_changes_response_plain_json():
         {
             "summary": "更新了交付范围",
             "changes": [
-                {"name": "新增无人机配送", "description": "增加无人机章节", "status": "added"},
-                {"name": "移除人工配送", "description": "删除旧章节", "status": "removed"},
+                {
+                    "name": "新增无人机配送",
+                    "description": "增加无人机章节",
+                    "status": "added",
+                },
+                {
+                    "name": "移除人工配送",
+                    "description": "删除旧章节",
+                    "status": "removed",
+                },
             ],
         },
         ensure_ascii=False,
@@ -90,9 +98,10 @@ def test_build_changes_prompt_contains_both_versions():
 
 @pytest.mark.asyncio
 async def test_analyze_changes_with_todo_provider_returns_placeholder(monkeypatch):
-    from config.settings import settings
+    from src.engine.components import analyzer as analyzer_module
 
-    monkeypatch.setattr(settings.llm, "base_url", "")
+    monkeypatch.setattr(analyzer_module.settings.llm, "base_url", "")
+    monkeypatch.setattr(analyzer_module.settings.llm, "model", "")
     result = await Analyzer().analyze_changes("old", "new", "t")
     assert result.summary.startswith("[待 LLM 生成]")
 
@@ -143,8 +152,12 @@ async def test_upsert_document_node_includes_version_properties():
     client, session = _client()
 
     await client.upsert_document_node(
-        doc_id="d1", title="t", file_type="markdown",
-        overview="o", version_number=3, is_current=False,
+        doc_id="d1",
+        title="t",
+        file_type="markdown",
+        overview="o",
+        version_number=3,
+        is_current=False,
     )
 
     query = session.queries[0]
@@ -183,9 +196,7 @@ async def test_delete_document_graph_cleans_change_nodes():
 
     await client.delete_document_graph("d1")
 
-    assert any(
-        "MATCH (c:Change {doc_id: $doc_id})" in q for q in session.queries
-    )
+    assert any("MATCH (c:Change {doc_id: $doc_id})" in q for q in session.queries)
 
 
 # ── pipeline: 版本链入库编排 ─────────────────────────────────────
@@ -245,8 +256,10 @@ async def test_process_version_change_persists_diff_and_projects_graph():
     doc_id = uuid4()
     session = FakeSession()
     parent = VersionParent(
-        doc_id="prev-doc", raw_text="旧文本",
-        from_version=1, to_version=2,
+        doc_id="prev-doc",
+        raw_text="旧文本",
+        from_version=1,
+        to_version=2,
     )
 
     await pipeline._process_version_change(doc_id, "标题", "新文本", parent, session)
@@ -285,7 +298,10 @@ async def test_process_version_change_failure_does_not_raise():
 def test_version_parent_dataclass_fields():
     parent = VersionParent(doc_id="d", raw_text="r", from_version=1, to_version=2)
     assert (parent.doc_id, parent.raw_text, parent.from_version, parent.to_version) == (
-        "d", "r", 1, 2,
+        "d",
+        "r",
+        1,
+        2,
     )
 
 
@@ -319,7 +335,10 @@ async def test_mcp_version_tools_delegate_to_kb():
         kb.diff_versions = diff_versions  # type: ignore[method-assign]
 
         res = await mcp_mod.tkb_list_versions("abc")
-        assert res == {"doc_id": "abc", "versions": [{"id": "abc", "version_number": 1}]}
+        assert res == {
+            "doc_id": "abc",
+            "versions": [{"id": "abc", "version_number": 1}],
+        }
 
         res = await mcp_mod.tkb_diff_versions("abc", 1, 2)
         assert res == {"doc_id": "abc", "changes": []}
@@ -347,11 +366,11 @@ async def test_mcp_version_tools_report_missing_doc():
         mcp_mod._kb = None
 
 
-# ── 版本化编辑（edit_document）────────────────────────────────────
+# ── 版本化编辑（edit_document_content）────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_mcp_edit_document_reports_versioned_result():
+async def test_mcp_edit_document_content_reports_versioned_result():
     from tests.conftest import FakeKnowledgeBase
 
     from src.agent.tkb.mcp import server as mcp_mod
@@ -359,16 +378,20 @@ async def test_mcp_edit_document_reports_versioned_result():
 
     kb = FakeKnowledgeBase()
 
-    async def edit_document(doc_id, new_text):
+    async def edit_content(doc_id, new_text):
         return DocumentRef(
-            id="new-1", title="t", file_type="markdown", status="indexed",
-            version_number=2, is_current=True,
+            id="new-1",
+            title="t",
+            file_type="markdown",
+            status="indexed",
+            version_number=2,
+            is_current=True,
         )
 
-    kb.edit_document = edit_document  # type: ignore[method-assign]
+    kb.edit_content = edit_content  # type: ignore[method-assign]
     mcp_mod.set_kb(kb)
     try:
-        res = await mcp_mod.tkb_edit_document("old-1", "new content")
+        res = await mcp_mod.edit_document_content("old-1", "new content")
         assert res["id"] == "new-1"
         assert res["version_number"] == 2
         assert res["is_current"] is True
@@ -377,20 +400,20 @@ async def test_mcp_edit_document_reports_versioned_result():
 
 
 @pytest.mark.asyncio
-async def test_mcp_edit_document_missing_doc_returns_error():
+async def test_mcp_edit_document_content_missing_doc_returns_error():
     from tests.conftest import FakeKnowledgeBase
 
     from src.agent.tkb.mcp import server as mcp_mod
 
     kb = FakeKnowledgeBase()
 
-    async def edit_document(doc_id, new_text):
+    async def edit_content(doc_id, new_text):
         raise ValueError(f"文档不存在: {doc_id}")
 
-    kb.edit_document = edit_document  # type: ignore[method-assign]
+    kb.edit_content = edit_content  # type: ignore[method-assign]
     mcp_mod.set_kb(kb)
     try:
-        res = await mcp_mod.tkb_edit_document("missing", "x")
+        res = await mcp_mod.edit_document_content("missing", "x")
         assert "error" in res
     finally:
         mcp_mod._kb = None
@@ -441,7 +464,9 @@ def test_parse_edit_proposal_bad_json_returns_placeholder():
 
 
 def test_build_edit_proposal_prompt_contains_request_and_doc():
-    prompt = Analyzer._build_edit_proposal_prompt("文档内容", "把价格改为10元", "价目表")
+    prompt = Analyzer._build_edit_proposal_prompt(
+        "文档内容", "把价格改为10元", "价目表"
+    )
     assert "文档内容" in prompt
     assert "把价格改为10元" in prompt
     assert "价目表" in prompt
@@ -449,9 +474,10 @@ def test_build_edit_proposal_prompt_contains_request_and_doc():
 
 @pytest.mark.asyncio
 async def test_propose_edit_with_todo_provider_returns_original(monkeypatch):
-    from config.settings import settings
+    from src.engine.components import analyzer as analyzer_module
 
-    monkeypatch.setattr(settings.llm, "base_url", "")
+    monkeypatch.setattr(analyzer_module.settings.llm, "base_url", "")
+    monkeypatch.setattr(analyzer_module.settings.llm, "model", "")
     result = await Analyzer().propose_edit("原文", "改一下", "t")
     assert result.proposed_text == "原文"
 
@@ -465,7 +491,7 @@ async def test_find_related_docs_via_entities_filters_current():
     await client.find_related_docs_via_entities("d1", limit=5)
 
     query = session.queries[0]
-    assert "d.is_current <> false" in query
+    assert "coalesce(d.is_current, true) <> false" in query
     assert "shared_entities" in query
     assert session.parameters[0] == {"doc_id": "d1", "limit": 5}
 
@@ -554,7 +580,9 @@ async def test_mcp_propose_edit_missing_doc_returns_error():
 
 
 def test_strip_version_markers_removes_common_suffixes():
-    assert _strip_version_markers("报告_v2.md") == _strip_version_markers("报告_final.md")
+    assert _strip_version_markers("报告_v2.md") == _strip_version_markers(
+        "报告_final.md"
+    )
     assert _strip_version_markers("规范v1.md") != _strip_version_markers("手册.md")
 
 
@@ -585,9 +613,7 @@ def test_combined_similarity_rejects_different_docs():
 
 def test_find_version_candidate_exact_content_rename():
     base = "完全相同的内容主体"
-    candidate = find_version_candidate(
-        "新名字.md", base, [("d1", "旧名字.md", base)]
-    )
+    candidate = find_version_candidate("新名字.md", base, [("d1", "旧名字.md", base)])
     assert candidate is not None
     assert candidate.exact_content is True
     assert candidate.similarity == 1.0
@@ -620,7 +646,12 @@ def test_find_version_candidate_similar_content_flagged():
 
 
 def test_find_version_candidate_no_match_returns_none():
-    assert find_version_candidate("a.md", "内容甲", [("d1", "b.md", "完全不同的内容乙丙丁")]) is None
+    assert (
+        find_version_candidate(
+            "a.md", "内容甲", [("d1", "b.md", "完全不同的内容乙丙丁")]
+        )
+        is None
+    )
 
 
 def test_find_version_candidate_picks_highest_similarity():
@@ -728,8 +759,12 @@ async def test_delete_document_graph_batches_source_updates():
     await client.delete_document_graph("d1")
 
     queries = session.queries
-    assert any("ORDER BY name" in q for q in queries), "读取应按 name 排序（确定加锁顺序）"
-    assert any("UNWIND $updates" in q for q in queries), "sources 更新应合并为单条批量写"
+    assert any("ORDER BY name" in q for q in queries), (
+        "读取应按 name 排序（确定加锁顺序）"
+    )
+    assert any("UNWIND $updates" in q for q in queries), (
+        "sources 更新应合并为单条批量写"
+    )
     # 批量写参数包含移除了 doc_id 的 sources
     unwind_params = next(p for p in session.parameters if "updates" in p)
     assert unwind_params["updates"] == [{"name": "E1", "sources": "[]"}]
@@ -768,8 +803,6 @@ async def test_delete_document_graph_retries_transient_errors(monkeypatch):
 
 async def test_remove_cleans_graph_even_when_postgres_row_missing():
     """孤儿兜底：Postgres 行不存在时也要执行图谱清理。"""
-    from types import SimpleNamespace
-
     from src.engine.graphrag.backend import GraphRAGBackend
 
     cleaned: list[str] = []
