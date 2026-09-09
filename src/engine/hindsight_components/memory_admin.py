@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 
 from src.engine.components.store.models import Document
 from src.engine.components.store.scope import scope_predicate
@@ -175,9 +175,7 @@ class PostgresMemoryAdminRepository:
             item.error = item.error or state.error_msg
         for job in consolidation:
             diagnostic_status = (
-                "cancelled"
-                if job.error_msg == "cancelled_by_admin"
-                else job.status
+                "cancelled" if job.error_msg == "cancelled_by_admin" else job.status
             )
             subject = (
                 "默认归纳范围"
@@ -285,6 +283,22 @@ class PostgresMemoryAdminRepository:
                 state.status = "pending" if retry else "failed"
                 state.error_msg = None if retry else "cancelled_by_admin"
                 changed += 1
+            consolidation_status = (
+                or_(
+                    ConsolidationJob.status.in_(
+                        ("pending", "failed", "budget_exhausted")
+                    ),
+                    and_(
+                        ConsolidationJob.status == "processing",
+                        or_(
+                            ConsolidationJob.lease_expires_at.is_(None),
+                            ConsolidationJob.lease_expires_at <= func.clock_timestamp(),
+                        ),
+                    ),
+                )
+                if retry
+                else ConsolidationJob.status != "completed"
+            )
             consolidations = list(
                 await session.scalars(
                     select(ConsolidationJob)
@@ -295,7 +309,7 @@ class PostgresMemoryAdminRepository:
                             ConsolidationJob.write_scope,
                             self.scope,
                         ),
-                        ConsolidationJob.status != "completed",
+                        consolidation_status,
                     )
                     .with_for_update()
                 )
