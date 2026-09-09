@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
 from src.engine.hindsight_components.consolidation import (
     ConsolidationClaim,
     ConsolidationOptions,
+    PostgresConsolidationRepository,
     ConsolidationReadSet,
     ConsolidationWorker,
     retry_batch_size,
@@ -440,6 +442,48 @@ async def test_semantic_dedup_provider_failure_keeps_validated_actions(
 
     assert result == actions
     assert "semantic consolidation deduplication skipped" in caplog.text
+
+
+async def test_completed_source_stage_waits_for_its_last_event():
+    completed_id = uuid.uuid4()
+    pending_id = uuid.uuid4()
+    document_state = SimpleNamespace(stage_results={"consolidate": "queued"})
+    conversation_source = SimpleNamespace(
+        stage_results={"delivery": "accepted", "consolidate": "queued"}
+    )
+
+    class Session:
+        def __init__(self):
+            self.results = iter(
+                [
+                    [completed_id, pending_id],
+                    [pending_id],
+                    [document_state],
+                    [conversation_source],
+                ]
+            )
+
+        async def scalars(self, _statement):
+            return next(self.results)
+
+    await PostgresConsolidationRepository._mark_completed_source_stages(
+        Session(),
+        ConsolidationClaim(
+            bank_id="default-team",
+            scope_key="[]",
+            write_scope=(),
+            lease_token=str(uuid.uuid4()),
+            processed_through=10,
+            claimed_through=20,
+            pending_through=30,
+            iterations=0,
+            tokens_used=0,
+            cost_microusd=0,
+        ),
+    )
+
+    assert document_state.stage_results["consolidate"] == "success"
+    assert conversation_source.stage_results["consolidate"] == "success"
 
 
 async def test_semantic_dedup_merges_update_target_and_preserves_both_histories():

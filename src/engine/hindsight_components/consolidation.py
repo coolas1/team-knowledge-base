@@ -24,8 +24,10 @@ from .consolidation_actions import (
 from .models import (
     ConsolidationFactEvent,
     ConsolidationJob,
+    ConversationMemorySource,
     FactTombstone,
     HindsightGraphOutbox,
+    HindsightDocumentState,
     MemoryLink,
     MemoryUnit,
     MentalModel,
@@ -396,6 +398,7 @@ class PostgresConsolidationRepository:
                     applied += 1
                 await self._remove_orphaned_observations(session, claim)
                 job.processed_through = claim.claimed_through
+                await self._mark_completed_source_stages(session, claim)
                 job.iterations += 1
                 job.tokens_used += tokens_used
                 job.cost_microusd += cost_microusd
@@ -427,6 +430,49 @@ class PostgresConsolidationRepository:
                 return ConsolidationRunResult(
                     job.status, applied, job.processed_through, job.tokens_used
                 )
+
+    @staticmethod
+    async def _mark_completed_source_stages(session, claim: ConsolidationClaim) -> None:
+        """Finish source-level stages once their last queued event is processed."""
+        processed_documents = set(
+            await session.scalars(
+                select(ConsolidationFactEvent.document_id)
+                .where(
+                    ConsolidationFactEvent.bank_id == claim.bank_id,
+                    ConsolidationFactEvent.scope_key == claim.scope_key,
+                    ConsolidationFactEvent.id > claim.processed_through,
+                    ConsolidationFactEvent.id <= claim.claimed_through,
+                )
+                .distinct()
+            )
+        )
+        if not processed_documents:
+            return
+        still_pending = set(
+            await session.scalars(
+                select(ConsolidationFactEvent.document_id)
+                .where(
+                    ConsolidationFactEvent.bank_id == claim.bank_id,
+                    ConsolidationFactEvent.scope_key == claim.scope_key,
+                    ConsolidationFactEvent.document_id.in_(processed_documents),
+                    ConsolidationFactEvent.id > claim.claimed_through,
+                )
+                .distinct()
+            )
+        )
+        completed_documents = processed_documents - still_pending
+        if not completed_documents:
+            return
+        for model in (HindsightDocumentState, ConversationMemorySource):
+            rows = list(
+                await session.scalars(
+                    select(model).where(model.document_id.in_(completed_documents))
+                )
+            )
+            for row in rows:
+                stages = dict(row.stage_results or {})
+                if stages.get("consolidate") == "queued":
+                    row.stage_results = {**stages, "consolidate": "success"}
 
     @staticmethod
     async def _enqueue_mental_models(session, claim: ConsolidationClaim) -> None:
