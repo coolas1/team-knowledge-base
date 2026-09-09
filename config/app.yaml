@@ -7,5 +7,15 @@ engine:
   memory:
     enabled: true
     graph_worker: true
+    consolidation_max_iterations: 100
+    consolidation_max_tokens: 3200000
+    features:
+      scope: true
+      reliable_retention: true
+      entity_resolution: true
+      consolidation: true
+      evidence_retrieval: true
+      mental_models: true
+      adaptive_reflect: true
 plugin:
   impl: tkb

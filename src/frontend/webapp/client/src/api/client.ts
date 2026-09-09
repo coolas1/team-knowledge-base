@@ -4,6 +4,8 @@ export interface MemoryOperation {
   id: string
   status: string
   stages: Record<string, string>
+  kind: 'conversation' | 'document' | 'consolidation' | 'mental_model' | 'operation'
+  subject?: string
   session_id?: string
   turn_id?: string
   document_id?: string

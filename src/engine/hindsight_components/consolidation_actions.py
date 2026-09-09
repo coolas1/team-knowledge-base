@@ -81,6 +81,7 @@ def validate_actions(
     write_scope: tuple[str, ...],
     facts: dict[str, EvidenceVersion],
     observations: dict[str, ObservationVersion],
+    max_actions: int | None = None,
 ) -> tuple[ValidatedAction, ...]:
     """Reject a whole invalid plan, then coalesce repeated actions deterministically.
 
@@ -91,6 +92,8 @@ def validate_actions(
     if canonical_scope not in (scope.observation_scopes or ((),)):
         raise ValueError("unauthorized consolidation write scope")
     plan = ConsolidationPlan.model_validate(payload)
+    if max_actions is not None and len(plan.actions) > max_actions:
+        raise ValueError("consolidation plan exceeds the action limit")
     merged: dict[tuple[str, str], ConsolidationAction] = {}
     for action in plan.actions:
         target = None

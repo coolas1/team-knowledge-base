@@ -29,6 +29,8 @@ class OperationView:
     id: str
     status: str
     stages: dict[str, str] = field(default_factory=dict)
+    kind: str = "operation"
+    subject: str | None = None
     session_id: str | None = None
     turn_id: str | None = None
     document_id: str | None = None
@@ -137,12 +139,14 @@ class PostgresMemoryAdminRepository:
                 ).all()
             )
         output: dict[str, OperationView] = {}
-        for source, _document in conversations:
+        for source, document in conversations:
             identity = str(source.operation_id)
             output[identity] = OperationView(
                 id=identity,
                 status=source.status,
                 stages=dict(source.stage_results or {}),
+                kind="conversation",
+                subject=document.title,
                 session_id=source.session_id,
                 turn_id=source.turn_id,
                 document_id=str(source.document_id),
@@ -150,12 +154,19 @@ class PostgresMemoryAdminRepository:
                 error=source.error_msg,
                 duration_ms=self._duration(source.created_at, source.updated_at),
             )
-        for state, _document in states:
+        for state, document in states:
+            # Old terminal document states predate operation stage tracking.
+            # They are document history, not actionable diagnostic tasks.
+            if state.status == "indexed" and not state.stage_results:
+                continue
             item = output.setdefault(
                 str(state.operation_id),
                 OperationView(
                     id=str(state.operation_id),
                     status=state.status,
+                    stages={"retain": state.status},
+                    kind="document",
+                    subject=document.title,
                     document_id=str(state.document_id),
                 ),
             )
@@ -163,9 +174,19 @@ class PostgresMemoryAdminRepository:
             item.status = self._merge_status(item.status, state.status)
             item.error = item.error or state.error_msg
         for job in consolidation:
+            subject = (
+                "默认归纳范围"
+                if job.scope_key == "[]"
+                else f"归纳范围 {', '.join(job.write_scope)}"
+            )
             item = output.setdefault(
                 str(job.operation_id),
-                OperationView(id=str(job.operation_id), status=job.status),
+                OperationView(
+                    id=str(job.operation_id),
+                    status=job.status,
+                    kind="consolidation",
+                    subject=subject,
+                ),
             )
             item.stages["consolidation"] = job.status
             item.status = self._merge_status(item.status, job.status)
@@ -174,11 +195,15 @@ class PostgresMemoryAdminRepository:
             item.tokens += job.tokens_used
             item.cost_microusd += job.cost_microusd
             item.duration_ms = self._duration(job.created_at, job.updated_at)
-        for job, _model in refreshes:
+        for job, model in refreshes:
             item = output.setdefault(
                 str(job.operation_id),
                 OperationView(
-                    id=str(job.operation_id), status=job.status, model_id=job.model_id
+                    id=str(job.operation_id),
+                    status=job.status,
+                    kind="mental_model",
+                    subject=model.name,
+                    model_id=job.model_id,
                 ),
             )
             item.stages["mental_model_refresh"] = job.status
@@ -273,6 +298,10 @@ class PostgresMemoryAdminRepository:
             for job in consolidations:
                 job.status = "pending" if retry else "budget_exhausted"
                 job.attempts = 0 if retry else job.attempts
+                if retry:
+                    job.iterations = 0
+                    job.tokens_used = 0
+                    job.cost_microusd = 0
                 job.error_msg = None if retry else "cancelled_by_admin"
                 job.lease_token = None
                 job.lease_expires_at = None

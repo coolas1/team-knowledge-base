@@ -17,6 +17,8 @@ class Service:
                 id="operation",
                 status="failed",
                 stages={"retain": "failed"},
+                kind="conversation",
+                subject="turn",
                 session_id="session",
                 turn_id="turn",
                 error="TimeoutError",
@@ -42,6 +44,8 @@ async def test_operation_routes_expose_stages_without_source_text():
 
     assert rows[0]["session_id"] == "session"
     assert rows[0]["stages"] == {"retain": "failed"}
+    assert rows[0]["kind"] == "conversation"
+    assert rows[0]["subject"] == "turn"
     assert "content" not in rows[0]
 
 

@@ -2852,6 +2852,13 @@ async def test_scoped_memory_operations_and_observation_history(scope_database):
     assert await admin.retry_operation(str(operation_id)) == 3
     retried = await admin.get_operation(str(operation_id))
     assert retried.status == "pending" and retried.error is None
+    async with sessions() as session:
+        retried_job = await session.get(
+            ConsolidationJob, ('["project:a"]', "bank-a")
+        )
+        assert retried_job.iterations == 0
+        assert retried_job.tokens_used == 0
+        assert retried_job.cost_microusd == 0
     assert await admin.cancel_operation(str(operation_id)) == 3
     cancelled = await admin.get_operation(str(operation_id))
     assert cancelled.error == "cancelled_by_admin"

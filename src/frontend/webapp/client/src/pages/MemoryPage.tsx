@@ -11,6 +11,9 @@ import {
 import {
   formatOperationStages,
   memorySourceHref,
+  operationActions,
+  operationStatusLabel,
+  operationSubject,
   parsePolicyText,
   validateDirectiveFields,
   validateModelFields,
@@ -118,20 +121,28 @@ export function MemoryPage() {
       <section style={{ ...panel, marginBottom: 16 }}>
         <h2>任务诊断</h2>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th>状态</th><th>会话 / 轮次</th><th>阶段</th><th>错误</th><th>操作</th></tr></thead>
+          <thead><tr><th>状态</th><th>对象</th><th>阶段</th><th>错误</th><th>操作</th></tr></thead>
           <tbody>
-            {operations.map((operation) => (
-              <tr key={operation.id}>
-                <td>{operation.status}</td>
-                <td>{operation.session_id || '—'} / {operation.turn_id || '—'}</td>
-                <td>{formatOperationStages(operation.stages)}</td>
-                <td>{operation.error || '—'}</td>
-                <td>
-                  <button onClick={() => void api.retryMemoryOperation(operation.id).then(load)}>重试</button>{' '}
-                  <button onClick={() => void api.cancelMemoryOperation(operation.id).then(load)}>取消</button>
-                </td>
-              </tr>
-            ))}
+            {operations.map((operation) => {
+              const actions = operationActions(operation.status)
+              return (
+                <tr key={operation.id}>
+                  <td>{operationStatusLabel(operation.status)}</td>
+                  <td>
+                    {operation.kind === 'document' && operation.document_id ? (
+                      <Link to={memorySourceHref(operation.document_id)}>{operationSubject(operation)}</Link>
+                    ) : operationSubject(operation)}
+                  </td>
+                  <td>{formatOperationStages(operation.stages)}</td>
+                  <td>{operation.error || '—'}</td>
+                  <td>
+                    {actions.retry && <button onClick={() => void api.retryMemoryOperation(operation.id).then(load)}>重试</button>}{' '}
+                    {actions.cancel && <button onClick={() => void api.cancelMemoryOperation(operation.id).then(load)}>取消</button>}
+                    {!actions.retry && !actions.cancel && '—'}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </section>

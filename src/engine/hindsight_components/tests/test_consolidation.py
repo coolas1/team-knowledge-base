@@ -103,6 +103,23 @@ def test_action_validation_rejects_cross_scope_or_unread_targets(
         )
 
 
+def test_action_validation_rejects_unbounded_model_output():
+    with pytest.raises(ValueError, match="action limit"):
+        validate_actions(
+            {
+                "actions": [
+                    {"action": "create", "text": str(index), "source_fact_ids": ["x"]}
+                    for index in range(3)
+                ]
+            },
+            scope=MemoryScope(bank_id="a", observation_scopes=(("user:1",),)),
+            write_scope=("user:1",),
+            facts={"x": evidence("x")},
+            observations={},
+            max_actions=2,
+        )
+
+
 async def test_worker_reports_failure_and_does_not_publish_invalid_model_action():
     fact_id = str(uuid.uuid4())
     claim = ConsolidationClaim("a", "[]", (), str(uuid.uuid4()), 0, 1, 1, 0, 0, 0)
@@ -151,6 +168,54 @@ async def test_worker_reports_failure_and_does_not_publish_invalid_model_action(
         ).run_once()
     assert repository.failed
     assert not repository.published
+
+
+async def test_worker_repairs_one_invalid_model_plan_before_failing_job():
+    fact_id = str(uuid.uuid4())
+    claim = ConsolidationClaim("a", "[]", (), str(uuid.uuid4()), 0, 1, 1, 0, 0, 0)
+
+    class Repository:
+        published = False
+
+        async def claim(self, _options):
+            return claim
+
+        async def read_set(self, *_args):
+            return ConsolidationReadSet(
+                {fact_id: EvidenceVersion(fact_id, 1, "a", ())}, {}, {}, {}, ()
+            )
+
+        async def publish(self, *_args, **_kwargs):
+            self.published = True
+            return None
+
+        async def fail(self, *_args):
+            raise AssertionError("a repaired plan must not fail")
+
+    class Providers:
+        calls = 0
+
+        async def json(self, *_args, **_kwargs):
+            self.calls += 1
+            source_id = "unknown" if self.calls == 1 else fact_id
+            return {
+                "actions": [
+                    {
+                        "action": "create",
+                        "text": "verified",
+                        "source_fact_ids": [source_id],
+                    }
+                ]
+            }
+
+        async def embed(self, texts):
+            return [[1.0] for _ in texts]
+
+    repository = Repository()
+    providers = Providers()
+    await ConsolidationWorker(repository, providers, ConsolidationOptions()).run_once()
+    assert providers.calls == 2
+    assert repository.published
 
 
 async def test_worker_accounts_provider_usage_and_configured_cost():
@@ -240,7 +305,7 @@ async def test_semantic_dedup_requires_both_threshold_and_equivalence(
         async def embed(self, _texts):
             return [[1.0, 0.0]]
 
-        async def json(self, *_args):
+        async def json(self, *_args, **_kwargs):
             return {"equivalent": equivalent}
 
     worker = ConsolidationWorker(
@@ -253,6 +318,59 @@ async def test_semantic_dedup_requires_both_threshold_and_equivalence(
     if equivalent:
         assert result[0].action.observation_id == observation_id
         assert result[0].expected_version == 3
+
+
+async def test_semantic_dedup_batches_candidate_verdicts():
+    fact_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    observation_id = str(uuid.uuid4())
+    actions = tuple(
+        ValidatedAction(
+            ConsolidationAction(
+                action="create", text=f"proposal {index}", source_fact_ids=[fact_id]
+            ),
+            None,
+            ((fact_id, 1),),
+        )
+        for index, fact_id in enumerate(fact_ids)
+    )
+    read_set = ConsolidationReadSet(
+        facts={item: EvidenceVersion(item, 1, "a", ()) for item in fact_ids},
+        fact_rows={},
+        observations={
+            observation_id: ObservationVersion(
+                observation_id, 1, "a", (), "active", tuple(fact_ids)
+            )
+        },
+        observation_rows={
+            observation_id: MemoryUnit(
+                id=uuid.UUID(observation_id),
+                text="existing",
+                state="active",
+                embedding=[1.0, 0.0],
+            )
+        },
+        deleted_fact_ids=(),
+    )
+
+    class Providers:
+        json_calls = 0
+        embed_calls = 0
+
+        async def embed(self, texts):
+            self.embed_calls += 1
+            return [[1.0, 0.0] for _ in texts]
+
+        async def json(self, *_args, **_kwargs):
+            self.json_calls += 1
+            return {"equivalent_indices": [0, 1]}
+
+    providers = Providers()
+    result = await ConsolidationWorker(
+        None, providers, ConsolidationOptions(semantic_threshold=0.8)
+    )._semantic_coalesce(actions, read_set)
+    assert providers.embed_calls == 1
+    assert providers.json_calls == 1
+    assert [item.action.action for item in result] == ["update", "update"]
 
 
 async def test_semantic_dedup_merges_update_target_and_preserves_both_histories():
@@ -292,7 +410,7 @@ async def test_semantic_dedup_merges_update_target_and_preserves_both_histories(
         async def embed(self, _texts):
             return [[1.0, 0.0]]
 
-        async def json(self, *_args):
+        async def json(self, *_args, **_kwargs):
             return {"equivalent": True}
 
     read_set = ConsolidationReadSet(

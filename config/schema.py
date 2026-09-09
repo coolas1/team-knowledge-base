@@ -20,6 +20,8 @@ class MemoryCfg(BaseModel):
     consolidation_observation_limit: int = Field(default=1000, ge=1)
     consolidation_max_iterations: int = Field(default=8, ge=1, le=100)
     consolidation_max_tokens: int = Field(default=32000, ge=1)
+    consolidation_llm_timeout_seconds: float = Field(default=180, gt=0, le=600)
+    consolidation_max_output_tokens: int = Field(default=65536, ge=1)
     consolidation_max_cost_usd: float = Field(default=0, ge=0)
     consolidation_input_cost_usd_per_million: float = Field(default=0, ge=0)
     consolidation_output_cost_usd_per_million: float = Field(default=0, ge=0)
