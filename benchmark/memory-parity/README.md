@@ -74,3 +74,12 @@ extended request paths through the production `RecallEngine` with deterministic
 ports. It reports p50/p95 and output/model token use without network variance.
 This measures contract overhead; PostgreSQL tests prove filter, freshness, source
 deletion, scope, and expansion behavior, while B7 retains the full relevance gate.
+
+### B7 aggregate report
+
+`build_full_report.py` verifies and combines the immutable one-pass model outputs
+with the real service migration/fault gates. It emits one row per corpus case and
+engine, category accuracy, failure rate, direct-model p50/p95 and token usage. Rows
+that use the pinned upstream source contract instead of an executed model call are
+labelled `upstream_reference_contract`; the report never invents latency or usage
+for them.

@@ -141,6 +141,35 @@ class HindsightQueryService:
     async def delete_directive(self, directive_id: str) -> bool:
         return await self._core.delete_directive(directive_id)
 
+    async def list_memory_operations(self, **filters):
+        return await self._core.list_memory_operations(**filters)
+
+    async def get_memory_operation(self, operation_id: str):
+        return await self._core.get_memory_operation(operation_id)
+
+    async def retry_memory_operation(self, operation_id: str) -> int:
+        return await self._core.retry_memory_operation(operation_id)
+
+    async def cancel_memory_operation(self, operation_id: str) -> int:
+        return await self._core.cancel_memory_operation(operation_id)
+
+    async def list_memory_facts(self, *, limit: int = 100):
+        return await self._core.list_memory_facts(limit=limit)
+
+    async def get_observation_detail(self, observation_id: str):
+        return await self._core.get_observation_detail(observation_id)
+
+    async def correct_memory_entity(self, source_entity_id, memory_ids, **kwargs):
+        return await self._core.correct_entity(source_entity_id, memory_ids, **kwargs)
+
+    async def get_memory_policy(self):
+        return await self._core.get_memory_policy()
+
+    async def update_memory_policy(self, policy, *, expected_version: int):
+        return await self._core.update_memory_policy(
+            policy, expected_version=expected_version
+        )
+
     async def expand_memory(
         self, request: MemoryExpansionRequest
     ) -> MemoryExpansionResult | None:

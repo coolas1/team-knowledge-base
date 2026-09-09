@@ -219,7 +219,9 @@ class MentalModel(BankOwned, Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    source_query: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_query: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
@@ -300,6 +302,12 @@ class MentalModelRefreshJob(BankOwned, Base):
         Text, primary_key=True, default="default-team", server_default="default-team"
     )
     model_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    operation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        default=uuid.uuid4,
+        server_default=sql_text("gen_random_uuid()"),
+    )
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default="pending", server_default="pending"
     )
@@ -552,6 +560,12 @@ class ConsolidationJob(BankOwned, Base):
     bank_id: Mapped[str] = mapped_column(
         Text, primary_key=True, default="default-team", server_default="default-team"
     )
+    operation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        default=uuid.uuid4,
+        server_default=sql_text("gen_random_uuid()"),
+    )
     write_scope: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, default=list
     )
@@ -591,6 +605,12 @@ class ConsolidationJob(BankOwned, Base):
         default=_utcnow,
         server_default=sql_text("now()"),
         onupdate=_utcnow,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
     )
 
     __table_args__ = (

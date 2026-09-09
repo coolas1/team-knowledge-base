@@ -28,6 +28,8 @@ class HindsightService:
         options: HindsightOptions | None = None,
         mental_models=None,
         directives=None,
+        admin=None,
+        policies=None,
     ) -> None:
         if options is None:
             import os
@@ -62,6 +64,22 @@ class HindsightService:
                 scope=getattr(repository, "scope", None),
             )
         self._directives = directives
+        if admin is None:
+            from .memory_admin import PostgresMemoryAdminRepository
+
+            admin = PostgresMemoryAdminRepository(
+                getattr(repository, "_session_factory", None),
+                scope=getattr(repository, "scope", None),
+            )
+        self._admin = admin
+        if policies is None:
+            from src.engine.components.store.scope_policy import ScopePolicyStore
+
+            policies = ScopePolicyStore(
+                getattr(repository, "_session_factory", None),
+                scope=getattr(repository, "scope", None),
+            )
+        self._policies = policies
         self._reflect = ReflectEngine(
             self._recall, repository, providers, self.options, directives
         )
@@ -73,6 +91,8 @@ class HindsightService:
             self.options,
             mental_models=self._mental_models.with_scope(scope),
             directives=self._directives.with_scope(scope),
+            admin=self._admin.with_scope(scope),
+            policies=self._policies.with_scope(scope),
         )
 
     def with_lease(self, document_id: str, lease_token: str):
@@ -82,6 +102,8 @@ class HindsightService:
             self.options,
             mental_models=self._mental_models,
             directives=self._directives,
+            admin=self._admin,
+            policies=self._policies,
         )
 
     async def create_mental_model(self, definition):
@@ -113,6 +135,30 @@ class HindsightService:
 
     async def delete_directive(self, directive_id: str) -> bool:
         return await self._directives.delete(directive_id)
+
+    async def list_memory_operations(self, **filters):
+        return await self._admin.list_operations(**filters)
+
+    async def get_memory_operation(self, operation_id: str):
+        return await self._admin.get_operation(operation_id)
+
+    async def retry_memory_operation(self, operation_id: str) -> int:
+        return await self._admin.retry_operation(operation_id)
+
+    async def cancel_memory_operation(self, operation_id: str) -> int:
+        return await self._admin.cancel_operation(operation_id)
+
+    async def list_memory_facts(self, *, limit: int = 100):
+        return await self._admin.list_facts(limit=limit)
+
+    async def get_observation_detail(self, observation_id: str):
+        return await self._admin.observation_detail(observation_id)
+
+    async def get_memory_policy(self):
+        return await self._policies.read()
+
+    async def update_memory_policy(self, policy, *, expected_version: int):
+        return await self._policies.publish(policy, expected_version=expected_version)
 
     async def retain(
         self,

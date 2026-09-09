@@ -127,6 +127,34 @@ not rewrite `last-deployed`: while `origin/main` stays put, the timer no-ops
 and the rollback sticks; the next merge deploys forward again. To pin a
 rollback longer, `systemctl --user stop team-kb-cicd.timer`.
 
+## Memory capability rollout
+
+Release these additive memory changes through the pipeline gate and image build.
+Do not run schema or compose changes manually on the LAN stack.
+
+1. Keep every new memory feature flag disabled while the new image starts. The
+   startup migration adds scope, operation, observation, model and directive data
+   without deleting legacy rows. Confirm `/health` and `/api/memory/operations`.
+2. Enable the dependency chain for a test scope in order: `scope`,
+   `reliable_retention`, `consolidation`, `retrieval`, `mental_models`, then
+   `adaptive_reflect`. Keep consolidation and model concurrency at 1 for the first
+   watermark. Invalid combinations fail configuration validation before serving.
+3. Follow a completed test turn in the memory page or
+   `/api/memory/operations?session_id=...&turn_id=...`. Confirm retain,
+   consolidation and optional model-refresh stages, then verify an observation's
+   current sources and history. Run the resumable historical delivery/backfill
+   command only with an explicit start point and test scope.
+4. Expand scope traffic only after pending/failed counts stabilize and deleted
+   test evidence cannot be expanded. The pipeline health check remains the deploy
+   boundary; no management action is a substitute for it.
+
+For a compatible rollback, first disable `adaptive_reflect`, the model worker and
+the consolidation worker, then disable their feature flags in reverse dependency
+order. Use `cicd/rollback.sh <sha>` with a scope-aware preceding image. Preserve
+new tables, operation rows, observation history, queued watermarks and tombstones.
+Never roll back to a reader that ignores scope or deletion tombstones after
+isolated traffic has been enabled. Retry pending work after rolling forward.
+
 ## Ownership rule
 
 **The pipeline is the sole operator of the `team-kb` compose project.** Never

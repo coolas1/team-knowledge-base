@@ -2687,3 +2687,180 @@ async def test_scoped_directives_are_separate_from_memory_text(scope_database):
         "Always expose uncertainty",
         "Legacy trusted rule",
     ]
+
+
+async def test_scoped_memory_operations_and_observation_history(scope_database):
+    from src.engine.components.store.retention_migration import migrate_retention
+    from src.engine.hindsight_components.memory_admin import (
+        PostgresMemoryAdminRepository,
+    )
+    from src.engine.hindsight_components.models import (
+        ConsolidationJob,
+        ConversationMemorySource,
+        HindsightDocumentState,
+        ObservationEvidence,
+        ObservationHistory,
+        ObservationRecord,
+    )
+
+    engine, schema = scope_database
+    await migrate_retention(engine, schema=schema)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    operation_id = uuid.uuid4()
+    other_operation_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    other_document_id = uuid.uuid4()
+    fact_id = uuid.uuid4()
+    observation_id = uuid.uuid4()
+    async with sessions() as session, session.begin():
+        session.add_all(
+            [
+                Document(
+                    id=document_id,
+                    bank_id="bank-a",
+                    title="turn",
+                    file_type="conversation",
+                    status="indexed",
+                    raw_text="private source",
+                    tags=["project:a"],
+                ),
+                Document(
+                    id=other_document_id,
+                    bank_id="bank-b",
+                    title="other",
+                    file_type="conversation",
+                    status="indexed",
+                    raw_text="other private source",
+                    tags=["project:b"],
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                ConversationMemorySource(
+                    document_id=document_id,
+                    bank_id="bank-a",
+                    operation_id=operation_id,
+                    session_id="session",
+                    turn_id="turn",
+                    status="failed",
+                    attempts=2,
+                    error_msg="TimeoutError",
+                    stage_results={"delivery": "completed", "retain": "failed"},
+                ),
+                ConversationMemorySource(
+                    document_id=other_document_id,
+                    bank_id="bank-b",
+                    operation_id=other_operation_id,
+                    session_id="session",
+                    turn_id="turn",
+                    status="failed",
+                ),
+                HindsightDocumentState(
+                    document_id=document_id,
+                    bank_id="bank-a",
+                    operation_id=operation_id,
+                    status="failed",
+                    error_msg="TimeoutError",
+                    stage_results={"extract": "failed"},
+                ),
+                ConsolidationJob(
+                    bank_id="bank-a",
+                    scope_key='["project:a"]',
+                    write_scope=["project:a"],
+                    operation_id=operation_id,
+                    status="failed",
+                    pending_through=2,
+                    processed_through=1,
+                    attempts=2,
+                    tokens_used=15,
+                    cost_microusd=4,
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                MemoryUnit(
+                    id=fact_id,
+                    bank_id="bank-a",
+                    document_id=document_id,
+                    chunk_index=0,
+                    memory_index=0,
+                    memory_type="world",
+                    text="Current source fact",
+                    source_text="private source",
+                    scope_tags=["project:a"],
+                    tags=["project:a"],
+                ),
+                MemoryUnit(
+                    id=observation_id,
+                    bank_id="bank-a",
+                    document_id=document_id,
+                    chunk_index=-1,
+                    memory_index=1,
+                    memory_type="observation",
+                    text="Current synthesis",
+                    source_text="private source",
+                    scope_tags=["project:a"],
+                    tags=["project:a"],
+                    source_memory_ids=[fact_id],
+                ),
+                ObservationRecord(
+                    memory_id=observation_id,
+                    bank_id="bank-a",
+                    version=2,
+                    normalized_text="current synthesis",
+                    write_scope=["project:a"],
+                ),
+                ObservationHistory(
+                    observation_id=observation_id,
+                    bank_id="bank-a",
+                    version=1,
+                    text="Old synthesis",
+                    freshness="active",
+                    change_kind="changed",
+                    reason="new evidence",
+                    evidence_snapshot=[str(fact_id)],
+                ),
+                ObservationEvidence(
+                    observation_id=observation_id,
+                    fact_id=fact_id,
+                    bank_id="bank-a",
+                    fact_version=1,
+                    active=True,
+                ),
+            ]
+        )
+
+    admin = PostgresMemoryAdminRepository(
+        sessions,
+        scope=MemoryScope("bank-a", TagFilter(("project:a",), "all_strict")),
+    )
+    operations = await admin.list_operations(session_id="session", turn_id="turn")
+    assert len(operations) == 1
+    assert operations[0].id == str(operation_id)
+    assert operations[0].stages["extract"] == "failed"
+    assert operations[0].stages["consolidation"] == "failed"
+    assert operations[0].tokens == 15 and operations[0].cost_microusd == 4
+    assert (
+        await PostgresMemoryAdminRepository(
+            sessions, scope=MemoryScope("bank-b")
+        ).get_operation(str(operation_id))
+        is None
+    )
+
+    assert await admin.retry_operation(str(operation_id)) == 3
+    retried = await admin.get_operation(str(operation_id))
+    assert retried.status == "pending" and retried.error is None
+    assert await admin.cancel_operation(str(operation_id)) == 3
+    cancelled = await admin.get_operation(str(operation_id))
+    assert cancelled.error == "cancelled_by_admin"
+
+    detail = await admin.observation_detail(str(observation_id))
+    assert detail["history"][0]["text"] == "Old synthesis"
+    assert detail["sources"][0]["id"] == str(fact_id)
+    assert "private source" not in str(detail)
+    async with sessions() as session, session.begin():
+        fact = await session.get(MemoryUnit, fact_id)
+        fact.state = "deleted"
+    assert (await admin.observation_detail(str(observation_id)))["sources"] == []

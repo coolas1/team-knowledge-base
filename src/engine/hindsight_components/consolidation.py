@@ -93,6 +93,7 @@ class ConsolidationClaim:
     iterations: int
     tokens_used: int
     cost_microusd: int
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +188,7 @@ class PostgresConsolidationRepository:
                     iterations=job.iterations,
                     tokens_used=job.tokens_used,
                     cost_microusd=job.cost_microusd,
+                    operation_id=str(job.operation_id),
                 )
 
     async def read_set(
@@ -430,6 +432,11 @@ class PostgresConsolidationRepository:
                 model_id=model.id,
                 requested_watermark=claim.claimed_through,
                 status="pending",
+                operation_id=(
+                    uuid.UUID(claim.operation_id)
+                    if claim.operation_id
+                    else uuid.uuid4()
+                ),
             )
             await session.execute(
                 statement.on_conflict_do_update(
@@ -445,6 +452,11 @@ class PostgresConsolidationRepository:
                         "lease_expires_at": None,
                         "error_msg": None,
                         "updated_at": func.now(),
+                        "operation_id": (
+                            uuid.UUID(claim.operation_id)
+                            if claim.operation_id
+                            else MentalModelRefreshJob.operation_id
+                        ),
                     },
                     where=MentalModelRefreshJob.requested_watermark
                     < claim.claimed_through,

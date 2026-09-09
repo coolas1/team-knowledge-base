@@ -25,6 +25,9 @@ class ScopePolicyStore:
         self._sessions = session_factory
         self.scope = scope or MemoryScope()
 
+    def with_scope(self, scope: MemoryScope):
+        return ScopePolicyStore(self._sessions, scope=scope)
+
     async def read(self) -> PolicySnapshot:
         async with self._sessions() as session:
             row = (

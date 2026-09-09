@@ -1025,6 +1025,12 @@ class PostgresMemoryRepository:
         if not jobs or not (added or removed):
             return
         await session.flush()
+        operation_id = await session.scalar(
+            select(HindsightDocumentState.operation_id).where(
+                HindsightDocumentState.document_id == document_id,
+                HindsightDocumentState.bank_id == self.scope.bank_id,
+            )
+        )
         for scope_key, write_scope in jobs.items():
             pending_through = await session.scalar(
                 select(func.max(ConsolidationFactEvent.id)).where(
@@ -1045,6 +1051,7 @@ class PostgresMemoryRepository:
                     pending_through=pending_through,
                     processed_through=0,
                     available_at=func.now(),
+                    operation_id=operation_id or uuid.uuid4(),
                 )
                 .on_conflict_do_update(
                     index_elements=[
@@ -1065,6 +1072,7 @@ class PostgresMemoryRepository:
                         "lease_token": None,
                         "lease_expires_at": None,
                         "updated_at": func.now(),
+                        "operation_id": operation_id or ConsolidationJob.operation_id,
                     },
                 )
             )

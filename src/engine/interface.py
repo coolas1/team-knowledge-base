@@ -387,6 +387,37 @@ class KnowledgeQuery(Protocol):
 
     async def delete_directive(self, directive_id: str) -> bool: ...
 
+    async def list_memory_operations(
+        self,
+        *,
+        session_id: str | None = None,
+        turn_id: str | None = None,
+        limit: int = 100,
+    ) -> list: ...
+
+    async def get_memory_operation(self, operation_id: str): ...
+
+    async def retry_memory_operation(self, operation_id: str) -> int: ...
+
+    async def cancel_memory_operation(self, operation_id: str) -> int: ...
+
+    async def list_memory_facts(self, *, limit: int = 100) -> list[dict]: ...
+
+    async def get_observation_detail(self, observation_id: str) -> dict | None: ...
+
+    async def correct_memory_entity(
+        self,
+        source_entity_id: str,
+        memory_ids: list[str],
+        *,
+        target_entity_id: str | None = None,
+        reason: str,
+    ): ...
+
+    async def get_memory_policy(self): ...
+
+    async def update_memory_policy(self, policy, *, expected_version: int): ...
+
 
 class ConversationMemory(Protocol):
     """Optional internal capability for automatic conversation memory."""

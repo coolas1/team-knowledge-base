@@ -1,0 +1,34 @@
+{
+  "status": "passed",
+  "database": "disposable PostgreSQL 17 with pgvector",
+  "initial_run": {
+    "selected_tests": 10,
+    "passed": 9,
+    "failed": 1,
+    "duration_seconds": 11.36,
+    "failure": "A preceding-version mental-model INSERT exposed a missing source_query server default."
+  },
+  "targeted_rerun": {
+    "selected_tests": 1,
+    "passed": 1,
+    "duration_seconds": 1.76,
+    "change": "Added the additive migration and fresh schema server default; no other test was repeated."
+  },
+  "gates": {
+    "historical_delivery_replay": true,
+    "append_and_request_idempotency": true,
+    "resumable_backfill_and_counts": true,
+    "fresh_and_legacy_migration": true,
+    "observation_history_and_tombstones": true,
+    "mental_model_source_deletion_fence": true,
+    "directive_scope_separation": true,
+    "operation_scope_and_lease_fencing": true,
+    "compatible_preceding_writer": true,
+    "rollback_flags_preserve_scoped_data": true
+  },
+  "notes": [
+    "Every test used a fresh schema and dropped only that generated schema.",
+    "The disposable service was isolated from the LAN deployment.",
+    "The one concrete failure received one targeted rerun after its compatibility fix."
+  ]
+}

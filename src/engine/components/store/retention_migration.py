@@ -15,6 +15,33 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": f"tkb-retention-migration:{schema}"},
         )
+        for job_table in ("consolidation_jobs", "mental_model_refresh_jobs"):
+            qualified = f'"{schema}"."{job_table}"'
+            if (
+                await conn.scalar(
+                    text("SELECT to_regclass(:name)"), {"name": qualified}
+                )
+                is not None
+            ):
+                await conn.execute(
+                    text(
+                        f"ALTER TABLE {qualified} ADD COLUMN IF NOT EXISTS operation_id "
+                        "UUID NOT NULL DEFAULT gen_random_uuid()"
+                    )
+                )
+        consolidation_table = f'"{schema}"."consolidation_jobs"'
+        if (
+            await conn.scalar(
+                text("SELECT to_regclass(:name)"), {"name": consolidation_table}
+            )
+            is not None
+        ):
+            await conn.execute(
+                text(
+                    f"ALTER TABLE {consolidation_table} ADD COLUMN IF NOT EXISTS "
+                    "created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+                )
+            )
         # ``create_all`` does not add newly introduced tables on an existing
         # deployment. Create the B3 sidecar tables in dependency order here.
         from src.engine.hindsight_components.models import (
@@ -77,6 +104,11 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
                         f"ALTER TABLE {mental_table} ADD COLUMN IF NOT EXISTS {column} {definition.split(' ', 1)[1]}"
                     )
                 )
+            # Keep the additive schema writable by the immediately preceding
+            # model, whose INSERT statement does not include source_query.
+            await conn.execute(
+                text(f"ALTER TABLE {mental_table} ALTER COLUMN source_query SET DEFAULT ''")
+            )
             await conn.execute(
                 text(
                     f"UPDATE {mental_table} SET source_query=description, "

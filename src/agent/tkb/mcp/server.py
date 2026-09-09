@@ -417,6 +417,34 @@ async def refresh_mental_model(model_id: str) -> dict[str, bool]:
     return {"enqueued": await _get_query_service().refresh_mental_model(model_id)}
 
 
+async def list_memory_operations(
+    session_id: str | None = None,
+    turn_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """List scoped memory pipeline status without returning source text."""
+    rows = await _get_query_service().list_memory_operations(
+        session_id=session_id, turn_id=turn_id, limit=limit
+    )
+    return [asdict(row) for row in rows]
+
+
+async def get_memory_operation(operation_id: str) -> dict[str, Any]:
+    """Read one scoped operation and its stage diagnostics."""
+    row = await _get_query_service().get_memory_operation(operation_id)
+    return asdict(row) if row is not None else {"error": "operation not found"}
+
+
+async def retry_memory_operation(operation_id: str) -> dict[str, int]:
+    """Retry recoverable stages of one scoped memory operation."""
+    return {"changed": await _get_query_service().retry_memory_operation(operation_id)}
+
+
+async def cancel_memory_operation(operation_id: str) -> dict[str, int]:
+    """Fence active workers and cancel recoverable stages of one scoped operation."""
+    return {"changed": await _get_query_service().cancel_memory_operation(operation_id)}
+
+
 async def search_knowledge_fast(
     query: str,
     top_k: int = 5,
@@ -621,6 +649,10 @@ _MEMORY_TOOL_NAMES = (
     "save_mental_model",
     "delete_mental_model",
     "refresh_mental_model",
+    "list_memory_operations",
+    "get_memory_operation",
+    "retry_memory_operation",
+    "cancel_memory_operation",
 )
 
 _memory_tools_registered = False
@@ -640,6 +672,10 @@ def _register_memory_tools() -> None:
     mcp.tool()(save_mental_model)
     mcp.tool()(delete_mental_model)
     mcp.tool()(refresh_mental_model)
+    mcp.tool()(list_memory_operations)
+    mcp.tool()(get_memory_operation)
+    mcp.tool()(retry_memory_operation)
+    mcp.tool()(cancel_memory_operation)
     _memory_tools_registered = True
 
 

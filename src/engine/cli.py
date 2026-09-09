@@ -3,6 +3,7 @@
 No business logic - every subcommand maps 1:1 to a KnowledgeBase method and
 prints JSON. Usage: python -m src.engine.cli <subcommand> ...
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,6 +37,27 @@ def _print(obj: Any) -> None:
 
 
 async def _run(kb: KnowledgeBase, args: argparse.Namespace) -> int:
+    if args.command.startswith("memory-operation"):
+        from src.engine.hindsight_components.query import build_query_service
+
+        service = build_query_service()
+        if args.command == "memory-operations":
+            _print(
+                await service.list_memory_operations(
+                    session_id=args.session_id,
+                    turn_id=args.turn_id,
+                    limit=args.limit,
+                )
+            )
+        elif args.command == "memory-operation-get":
+            _print(await service.get_memory_operation(args.operation_id))
+        elif args.command == "memory-operation-retry":
+            _print({"changed": await service.retry_memory_operation(args.operation_id)})
+        else:
+            _print(
+                {"changed": await service.cancel_memory_operation(args.operation_id)}
+            )
+        return 0
     if args.command == "ingest":
         ref = await kb.ingest(
             __import__("src.engine.interface", fromlist=["IngestSource"]).IngestSource(
@@ -55,9 +77,7 @@ async def _run(kb: KnowledgeBase, args: argparse.Namespace) -> int:
             sources.append(IngestSource(name=path.name, data=path.read_bytes()))
         refs = await kb.ingest_batch(sources)
         # 入库是后台任务；轮询直到终态（indexed/failed）或超时
-        pending = {
-            ref.id for ref in refs if ref.status not in ("indexed", "failed")
-        }
+        pending = {ref.id for ref in refs if ref.status not in ("indexed", "failed")}
         deadline = time.monotonic() + args.timeout
         while pending and time.monotonic() < deadline:
             await asyncio.sleep(0.5)
@@ -121,6 +141,17 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--page-size", type=int, default=20)
     s = sub.add_parser("remove")
     s.add_argument("--doc-id", required=True)
+    s = sub.add_parser("memory-operations")
+    s.add_argument("--session-id")
+    s.add_argument("--turn-id")
+    s.add_argument("--limit", type=int, default=100)
+    for name in (
+        "memory-operation-get",
+        "memory-operation-retry",
+        "memory-operation-cancel",
+    ):
+        s = sub.add_parser(name)
+        s.add_argument("--operation-id", required=True)
     return p
 
 
