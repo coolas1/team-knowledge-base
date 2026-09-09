@@ -69,6 +69,7 @@ export function MemoryPage() {
   const [policy, setPolicy] = useState<{ version: number; policy: Record<string, unknown> }>()
   const [policyText, setPolicyText] = useState('')
   const [selected, setSelected] = useState<unknown>()
+  const [selectedFact, setSelectedFact] = useState<MemoryFact>()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState('')
@@ -147,6 +148,26 @@ export function MemoryPage() {
     await runAction('save-policy', async () => {
       await api.updateMemoryPolicy(policy.version, parsePolicyText(policyText))
     })
+  }
+
+  const openObservation = async (fact: MemoryFact) => {
+    setSelectedFact(fact)
+    setSelected(undefined)
+    setWorking(`fact-${fact.id}`)
+    setError('')
+    try {
+      setSelected(await api.getObservation(fact.id))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '证据详情加载失败')
+      setSelectedFact(undefined)
+    } finally {
+      setWorking('')
+    }
+  }
+
+  const closeObservation = () => {
+    setSelectedFact(undefined)
+    setSelected(undefined)
   }
 
   const activeTasks = operations.filter((item) => ['pending', 'processing'].includes(item.status)).length
@@ -245,7 +266,7 @@ export function MemoryPage() {
                   <div className="memory-fact-list">
                     {facts.map((fact) => (
                       <article className="memory-fact-card" key={fact.id}>
-                        <button className="memory-fact-open" type="button" onClick={() => fact.type === 'observation' && void runAction(`fact-${fact.id}`, async () => setSelected(await api.getObservation(fact.id)))} disabled={fact.type !== 'observation'}>
+                        <button className="memory-fact-open" type="button" onClick={() => fact.type === 'observation' && void openObservation(fact)} disabled={fact.type !== 'observation'} aria-haspopup={fact.type === 'observation' ? 'dialog' : undefined}>
                           <span className="memory-fact-head"><span className={`memory-status ${statusClass(fact.freshness)}`}>{fact.type}</span><small>{formatDate(fact.mentioned_at)}</small></span>
                           <span className="memory-fact-text">{fact.text}</span>
                         </button>
@@ -254,7 +275,6 @@ export function MemoryPage() {
                     ))}
                     {facts.length === 0 && <EmptyState icon={<Database size={24} />} title="还没有记忆事实" detail="新对话或新文件完成提取后，可召回事实会出现在这里。" />}
                   </div>
-                  {selected != null && <div className="memory-evidence-panel"><div><strong>Observation 证据详情</strong><button type="button" onClick={() => setSelected(undefined)}>关闭</button></div><pre data-testid="observation-detail">{JSON.stringify(selected, null, 2)}</pre></div>}
                 </section>
               )}
 
@@ -315,6 +335,26 @@ export function MemoryPage() {
             </>
           )}
         </div>
+        {selectedFact && (
+          <>
+            <button className="memory-drawer-backdrop" type="button" aria-label="关闭证据详情" onClick={closeObservation} />
+            <aside className="memory-evidence-drawer" role="dialog" aria-modal="true" aria-labelledby="memory-evidence-title">
+              <header>
+                <div>
+                  <span className="memory-model-icon"><Database size={18} /></span>
+                  <div><h2 id="memory-evidence-title">Observation 证据链</h2><p>{selectedFact.text}</p></div>
+                </div>
+                <button type="button" onClick={closeObservation} aria-label="关闭证据详情" title="关闭"><XCircle size={19} /></button>
+              </header>
+              <div className="memory-evidence-source"><FileText size={14} />来源：<Link to={memorySourceHref(selectedFact.document_id)}>{selectedFact.document_title}</Link></div>
+              {selected == null ? (
+                <div className="memory-evidence-loading"><LoaderCircle className="memory-spin" size={19} />正在加载证据链</div>
+              ) : (
+                <pre data-testid="observation-detail">{JSON.stringify(selected, null, 2)}</pre>
+              )}
+            </aside>
+          </>
+        )}
       </main>
     </div>
   )
