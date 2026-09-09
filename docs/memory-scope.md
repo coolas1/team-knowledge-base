@@ -224,3 +224,22 @@ Capacity or budget exhaustion remains visible on the durable scope job. Migratio
 backfills legacy observations as version 1, reconstructs their evidence edges, and
 queues old atomic facts at a resumable cursor. Rollback must retain observation,
 history, evidence, job, event and tombstone tables so forgotten data cannot return.
+
+## Retrieval filters and evidence expansion (B4)
+
+Recall accepts memory/source types, tag expressions, an aware reference time,
+per-score minimums, observation preference, include controls, and request budgets.
+Every semantic, keyword, graph, and temporal branch uses the same repository
+filter. Requested result, candidate, token, and deadline budgets are intersected
+with server maxima; a caller cannot raise them.
+
+Recall evidence includes mention/update time, active or stale freshness, stale
+reason, and optional current source facts. Original chunk/document text is omitted
+unless requested. `expand_memory` resolves a memory ID again under the trusted
+scope, accepts only active/stale heads and indexed sources, removes tombstoned
+facts, and truncates the combined expansion to the server token ceiling.
+
+Pi automatic injection remains a temporary escaped untrusted system block. The
+`TKB_CONVERSATION_MEMORY_TYPES`, `TKB_CONVERSATION_MEMORY_SHOW_TYPE`, and
+`TKB_CONVERSATION_MEMORY_SHOW_SOURCE_TIME` settings control requested types and
+labels without adding recalled text to visible or retained conversation history.

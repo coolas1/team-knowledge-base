@@ -1,0 +1,24 @@
+{
+  "status": "complete",
+  "created_at": "2026-09-09T04:19:28.641626+00:00",
+  "tkb_sha": "3a68a3932fbaebf2d28ced5e16a12c84fff908fc",
+  "repetitions": 25,
+  "legacy_default": {
+    "calls": 25,
+    "p50_ms": 0.837,
+    "p95_ms": 0.938,
+    "mean_output_tokens": 30,
+    "model_tokens": 0
+  },
+  "b4_filtered": {
+    "calls": 25,
+    "p50_ms": 0.791,
+    "p95_ms": 0.934,
+    "mean_output_tokens": 30,
+    "model_tokens": 0
+  },
+  "notes": [
+    "Production RecallEngine with deterministic in-memory ports; no network or model variability.",
+    "This is a contract overhead comparison, not an upstream relevance benchmark."
+  ]
+}

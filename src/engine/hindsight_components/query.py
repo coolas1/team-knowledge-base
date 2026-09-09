@@ -10,6 +10,8 @@ from src.engine.interface import (
     KnowledgeQueryRequest,
     KnowledgeQueryResult,
     KnowledgeSource,
+    MemoryExpansionRequest,
+    MemoryExpansionResult,
 )
 
 from src.engine.hindsight_components.config import HindsightOptions
@@ -19,12 +21,16 @@ from src.engine.hindsight_components.repository import PostgresMemoryRepository
 from src.engine.hindsight_components.service import HindsightService
 from src.engine.hindsight_components.types import (
     RecallCandidate,
+    RecallFilter,
     RecallResult,
     ReflectResult,
 )
+from src.engine.scope import request_tag_filter
 
 
 class CoreQueryService(Protocol):
+    async def expand_memory(self, memory_id: str, **kwargs): ...
+
     async def recall(
         self, query: str, *, mode: str = "deep", top_k: int | None = None
     ) -> RecallResult: ...
@@ -47,12 +53,35 @@ class HindsightQueryService:
     def with_scope(self, scope):
         return HindsightQueryService(self._core.with_scope(scope))
 
+    async def expand_memory(
+        self, request: MemoryExpansionRequest
+    ) -> MemoryExpansionResult | None:
+        expanded = await self._core.expand_memory(
+            request.memory_id,
+            include=request.include,
+            max_tokens=request.max_tokens,
+        )
+        if expanded is None:
+            return None
+        return MemoryExpansionResult(
+            memory=expanded.memory,
+            chunk=expanded.chunk,
+            document=expanded.document,
+            source_facts=expanded.source_facts,
+            token_count=expanded.token_count,
+            truncated=expanded.truncated,
+        )
+
     async def query(self, request: KnowledgeQueryRequest) -> KnowledgeQueryResult:
         self._validate(request)
         strategy = self._resolve_strategy(request)
         if strategy == "recall":
+            filters = self._filters(request)
             recalled = await self._core.recall(
-                request.query, mode=request.mode, top_k=request.top_k
+                request.query,
+                mode=request.mode,
+                top_k=request.top_k,
+                **({"filters": filters} if filters is not None else {}),
             )
             grouped: defaultdict[str, list[dict]] = defaultdict(list)
             for item in recalled.results:
@@ -68,8 +97,12 @@ class HindsightQueryService:
                 trace=dict(recalled.trace),
             )
 
+        filters = self._filters(request)
         reflected = await self._core.reflect(
-            request.query, mode=request.mode, top_k=request.top_k
+            request.query,
+            mode=request.mode,
+            top_k=request.top_k,
+            **({"filters": filters} if filters is not None else {}),
         )
         return KnowledgeQueryResult(
             strategy_used="reflect",
@@ -97,6 +130,40 @@ class HindsightQueryService:
         return "reflect" if request.needs_answer else "recall"
 
     @staticmethod
+    def _filters(request: KnowledgeQueryRequest) -> RecallFilter | None:
+        extended = any(
+            (
+                request.memory_types,
+                request.source_types,
+                request.tags,
+                request.tags_match != "any",
+                request.reference_time,
+                request.min_scores,
+                request.prefer_observations,
+                request.include != ("chunks", "entities"),
+                request.include_stale,
+                request.timeout_seconds,
+                request.max_tokens,
+                request.max_candidates,
+            )
+        )
+        if not extended:
+            return None
+        return RecallFilter(
+            memory_types=request.memory_types,
+            source_types=request.source_types,
+            tags=request_tag_filter(request.tags, request.tags_match),
+            reference_time=request.reference_time,
+            min_scores=request.min_scores,
+            prefer_observations=request.prefer_observations,
+            include=request.include,
+            include_stale=request.include_stale,
+            timeout_seconds=request.timeout_seconds,
+            max_tokens=request.max_tokens,
+            max_candidates=request.max_candidates,
+        )
+
+    @staticmethod
     def _source_from_candidate(
         item: RecallCandidate, recalled: RecallResult
     ) -> KnowledgeSource:
@@ -107,11 +174,22 @@ class HindsightQueryService:
             memory_type=item.memory_type,
             doc_id=item.document_id,
             title=item.title,
-            chunk_text=str(chunk.get("text") or item.source_text or item.text),
+            chunk_text=str(chunk.get("text") or item.text),
             score=item.final_score,
             metadata={
                 **dict(item.metadata),
                 "source_type": item.source_type,
+                "mentioned_at": item.mentioned_at,
+                "updated_at": item.updated_at,
+                "occurred_start": item.occurred_start,
+                "occurred_end": item.occurred_end,
+                "freshness": item.freshness,
+                "stale_reason": item.stale_reason,
+                **(
+                    {"document": recalled.documents[item.document_id]}
+                    if item.document_id in recalled.documents
+                    else {}
+                ),
                 **({"session_id": item.session_id} if item.session_id else {}),
                 **({"turn_id": item.turn_id} if item.turn_id else {}),
                 "scores": {
@@ -175,12 +253,20 @@ def build_query_service(
     repository: MemoryRepository | None = None,
 ) -> HindsightQueryService:
     from config.settings import settings
+    from config.schema import load_config
+    import os
 
     repository = repository or PostgresMemoryRepository(
         keyword_index_enabled=settings.hindsight_keyword_index_enabled,
         keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
     )
+    memory_config = load_config(
+        os.getenv("APP_CONFIG", "config/app.yaml")
+    ).engine.memory
     options = HindsightOptions(
+        recall_max_results=memory_config.recall_max_results,
+        recall_max_candidates=memory_config.recall_max_candidates,
+        recall_max_tokens=memory_config.recall_max_tokens,
         recall_min_semantic=settings.hindsight_recall_min_semantic,
         recall_min_score=settings.hindsight_recall_min_score,
         rerank_semantic_margin=settings.hindsight_rerank_semantic_margin,

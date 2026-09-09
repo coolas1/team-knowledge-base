@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.components.store.models import Document
-from src.engine.components.store.scope import scope_predicate
+from src.engine.components.store.scope import scope_predicate, tag_predicate
 from src.engine.scope import MemoryScope
 
 from .models import (
@@ -38,6 +38,7 @@ from .types import (
     MemoryProfile,
     MentalModel,
     RecallCandidate,
+    RecallFilter,
     ReflectionContext,
     RetainPlan,
 )
@@ -1350,6 +1351,7 @@ class PostgresMemoryRepository:
         limit: int,
         *,
         source_type: str | None = None,
+        filters: RecallFilter | None = None,
     ) -> list[RecallCandidate]:
         score = (1 - MemoryUnit.embedding.cosine_distance(embedding)).label("score")
         async with self._session_factory() as session:
@@ -1358,10 +1360,9 @@ class PostgresMemoryRepository:
                 .join(Document, Document.id == MemoryUnit.document_id)
                 .where(
                     self._memory_scope(),
-                    MemoryUnit.state == "active",
                     MemoryUnit.embedding.is_not(None),
                     Document.status == "indexed",
-                    *self._recall_source_conditions(source_type),
+                    *self._recall_source_conditions(source_type, filters),
                 )
                 .order_by(score.desc())
                 .limit(limit)
@@ -1372,7 +1373,12 @@ class PostgresMemoryRepository:
         ]
 
     async def keyword_search(
-        self, query: str, limit: int, *, source_type: str | None = None
+        self,
+        query: str,
+        limit: int,
+        *,
+        source_type: str | None = None,
+        filters: RecallFilter | None = None,
     ) -> list[RecallCandidate]:
         query_tokens = list(dict.fromkeys(lexical_tokens(query)))
         if not query_tokens:
@@ -1380,9 +1386,8 @@ class PostgresMemoryRepository:
         async with self._session_factory() as session:
             conditions = (
                 self._memory_scope(),
-                MemoryUnit.state == "active",
                 Document.status == "indexed",
-                *self._recall_source_conditions(source_type),
+                *self._recall_source_conditions(source_type, filters),
             )
             base = (
                 select(MemoryUnit.id, MemoryUnit.text)
@@ -1441,7 +1446,7 @@ class PostgresMemoryRepository:
                         .where(
                             MemoryUnit.id.in_(score_by_id),
                             self._memory_scope(),
-                            *self._recall_source_conditions(source_type),
+                            *self._recall_source_conditions(source_type, filters),
                         )
                     )
                 ).all()
@@ -1458,6 +1463,7 @@ class PostgresMemoryRepository:
         limit: int,
         *,
         source_type: str | None = None,
+        filters: RecallFilter | None = None,
     ) -> list[RecallCandidate]:
         normalized = [normalize_entity(item) for item in entities]
         normalized = [item for item in normalized if item]
@@ -1475,9 +1481,8 @@ class PostgresMemoryRepository:
                 .join(Document, Document.id == MemoryUnit.document_id)
                 .where(
                     self._memory_scope(),
-                    MemoryUnit.state == "active",
                     Document.status == "indexed",
-                    *self._recall_source_conditions(source_type),
+                    *self._recall_source_conditions(source_type, filters),
                     or_(
                         *[
                             MemoryEntity.normalized_name.contains(item)
@@ -1520,9 +1525,8 @@ class PostgresMemoryRepository:
                             .where(
                                 MemoryUnit.id.in_(expanded_scores),
                                 self._memory_scope(),
-                                MemoryUnit.state == "active",
                                 Document.status == "indexed",
-                                *self._recall_source_conditions(source_type),
+                                *self._recall_source_conditions(source_type, filters),
                             )
                         )
                     ).all()
@@ -1549,6 +1553,7 @@ class PostgresMemoryRepository:
         limit: int,
         *,
         source_type: str | None = None,
+        filters: RecallFilter | None = None,
     ) -> list[RecallCandidate]:
         if start is None and end is None:
             return []
@@ -1566,9 +1571,8 @@ class PostgresMemoryRepository:
                 .where(
                     *conditions,
                     self._memory_scope(),
-                    MemoryUnit.state == "active",
                     Document.status == "indexed",
-                    *self._recall_source_conditions(source_type),
+                    *self._recall_source_conditions(source_type, filters),
                 )
                 .order_by(MemoryUnit.occurred_start.desc())
                 .limit(limit)
@@ -1604,6 +1608,116 @@ class PostgresMemoryRepository:
                     {"text": unit.text, "mentioned_at": unit.mentioned_at.isoformat()}
                 )
         return states
+
+    async def recall_details(
+        self, memory_ids: list[str], *, include_source_facts: bool = False
+    ) -> dict[str, dict[str, Any]]:
+        if not memory_ids:
+            return {}
+        ids = [uuid.UUID(item) for item in memory_ids]
+        async with self._session_factory() as session:
+            records = list(
+                (
+                    await session.execute(
+                        select(ObservationRecord, MemoryUnit)
+                        .join(MemoryUnit, MemoryUnit.id == ObservationRecord.memory_id)
+                        .where(
+                            ObservationRecord.memory_id.in_(ids),
+                            self._memory_scope(),
+                            MemoryUnit.state.in_(("active", "stale")),
+                        )
+                    )
+                ).all()
+            )
+            facts_by_observation: defaultdict[str, list[dict[str, Any]]] = defaultdict(
+                list
+            )
+            if include_source_facts and records:
+                observation_ids = [record.memory_id for record, _ in records]
+                facts = await session.execute(
+                    select(ObservationEvidence, MemoryUnit)
+                    .join(MemoryUnit, MemoryUnit.id == ObservationEvidence.fact_id)
+                    .where(
+                        ObservationEvidence.observation_id.in_(observation_ids),
+                        ObservationEvidence.active.is_(True),
+                        MemoryUnit.state == "active",
+                        self._memory_scope(),
+                    )
+                    .order_by(ObservationEvidence.observation_id, MemoryUnit.id)
+                )
+                for edge, fact in facts:
+                    facts_by_observation[str(edge.observation_id)].append(
+                        {
+                            "id": str(fact.id),
+                            "text": fact.text,
+                            "type": fact.memory_type,
+                            "document_id": str(fact.document_id),
+                            "mentioned_at": fact.mentioned_at.isoformat(),
+                            "occurred_start": fact.occurred_start.isoformat()
+                            if fact.occurred_start
+                            else None,
+                            "occurred_end": fact.occurred_end.isoformat()
+                            if fact.occurred_end
+                            else None,
+                        }
+                    )
+        return {
+            str(record.memory_id): {
+                "freshness": record.freshness,
+                "stale_reason": record.stale_reason,
+                "updated_at": record.updated_at.isoformat(),
+                "source_facts": facts_by_observation[str(record.memory_id)],
+            }
+            for record, _ in records
+        }
+
+    async def expand_memory_record(self, memory_id: str) -> dict[str, Any] | None:
+        try:
+            identity = uuid.UUID(memory_id)
+        except ValueError:
+            return None
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(MemoryUnit, Document)
+                    .join(Document, Document.id == MemoryUnit.document_id)
+                    .where(
+                        MemoryUnit.id == identity,
+                        self._memory_scope(),
+                        MemoryUnit.state.in_(("active", "stale")),
+                        Document.status == "indexed",
+                        *self._recall_source_conditions(
+                            None, RecallFilter(include_stale=True)
+                        ),
+                    )
+                )
+            ).one_or_none()
+        if row is None:
+            return None
+        unit, document = row
+        detail = (
+            await self.recall_details([memory_id], include_source_facts=True)
+        ).get(memory_id, {})
+        return {
+            "memory": self._candidate(unit, document).as_evidence(),
+            "chunk": {
+                "id": f"{unit.document_id}_{unit.chunk_index}",
+                "document_id": str(unit.document_id),
+                "chunk_index": unit.chunk_index,
+                "text": unit.source_text,
+            },
+            "document": {
+                "id": str(document.id),
+                "title": document.title,
+                "file_type": document.file_type,
+                "text": document.raw_text,
+                "updated_at": document.updated_at.isoformat(),
+            },
+            "source_facts": detail.get("source_facts", []),
+            "freshness": detail.get("freshness", unit.state),
+            "stale_reason": detail.get("stale_reason"),
+            "updated_at": detail.get("updated_at", unit.mentioned_at.isoformat()),
+        }
 
     async def reflection_context(
         self, query: str, query_embedding: list[float]
@@ -1652,6 +1766,7 @@ class PostgresMemoryRepository:
         unit: MemoryUnit, document: Document, **scores: float
     ) -> RecallCandidate:
         metadata = dict(unit.metadata_json or {})
+        mentioned_at = getattr(unit, "mentioned_at", None)
         return RecallCandidate(
             id=str(unit.id),
             document_id=str(unit.document_id),
@@ -1670,6 +1785,9 @@ class PostgresMemoryRepository:
                 unit.occurred_start.isoformat() if unit.occurred_start else None
             ),
             occurred_end=unit.occurred_end.isoformat() if unit.occurred_end else None,
+            mentioned_at=mentioned_at.isoformat() if mentioned_at else None,
+            updated_at=mentioned_at.isoformat() if mentioned_at else None,
+            freshness=getattr(unit, "state", "active"),
             metadata=metadata,
             source_memory_ids=[str(item) for item in unit.source_memory_ids],
             embedding=[float(v) for v in unit.embedding]
@@ -1679,7 +1797,10 @@ class PostgresMemoryRepository:
         )
 
     @staticmethod
-    def _recall_source_conditions(source_type: str | None) -> list[Any]:
+    def _recall_source_conditions(
+        source_type: str | None, filters: RecallFilter | None = None
+    ) -> list[Any]:
+        filters = filters or RecallFilter()
         completed_conversation = (
             select(ConversationMemorySource.document_id)
             .where(
@@ -1689,10 +1810,36 @@ class PostgresMemoryRepository:
             .exists()
         )
         conditions = [or_(Document.file_type != "conversation", completed_conversation)]
+        conditions.append(
+            MemoryUnit.state.in_(("active", "stale"))
+            if filters.include_stale
+            else MemoryUnit.state == "active"
+        )
         if source_type is not None:
             conditions.append(
-                MemoryUnit.metadata_json["source_type"].astext == source_type
+                or_(
+                    MemoryUnit.metadata_json["source_type"].astext == source_type,
+                    MemoryUnit.metadata_json["source_types"].contains([source_type]),
+                )
             )
+        if filters.source_types:
+            conditions.append(
+                or_(
+                    MemoryUnit.metadata_json["source_type"].astext.in_(
+                        filters.source_types
+                    ),
+                    *[
+                        MemoryUnit.metadata_json["source_types"].contains([item])
+                        for item in filters.source_types
+                    ],
+                )
+            )
+        if filters.memory_types:
+            conditions.append(MemoryUnit.memory_type.in_(filters.memory_types))
+        if filters.tags is not None:
+            conditions.append(tag_predicate(MemoryUnit.tags, filters.tags))
+        if filters.reference_time is not None:
+            conditions.append(MemoryUnit.mentioned_at <= filters.reference_time)
         return conditions
 
     @staticmethod

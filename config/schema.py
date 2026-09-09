@@ -26,6 +26,9 @@ class MemoryCfg(BaseModel):
     consolidation_max_concurrent: int = Field(default=1, ge=1, le=32)
     consolidation_semantic_dedup: bool = True
     consolidation_semantic_threshold: float = Field(default=0.9, ge=0, le=1)
+    recall_max_results: int = Field(default=100, ge=1, le=1000)
+    recall_max_candidates: int = Field(default=300, ge=1, le=5000)
+    recall_max_tokens: int = Field(default=4096, ge=1)
     features: MemoryFeatures = Field(default_factory=MemoryFeatures)
 
     @model_validator(mode="after")

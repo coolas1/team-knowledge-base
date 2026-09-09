@@ -12,6 +12,8 @@ class HindsightOptions:
     chunk_tokens: int = 500
     chunk_overlap_tokens: int = 50
     recall_limit: int = 20
+    recall_max_results: int = 100
+    recall_max_candidates: int = 300
     recall_max_tokens: int = 4096
     retrieval_arm_minimum: int = 30
     rerank_limit: int = 40
@@ -54,6 +56,9 @@ class HindsightOptions:
             "rerank_text_limit_chars": self.rerank_text_limit_chars,
             "rerank_total_chars": self.rerank_total_chars,
             "keyword_candidate_limit": self.keyword_candidate_limit,
+            "recall_max_results": self.recall_max_results,
+            "recall_max_candidates": self.recall_max_candidates,
+            "recall_max_tokens": self.recall_max_tokens,
         }
         invalid = [name for name, value in positive.items() if value <= 0]
         if invalid:

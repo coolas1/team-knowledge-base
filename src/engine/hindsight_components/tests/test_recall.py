@@ -4,6 +4,7 @@ import pytest
 
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.recall import RecallEngine
+from src.engine.hindsight_components.types import RecallFilter
 
 from .fakes import FakeProviders, FakeRepository, candidate
 
@@ -66,13 +67,15 @@ async def test_conversation_filter_is_applied_before_all_arm_rankings() -> None:
             )
             self.conversation.source_type = "conversation"
 
-        async def semantic_search(self, embedding, limit, *, source_type=None):
+        async def semantic_search(
+            self, embedding, limit, *, source_type=None, filters=None
+        ):
             self.calls["semantic"] += 1
             self.source_filters.append(source_type)
             rows = [self.file, self.conversation]
             return [item for item in rows if item.source_type == source_type]
 
-        async def keyword_search(self, query, limit, *, source_type=None):
+        async def keyword_search(self, query, limit, *, source_type=None, filters=None):
             self.calls["keyword"] += 1
             self.source_filters.append(source_type)
             return [self.conversation] if source_type == "conversation" else [self.file]
@@ -137,3 +140,71 @@ async def test_recall_returns_empty_result_when_nothing_is_relevant() -> None:
     assert result.chunks == {}
     assert result.trace["selected_count"] == 0
     assert result.trace["filtered_count"] == 2
+
+
+async def test_request_filters_and_budgets_apply_to_every_fast_arm() -> None:
+    class Repository(FakeRepository):
+        seen = []
+
+        async def semantic_search(self, _embedding, limit, **kwargs):
+            self.seen.append(("semantic", limit, kwargs["filters"]))
+            self.a.memory_type = "observation"
+            return [self.a]
+
+        async def keyword_search(self, _query, limit, **kwargs):
+            self.seen.append(("keyword", limit, kwargs["filters"]))
+            return [self.a]
+
+        async def recall_details(self, _ids, *, include_source_facts=False):
+            return {
+                self.a.id: {
+                    "freshness": "stale",
+                    "stale_reason": "source replaced",
+                    "updated_at": "2026-09-09T00:00:00+00:00",
+                    "source_facts": [{"id": "current", "text": "current fact"}],
+                }
+            }
+
+    repository = Repository()
+    filters = RecallFilter(
+        memory_types=("observation",),
+        source_types=("conversation",),
+        min_scores={"semantic": 0.5},
+        prefer_observations=True,
+        include=("documents", "source_facts"),
+        include_stale=True,
+        timeout_seconds=2,
+        max_tokens=8,
+        max_candidates=2,
+    )
+    result = await RecallEngine(
+        repository,
+        FakeProviders(),
+        HindsightOptions(recall_max_results=2, recall_max_candidates=3),
+    ).recall("Alice", mode="fast", top_k=999, filters=filters)
+
+    assert [(name, limit) for name, limit, _ in repository.seen] == [
+        ("keyword", 2),
+        ("semantic", 2),
+    ]
+    assert all(seen is filters for _, _, seen in repository.seen)
+    assert result.trace["requested_top_k"] == 999
+    assert result.trace["effective_top_k"] == 2
+    assert result.trace["token_budget"] == 8
+    assert result.results[0].freshness == "stale"
+    assert result.results[0].stale_reason == "source replaced"
+    assert result.results[0].metadata["source_facts"][0]["id"] == "current"
+    assert result.chunks == {}
+    assert result.entities == {}
+    assert result.documents[result.results[0].document_id]["title"]
+
+
+def test_recall_filter_rejects_invalid_budget_score_and_time() -> None:
+    from datetime import datetime
+
+    with pytest.raises(ValueError, match="minimum scores"):
+        RecallFilter(min_scores={"semantic": 1.1})
+    with pytest.raises(ValueError, match="timezone"):
+        RecallFilter(reference_time=datetime(2026, 9, 9))
+    with pytest.raises(ValueError, match="max_tokens"):
+        RecallFilter(max_tokens=0)

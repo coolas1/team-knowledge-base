@@ -11,6 +11,8 @@ from src.engine.hindsight_components.recall import RecallEngine
 from src.engine.hindsight_components.reflect import ReflectEngine
 from src.engine.hindsight_components.retain import RetainEngine
 from src.engine.hindsight_components.types import (
+    MemoryExpansion,
+    RecallFilter,
     RecallResult,
     ReflectResult,
     RetainInput,
@@ -151,6 +153,7 @@ class HindsightService:
         top_k: int | None = None,
         source_type: str | None = None,
         search_id: str | None = None,
+        filters: RecallFilter | None = None,
     ) -> RecallResult:
         return await self._recall.recall(
             query,
@@ -158,6 +161,7 @@ class HindsightService:
             top_k=top_k,
             source_type=source_type,
             search_id=search_id,
+            filters=filters,
         )
 
     async def reflect(
@@ -166,5 +170,68 @@ class HindsightService:
         *,
         mode: str = "deep",
         top_k: int | None = None,
+        filters: RecallFilter | None = None,
     ) -> ReflectResult:
-        return await self._reflect.reflect(query, mode=mode, top_k=top_k)
+        return await self._reflect.reflect(
+            query, mode=mode, top_k=top_k, filters=filters
+        )
+
+    async def expand_memory(
+        self,
+        memory_id: str,
+        *,
+        include: tuple[str, ...] = ("chunk", "document", "source_facts"),
+        max_tokens: int | None = None,
+    ) -> MemoryExpansion | None:
+        if set(include) - {"chunk", "document", "source_facts"}:
+            raise ValueError("unsupported memory expansion include")
+        token_limit = min(
+            max_tokens or self.options.recall_max_tokens,
+            self.options.recall_max_tokens,
+        )
+        if token_limit < 1:
+            raise ValueError("max_tokens must be positive")
+        record = await self._repository.expand_memory_record(memory_id)
+        if record is None:
+            return None
+        remaining_chars = token_limit * 4
+        truncated = False
+
+        def bounded(value):
+            nonlocal remaining_chars, truncated
+            if value is None:
+                return None
+            result = dict(value)
+            text = str(result.get("text", ""))
+            if len(text) > remaining_chars:
+                text = text[:remaining_chars]
+                truncated = True
+            result["text"] = text
+            remaining_chars -= len(text)
+            return result
+
+        chunk = bounded(record["chunk"]) if "chunk" in include else None
+        document = bounded(record["document"]) if "document" in include else None
+        facts = []
+        if "source_facts" in include:
+            for fact in record["source_facts"]:
+                bounded_fact = bounded(fact)
+                if bounded_fact is not None and bounded_fact.get("text"):
+                    facts.append(bounded_fact)
+                if remaining_chars <= 0:
+                    truncated = True
+                    break
+        memory = dict(record["memory"])
+        memory.update(
+            freshness=record["freshness"],
+            stale_reason=record["stale_reason"],
+            updated_at=record["updated_at"],
+        )
+        return MemoryExpansion(
+            memory=memory,
+            chunk=chunk,
+            document=document,
+            source_facts=tuple(facts),
+            token_count=(token_limit * 4 - remaining_chars + 3) // 4,
+            truncated=truncated,
+        )

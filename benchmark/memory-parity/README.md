@@ -66,3 +66,11 @@ segment as an already extracted atomic fact, so it measures consolidation semant
 PostgreSQL tests separately prove outbox, version, lease, history and deletion rules.
 Use `--case <id>` only to rerun a concrete failed row and preserve that run beside
 the original evidence.
+
+### B4 execution tool
+
+`run_retrieval_contract.py --output <fresh-directory>` compares the legacy and
+extended request paths through the production `RecallEngine` with deterministic
+ports. It reports p50/p95 and output/model token use without network variance.
+This measures contract overhead; PostgreSQL tests prove filter, freshness, source
+deletion, scope, and expansion behavior, while B7 retains the full relevance gate.

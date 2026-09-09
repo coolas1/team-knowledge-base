@@ -1990,6 +1990,7 @@ async def test_consolidation_cross_retain_dedup_history_delete_and_fencing(
     from src.engine.hindsight_components.models import (
         ConsolidationFactEvent,
         ConsolidationJob,
+        ConversationMemorySource,
         FactTombstone,
         ObservationEvidence,
         ObservationHistory,
@@ -2047,6 +2048,15 @@ async def test_consolidation_cross_retain_dedup_history_delete_and_fencing(
                     tags=[],
                 )
             )
+            await connection.execute(
+                insert(ConversationMemorySource).values(
+                    document_id=document_id,
+                    bank_id=bank,
+                    session_id="session-1",
+                    turn_id=f"turn-{index}",
+                    status="completed",
+                )
+            )
 
     def plan(index):
         return RetainPlan(
@@ -2065,6 +2075,7 @@ async def test_consolidation_cross_retain_dedup_history_delete_and_fencing(
                     source_text=f"concise preference {index}",
                     context="conversation",
                     embedding=vector,
+                    metadata={"source_type": "conversation"},
                 )
             ],
             links=[],
@@ -2148,6 +2159,37 @@ async def test_consolidation_cross_retain_dedup_history_delete_and_fencing(
         assert set(observation_memory.source_memory_ids) == set(facts[1:3])
         job = await session.scalar(select(ConsolidationJob))
         assert job.processed_through == job.pending_through
+
+    from src.engine.hindsight_components.types import RecallFilter
+
+    details = await repository.recall_details(
+        [str(observation.memory_id)], include_source_facts=True
+    )
+    assert details[str(observation.memory_id)]["freshness"] == "active"
+    assert {
+        item["id"] for item in details[str(observation.memory_id)]["source_facts"]
+    } == {
+        str(facts[1]),
+        str(facts[2]),
+    }
+    expanded = await repository.expand_memory_record(str(observation.memory_id))
+    assert expanded is not None
+    assert "concise preference 0" not in expanded["document"]["text"]
+    assert await repository.expand_memory_record(str(facts[0])) is None
+    assert (
+        await repository.with_scope(MemoryScope("other-bank")).expand_memory_record(
+            str(observation.memory_id)
+        )
+        is None
+    )
+    observations = await repository.semantic_search(
+        vector,
+        10,
+        source_type="conversation",
+        filters=RecallFilter(memory_types=("observation",)),
+    )
+    assert [item.id for item in observations] == [str(observation.memory_id)]
+    assert observations[0].source_type == "conversation"
 
     # Capacity exhaustion is durable and visible instead of silently dropping
     # the queued scope or running an unbounded model loop.
@@ -2280,6 +2322,9 @@ async def test_consolidation_migration_backfills_legacy_observation_and_cursor(
 
 
 async def test_scoped_repository_read_write_and_delete(scope_database):
+    from datetime import datetime, timezone
+    from src.engine.hindsight_components.types import RecallFilter
+
     engine, schema = scope_database
     await migrate_scope(engine, schema=schema)
     documents = {bank: uuid.uuid4() for bank in ("a", "b")}
@@ -2337,6 +2382,33 @@ async def test_scoped_repository_read_write_and_delete(scope_database):
         await scoped.graph_search(["Alice"], 10),
     ):
         assert [r.id for r in results] == [str(memories["a"])]
+    assert [
+        item.id
+        for item in await scoped.semantic_search(
+            embedding,
+            10,
+            filters=RecallFilter(
+                memory_types=("world",),
+                tags=TagFilter(("user:1",), "all_strict"),
+            ),
+        )
+    ] == [str(memories["a"])]
+    assert (
+        await scoped.semantic_search(
+            embedding, 10, filters=RecallFilter(memory_types=("experience",))
+        )
+        == []
+    )
+    assert (
+        await scoped.semantic_search(
+            embedding,
+            10,
+            filters=RecallFilter(
+                reference_time=datetime(2000, 1, 1, tzinfo=timezone.utc)
+            ),
+        )
+        == []
+    )
     assert await scoped.document_state(str(documents["b"])) is None
     assert await scoped.graph_projection(str(documents["b"])) is None
     assert len(await scoped.list_backfill_candidates(force=True)) == 1

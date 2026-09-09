@@ -15,7 +15,7 @@ from .config import HindsightOptions
 from .deadlines import DeadlineBudget, PhaseStatus
 from .errors import DeepSearchTimeoutError, DeepSearchUnavailableError
 from .protocols import HindsightProviders, MemoryRepository
-from .types import RecallCandidate, RecallResult
+from .types import RecallCandidate, RecallFilter, RecallResult
 from .utils import cosine, estimate_tokens, parse_datetime
 
 logger = logging.getLogger(__name__)
@@ -47,17 +47,35 @@ class RecallEngine:
         top_k: int | None = None,
         source_type: str | None = None,
         search_id: str | None = None,
+        filters: RecallFilter | None = None,
     ) -> RecallResult:
         if mode not in {"fast", "deep"}:
             raise ValueError(f"unsupported retrieval mode: {mode}")
         if not query.strip():
             raise ValueError("query cannot be empty")
-        limit = top_k if top_k is not None else self._options.recall_limit
+        requested_limit = top_k if top_k is not None else self._options.recall_limit
+        limit = min(requested_limit, self._options.recall_max_results)
         if limit < 1:
             raise ValueError("top_k must be greater than zero")
 
         identifier = search_id or str(uuid.uuid4())
-        budget = DeadlineBudget(self._options.deep_total_timeout_seconds)
+        filters = filters or RecallFilter(
+            source_types=(source_type,) if source_type else ()
+        )
+        if source_type and source_type not in filters.source_types:
+            filters = replace(
+                filters, source_types=(*filters.source_types, source_type)
+            )
+        budget = DeadlineBudget(
+            min(
+                self._options.deep_total_timeout_seconds,
+                filters.timeout_seconds or self._options.deep_total_timeout_seconds,
+            )
+        )
+        token_limit = min(
+            self._options.recall_max_tokens,
+            filters.max_tokens or self._options.recall_max_tokens,
+        )
         phase_outcomes: dict[str, dict[str, Any]] = {}
         phase_ms: dict[str, float] = {}
         terminal = "failed"
@@ -65,12 +83,13 @@ class RecallEngine:
         selected_count = 0
         try:
             analysis, embedding = await self._prepare_query(
-                query, mode, identifier, budget, phase_outcomes, phase_ms
+                query, mode, identifier, budget, phase_outcomes, phase_ms, filters
             )
             arms = await self._retrieve_arms(
                 query,
                 mode,
                 source_type,
+                filters,
                 limit,
                 analysis,
                 embedding,
@@ -164,8 +183,15 @@ class RecallEngine:
                 phase_outcomes,
                 phase_ms,
             )
-            ordered, filtered_count = self._filter_by_relevance(ordered, mode)
-            selected, token_count, selection_ms = self._select(ordered, limit)
+            ordered, filtered_count = self._filter_by_relevance(ordered, mode, filters)
+            if filters.prefer_observations:
+                for item in ordered:
+                    if item.memory_type == "observation":
+                        item.final_score = min(1.0, item.final_score + 0.05)
+                ordered.sort(key=lambda item: (-item.final_score, item.id))
+            selected, token_count, selection_ms = self._select(
+                ordered, limit, token_limit
+            )
             selected_count = len(selected)
             phase_ms["mmr_token_selection"] = selection_ms
             self._record_local_phase(
@@ -175,26 +201,77 @@ class RecallEngine:
                 phase_outcomes,
             )
 
-            entity_phase = await self._run_phase(
-                "entity_state_load",
-                lambda _timeout: self._repository.entity_states(
-                    [item.id for item in selected]
-                ),
-                self._options.retrieval_arm_timeout_seconds,
-                identifier,
-                budget,
-                phase_outcomes,
-                phase_ms,
-            )
-            entities = entity_phase.value or {}
-            chunks = {
-                f"{item.document_id}_{item.chunk_index}": {
-                    "id": f"{item.document_id}_{item.chunk_index}",
-                    "text": item.source_text,
-                    "chunk_index": item.chunk_index,
+            details_loader = getattr(self._repository, "recall_details", None)
+            if details_loader is not None:
+                detail_phase = await self._run_phase(
+                    "evidence_state_load",
+                    lambda _timeout: details_loader(
+                        [item.id for item in selected],
+                        include_source_facts="source_facts" in filters.include,
+                    ),
+                    self._options.retrieval_arm_timeout_seconds,
+                    identifier,
+                    budget,
+                    phase_outcomes,
+                    phase_ms,
+                )
+                for item in selected:
+                    detail = (detail_phase.value or {}).get(item.id, {})
+                    item.freshness = str(detail.get("freshness", item.freshness))
+                    item.stale_reason = detail.get("stale_reason")
+                    item.updated_at = detail.get("updated_at", item.mentioned_at)
+                    if "source_facts" in filters.include:
+                        item.metadata["source_facts"] = list(
+                            detail.get("source_facts", [])
+                        )
+
+            if "entities" in filters.include:
+                entity_phase = await self._run_phase(
+                    "entity_state_load",
+                    lambda _timeout: self._repository.entity_states(
+                        [item.id for item in selected]
+                    ),
+                    self._options.retrieval_arm_timeout_seconds,
+                    identifier,
+                    budget,
+                    phase_outcomes,
+                    phase_ms,
+                )
+                entities = entity_phase.value or {}
+            else:
+                entities = {}
+                self._record_local_phase(
+                    "entity_state_load",
+                    PhaseStatus.SKIPPED,
+                    0,
+                    phase_outcomes,
+                    "not_requested",
+                )
+                phase_ms["entity_state_load"] = 0
+            chunks = (
+                {
+                    f"{item.document_id}_{item.chunk_index}": {
+                        "id": f"{item.document_id}_{item.chunk_index}",
+                        "text": item.source_text,
+                        "chunk_index": item.chunk_index,
+                    }
+                    for item in selected
                 }
-                for item in selected
-            }
+                if "chunks" in filters.include
+                else {}
+            )
+            documents = (
+                {
+                    item.document_id: {
+                        "id": item.document_id,
+                        "title": item.title,
+                        "source_type": item.source_type,
+                    }
+                    for item in selected
+                }
+                if "documents" in filters.include
+                else {}
+            )
             degraded_phases = self._degraded_phases(mode, phase_outcomes)
             degraded = bool(degraded_phases)
             terminal = (
@@ -208,6 +285,16 @@ class RecallEngine:
                 "query": query,
                 "mode": mode,
                 "source_type": source_type,
+                "filters": {
+                    "memory_types": list(filters.memory_types),
+                    "source_types": list(filters.source_types),
+                    "include": list(filters.include),
+                    "prefer_observations": filters.prefer_observations,
+                    "include_stale": filters.include_stale,
+                },
+                "requested_top_k": requested_limit,
+                "effective_top_k": limit,
+                "token_budget": token_limit,
                 "analysis": analysis,
                 "arm_counts": dict(zip(names, map(len, arms), strict=True)),
                 "candidate_count": len(candidates),
@@ -237,6 +324,7 @@ class RecallEngine:
                 chunks=chunks,
                 entities=entities,
                 trace=trace,
+                documents=documents,
             )
         except asyncio.CancelledError:
             terminal = "cancelled"
@@ -269,13 +357,16 @@ class RecallEngine:
         budget: DeadlineBudget,
         phase_outcomes: dict[str, dict[str, Any]],
         phase_ms: dict[str, float],
+        filters: RecallFilter,
     ) -> tuple[dict[str, Any], list[float] | None]:
         if mode == "deep":
             async with asyncio.TaskGroup() as group:
                 analysis_task = group.create_task(
                     self._run_phase(
                         "query_analysis_llm",
-                        lambda timeout: self._analyze_query(query, timeout),
+                        lambda timeout: self._analyze_query(
+                            query, timeout, filters.reference_time
+                        ),
                         self._options.query_analysis_timeout_seconds,
                         search_id,
                         budget,
@@ -329,6 +420,7 @@ class RecallEngine:
         query: str,
         mode: str,
         source_type: str | None,
+        filters: RecallFilter,
         limit: int,
         analysis: dict[str, Any],
         embedding: list[float] | None,
@@ -337,16 +429,20 @@ class RecallEngine:
         phase_outcomes: dict[str, dict[str, Any]],
         phase_ms: dict[str, float],
     ) -> list[list[RecallCandidate]]:
-        arm_limit = max(limit * 3, self._options.retrieval_arm_minimum)
+        arm_limit = min(
+            max(limit * 3, self._options.retrieval_arm_minimum),
+            self._options.recall_max_candidates,
+            filters.max_candidates or self._options.recall_max_candidates,
+        )
         factories: dict[str, Callable[[float], Awaitable[list[RecallCandidate]]]] = {
             "bm25_search": lambda _timeout: self._repository.keyword_search(
-                query, arm_limit, source_type=source_type
+                query, arm_limit, source_type=source_type, filters=filters
             )
         }
         if embedding is not None:
             factories["semantic_search"] = lambda _timeout: (
                 self._repository.semantic_search(
-                    embedding, arm_limit, source_type=source_type
+                    embedding, arm_limit, source_type=source_type, filters=filters
                 )
             )
         else:
@@ -369,6 +465,7 @@ class RecallEngine:
                     [str(item) for item in analysis.get("entities", [])],
                     arm_limit,
                     source_type=source_type,
+                    filters=filters,
                 )
             )
             factories["temporal_search"] = lambda _timeout: (
@@ -377,6 +474,7 @@ class RecallEngine:
                     parse_datetime(analysis.get("end")),
                     arm_limit,
                     source_type=source_type,
+                    filters=filters,
                 )
             )
         else:
@@ -480,11 +578,18 @@ class RecallEngine:
             )
         return _PhaseResult(value, status)
 
-    async def _analyze_query(self, query: str, timeout: float) -> dict[str, Any]:
+    async def _analyze_query(
+        self, query: str, timeout: float, reference_time=None
+    ) -> dict[str, Any]:
         return await self._providers.json(
             "Analyze a memory retrieval query. Identify named entities, time bounds, and missing hops.",
             f"QUERY: {query}\n"
-            'Return {"entities":[],"start":"ISO or null","end":"ISO or null",'
+            + (
+                f"REFERENCE TIME: {reference_time.isoformat()}\n"
+                if reference_time
+                else ""
+            )
+            + 'Return {"entities":[],"start":"ISO or null","end":"ISO or null",'
             '"subqueries":[]}.',
             timeout=timeout,
         )
@@ -603,10 +708,23 @@ class RecallEngine:
         return float(value or 0.0)
 
     def _filter_by_relevance(
-        self, ordered: list[RecallCandidate], mode: str
+        self, ordered: list[RecallCandidate], mode: str, filters: RecallFilter
     ) -> tuple[list[RecallCandidate], int]:
         kept: list[RecallCandidate] = []
         for item in ordered:
+            score_values = {
+                "final": item.final_score,
+                "semantic": item.semantic_score,
+                "keyword": item.keyword_score,
+                "graph": item.graph_score,
+                "temporal": item.temporal_score,
+                "reranker": item.reranker_score,
+            }
+            if any(
+                float(score_values[name] or 0) < threshold
+                for name, threshold in filters.min_scores.items()
+            ):
+                continue
             if (item.keyword_score or 0.0) > 0:
                 kept.append(item)
                 continue
@@ -619,7 +737,7 @@ class RecallEngine:
         return kept, len(ordered) - len(kept)
 
     def _select(
-        self, ordered: list[RecallCandidate], limit: int
+        self, ordered: list[RecallCandidate], limit: int, token_limit: int | None = None
     ) -> tuple[list[RecallCandidate], int, float]:
         started = time.perf_counter()
         remaining = list(ordered)
@@ -643,7 +761,7 @@ class RecallEngine:
             )
             remaining.remove(best)
             size = estimate_tokens(best.source_text)
-            if selected and token_count + size > self._options.recall_max_tokens:
+            if token_count + size > (token_limit or self._options.recall_max_tokens):
                 continue
             selected.append(best)
             token_count += size
@@ -684,7 +802,7 @@ class RecallEngine:
             }
             or (
                 value["outcome"] == PhaseStatus.SKIPPED.value
-                and value.get("category") != "fast_mode"
+                and value.get("category") not in {"fast_mode", "not_requested"}
             )
         ]
 

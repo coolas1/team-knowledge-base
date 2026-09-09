@@ -10,13 +10,22 @@ from src.engine.hindsight_components.protocols import (
     HindsightProviders,
     MemoryRepository,
 )
-from src.engine.hindsight_components.types import RecallResult, ReflectResult
+from src.engine.hindsight_components.types import (
+    RecallFilter,
+    RecallResult,
+    ReflectResult,
+)
 from src.engine.hindsight_components.utils import cosine
 
 
 class RecallProvider(Protocol):
     async def recall(
-        self, query: str, *, mode: str = "deep", top_k: int | None = None
+        self,
+        query: str,
+        *,
+        mode: str = "deep",
+        top_k: int | None = None,
+        filters: RecallFilter | None = None,
     ) -> RecallResult: ...
 
 
@@ -39,8 +48,10 @@ class ReflectEngine:
         *,
         mode: str = "deep",
         top_k: int | None = None,
+        filters: RecallFilter | None = None,
     ) -> ReflectResult:
-        initial = await self._recall.recall(query, mode=mode, top_k=top_k)
+        filter_arg = {"filters": filters} if filters is not None else {}
+        initial = await self._recall.recall(query, mode=mode, top_k=top_k, **filter_arg)
         evidence = {item.id: item for item in initial.results}
         try:
             plan = await self._providers.json(
@@ -63,7 +74,9 @@ class ReflectEngine:
         for iteration, subquery in enumerate(
             plan.get("subqueries", [])[: self._options.reflect_subquery_limit], start=2
         ):
-            recalled = await self._recall.recall(str(subquery), mode=mode, top_k=top_k)
+            recalled = await self._recall.recall(
+                str(subquery), mode=mode, top_k=top_k, **filter_arg
+            )
             evidence.update({item.id: item for item in recalled.results})
             tool_trace.append(
                 {

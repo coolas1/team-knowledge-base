@@ -7,6 +7,7 @@ tools are registered."""
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from src.engine.trusted_scope import bind_service, resolve_binding
@@ -23,6 +24,7 @@ from src.engine.interface import (
     KnowledgeBase,
     KnowledgeQuery,
     KnowledgeQueryRequest,
+    MemoryExpansionRequest,
 )
 from src.agent.policy import HookPolicy, NeedsApproval
 
@@ -127,6 +129,8 @@ async def recall_conversation_memory(
     query: str,
     top_k: int = 5,
     mode: Literal["fast", "deep"] = "fast",
+    memory_types: list[str] | None = None,
+    include_source_time: bool = False,
 ) -> dict[str, Any]:
     """Internal runtime operation; not intended for model-selected tools."""
     if not query.strip():
@@ -137,7 +141,13 @@ async def recall_conversation_memory(
         raise ValueError(f"unsupported retrieval mode: {mode}")
     try:
         result = await _get_conversation_memory_service().recall_conversation_memory(
-            ConversationMemoryRecallRequest(query=query, top_k=top_k, mode=mode)
+            ConversationMemoryRecallRequest(
+                query=query,
+                top_k=top_k,
+                mode=mode,
+                memory_types=tuple(memory_types or ()),
+                include_source_time=include_source_time,
+            )
         )
     except (ValueError, RuntimeError) as error:
         if isinstance(error, ValueError) or _conversation_memory_service is None:
@@ -293,6 +303,18 @@ async def query_knowledge(
     top_k: int = 10,
     needs_answer: bool = True,
     correlation_id: str | None = None,
+    memory_types: list[str] | None = None,
+    source_types: list[str] | None = None,
+    tags: list[str] | None = None,
+    tags_match: str = "any",
+    reference_time: str | None = None,
+    min_scores: dict[str, float] | None = None,
+    prefer_observations: bool = False,
+    include: list[str] | None = None,
+    include_stale: bool = False,
+    timeout_seconds: float | None = None,
+    max_tokens: int | None = None,
+    max_candidates: int | None = None,
 ) -> dict[str, Any]:
     """通过 Hindsight 统一入口执行 recall 或 reflect。"""
     result = await _get_query_service().query(
@@ -303,9 +325,43 @@ async def query_knowledge(
             top_k=top_k,
             needs_answer=needs_answer,
             correlation_id=correlation_id,
+            memory_types=tuple(memory_types or ()),
+            source_types=tuple(source_types or ()),
+            tags=tuple(tags or ()),
+            tags_match=tags_match,
+            reference_time=(
+                datetime.fromisoformat(reference_time.replace("Z", "+00:00"))
+                if reference_time
+                else None
+            ),
+            min_scores=dict(min_scores or {}),
+            prefer_observations=prefer_observations,
+            include=tuple(include) if include is not None else ("chunks", "entities"),
+            include_stale=include_stale,
+            timeout_seconds=timeout_seconds,
+            max_tokens=max_tokens,
+            max_candidates=max_candidates,
         )
     )
     return asdict(result)
+
+
+async def expand_memory(
+    memory_id: str,
+    include: list[str] | None = None,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    """Expand a visible memory into bounded current source evidence."""
+    result = await _get_query_service().expand_memory(
+        MemoryExpansionRequest(
+            memory_id=memory_id,
+            include=tuple(include)
+            if include is not None
+            else ("chunk", "document", "source_facts"),
+            max_tokens=max_tokens,
+        )
+    )
+    return asdict(result) if result is not None else {"error": "memory not found"}
 
 
 async def search_knowledge_fast(
@@ -506,6 +562,7 @@ _MEMORY_TOOL_NAMES = (
     "query_knowledge",
     "search_knowledge_fast",
     "search_knowledge_deep",
+    "expand_memory",
 )
 
 _memory_tools_registered = False
@@ -519,6 +576,7 @@ def _register_memory_tools() -> None:
     mcp.tool()(query_knowledge)
     mcp.tool()(search_knowledge_fast)
     mcp.tool()(search_knowledge_deep)
+    mcp.tool()(expand_memory)
     _memory_tools_registered = True
 
 

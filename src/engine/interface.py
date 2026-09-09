@@ -8,6 +8,7 @@ against these types, never against a concrete backend.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -60,6 +61,18 @@ class RecallRequest:
     top_k: int = 20
     mode: Literal["auto", "fast", "deep"] = "auto"
     needs_answer: bool = False
+    memory_types: tuple[str, ...] = ()
+    source_types: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    tags_match: str = "any"
+    reference_time: datetime | None = None
+    min_scores: dict[str, float] = field(default_factory=dict)
+    prefer_observations: bool = False
+    include: tuple[str, ...] = ("chunks", "entities")
+    include_stale: bool = False
+    timeout_seconds: float | None = None
+    max_tokens: int | None = None
+    max_candidates: int | None = None
 
 
 @dataclass
@@ -96,6 +109,18 @@ class KnowledgeQueryRequest:
     top_k: int = 10
     needs_answer: bool = True
     correlation_id: str | None = None
+    memory_types: tuple[str, ...] = ()
+    source_types: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    tags_match: str = "any"
+    reference_time: datetime | None = None
+    min_scores: dict[str, float] = field(default_factory=dict)
+    prefer_observations: bool = False
+    include: tuple[str, ...] = ("chunks", "entities")
+    include_stale: bool = False
+    timeout_seconds: float | None = None
+    max_tokens: int | None = None
+    max_candidates: int | None = None
 
 
 @dataclass
@@ -120,10 +145,29 @@ class KnowledgeQueryResult:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryExpansionRequest:
+    memory_id: str
+    include: tuple[str, ...] = ("chunk", "document", "source_facts")
+    max_tokens: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryExpansionResult:
+    memory: dict
+    chunk: dict | None = None
+    document: dict | None = None
+    source_facts: tuple[dict, ...] = ()
+    token_count: int = 0
+    truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class ConversationMemoryRecallRequest:
     query: str
     top_k: int = 5
     mode: Literal["fast", "deep"] = "fast"
+    memory_types: tuple[str, ...] = ()
+    include_source_time: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +180,9 @@ class ConversationMemoryItem:
     turn_id: str
     score: float = 0.0
     metadata: dict = field(default_factory=dict)
+    mentioned_at: str | None = None
+    occurred_start: str | None = None
+    occurred_end: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +299,10 @@ class KnowledgeQuery(Protocol):
     """Optional high-level recall/reflect query capability."""
 
     async def query(self, request: KnowledgeQueryRequest) -> KnowledgeQueryResult: ...
+
+    async def expand_memory(
+        self, request: MemoryExpansionRequest
+    ) -> MemoryExpansionResult | None: ...
 
 
 class ConversationMemory(Protocol):

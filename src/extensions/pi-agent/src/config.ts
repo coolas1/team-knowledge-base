@@ -18,6 +18,9 @@ export interface TkbAdapterConfig {
   conversationMemoryRecallTimeoutMs: number;
   conversationMemoryRecallLimit: number;
   conversationMemoryContextBudgetChars: number;
+  conversationMemoryTypes: string[];
+  conversationMemoryShowType: boolean;
+  conversationMemoryShowSourceTime: boolean;
   conversationMemoryRetentionContext: string;
 }
 
@@ -136,6 +139,14 @@ export function loadTkbAdapterConfig(
       env.TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS,
       6_000,
       "TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS",
+    ),
+    conversationMemoryTypes: (env.TKB_CONVERSATION_MEMORY_TYPES ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+    conversationMemoryShowType: enabled(env.TKB_CONVERSATION_MEMORY_SHOW_TYPE),
+    conversationMemoryShowSourceTime: enabled(
+      env.TKB_CONVERSATION_MEMORY_SHOW_SOURCE_TIME,
     ),
     conversationMemoryRetentionContext:
       env.TKB_CONVERSATION_MEMORY_RETENTION_CONTEXT?.trim() ||

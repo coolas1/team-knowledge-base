@@ -24,6 +24,9 @@ export interface ConversationMemoryRecallResult {
     turn_id: string;
     score: number;
     metadata: Record<string, unknown>;
+    mentioned_at?: string | null;
+    occurred_start?: string | null;
+    occurred_end?: string | null;
   }>;
   trace: Record<string, unknown>;
 }
@@ -172,11 +175,19 @@ export class TkbMcpClient {
       mode?: "fast" | "deep";
       signal?: AbortSignal;
       timeoutMs?: number;
+      memoryTypes?: string[];
+      includeSourceTime?: boolean;
     },
   ): Promise<ConversationMemoryRecallResult> {
     return this.callJsonTool(
       "recall_conversation_memory",
-      { query, top_k: options.topK, mode: options.mode ?? "fast" },
+      {
+        query,
+        top_k: options.topK,
+        mode: options.mode ?? "fast",
+        ...(options.memoryTypes?.length ? { memory_types: options.memoryTypes } : {}),
+        ...(options.includeSourceTime ? { include_source_time: true } : {}),
+      },
       options,
     );
   }

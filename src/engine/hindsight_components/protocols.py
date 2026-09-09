@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
-from .types import RecallCandidate, ReflectionContext, RetainPlan
+from .types import RecallCandidate, RecallFilter, ReflectionContext, RetainPlan
 from src.engine.scope import MemoryScope
 
 
@@ -51,10 +51,16 @@ class MemoryRepository(Protocol):
         limit: int,
         *,
         source_type: str | None = None,
+        filters: RecallFilter | None = None,
     ) -> list[RecallCandidate]: ...
 
     async def keyword_search(
-        self, query: str, limit: int, *, source_type: str | None = None
+        self,
+        query: str,
+        limit: int,
+        *,
+        source_type: str | None = None,
+        filters: RecallFilter | None = None,
     ) -> list[RecallCandidate]: ...
 
     async def graph_search(
@@ -63,6 +69,7 @@ class MemoryRepository(Protocol):
         limit: int,
         *,
         source_type: str | None = None,
+        filters: RecallFilter | None = None,
     ) -> list[RecallCandidate]: ...
 
     async def temporal_search(
@@ -72,9 +79,16 @@ class MemoryRepository(Protocol):
         limit: int,
         *,
         source_type: str | None = None,
+        filters: RecallFilter | None = None,
     ) -> list[RecallCandidate]: ...
 
     async def entity_states(self, memory_ids: list[str]) -> dict[str, Any]: ...
+
+    async def recall_details(
+        self, memory_ids: list[str], *, include_source_facts: bool = False
+    ) -> dict[str, dict[str, Any]]: ...
+
+    async def expand_memory_record(self, memory_id: str) -> dict[str, Any] | None: ...
 
     async def reflection_context(
         self, query: str, query_embedding: list[float]

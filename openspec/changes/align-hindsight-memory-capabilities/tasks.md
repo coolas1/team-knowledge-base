@@ -42,12 +42,12 @@
 
 ## 4. B4 检索与证据（memory-retrieval、conversation-memory；前置 B3）
 
-- [ ] 4.1 扩展 Recall 请求类型、时间、include、min_scores、prefer_observations 和预算参数；验证旧参数默认语义兼容及请求不能扩大硬上限。
-- [ ] 4.2 贯穿四路检索相同过滤和预算，复用 DeadlineBudget/MMR；验证超时降级、各分支过滤及输出 token 上限。
-- [ ] 4.3 增加 chunk/document expand 接口及来源存在性/范围/有效性检查；验证删除和越权 ID 不返回内容。
-- [ ] 4.4 返回证据时间、来源依赖和 stale reason；验证变更源使旧综合认识可识别且不可冒充当前证据。
-- [ ] 4.5 扩展 Pi 注入策略、类型/时间展示和 recall 配置；验证预算、不可信边界及注入内容不回流历史。
-- [ ] 4.6 完成 B4 契约、多路故障、展开和现有 fast/deep 检索回归；输出批次报告和延迟/用量比较。
+- [x] 4.1 扩展 Recall 请求类型、时间、include、min_scores、prefer_observations 和预算参数；验证旧参数默认语义兼容及请求不能扩大硬上限。
+- [x] 4.2 贯穿四路检索相同过滤和预算，复用 DeadlineBudget/MMR；验证超时降级、各分支过滤及输出 token 上限。
+- [x] 4.3 增加 chunk/document expand 接口及来源存在性/范围/有效性检查；验证删除和越权 ID 不返回内容。
+- [x] 4.4 返回证据时间、来源依赖和 stale reason；验证变更源使旧综合认识可识别且不可冒充当前证据。
+- [x] 4.5 扩展 Pi 注入策略、类型/时间展示和 recall 配置；验证预算、不可信边界及注入内容不回流历史。
+- [x] 4.6 完成 B4 契约、多路故障、展开和现有 fast/deep 检索回归；输出批次报告和延迟/用量比较。
 
 ## 5. B5 长期模型（mental-models；前置 B3+B4）
 

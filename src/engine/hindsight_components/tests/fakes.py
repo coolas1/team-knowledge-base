@@ -68,13 +68,14 @@ class FakeRepository:
         limit: int,
         *,
         source_type: str | None = None,
+        filters=None,
     ) -> list[RecallCandidate]:
         self.calls["semantic"] += 1
         self.source_filters.append(source_type)
         return [self.a, self.b]
 
     async def keyword_search(
-        self, query: str, limit: int, *, source_type: str | None = None
+        self, query: str, limit: int, *, source_type: str | None = None, filters=None
     ) -> list[RecallCandidate]:
         self.calls["keyword"] += 1
         self.source_filters.append(source_type)
@@ -86,6 +87,7 @@ class FakeRepository:
         limit: int,
         *,
         source_type: str | None = None,
+        filters=None,
     ) -> list[RecallCandidate]:
         self.calls["graph"] += 1
         self.source_filters.append(source_type)
@@ -98,6 +100,7 @@ class FakeRepository:
         limit: int,
         *,
         source_type: str | None = None,
+        filters=None,
     ) -> list[RecallCandidate]:
         self.calls["temporal"] += 1
         self.source_filters.append(source_type)

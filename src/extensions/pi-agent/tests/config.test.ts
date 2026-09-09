@@ -18,6 +18,9 @@ describe("loadTkbAdapterConfig", () => {
     expect(config.conversationMemoryRecallTimeoutMs).toBe(5000);
     expect(config.conversationMemoryRecallLimit).toBe(5);
     expect(config.conversationMemoryContextBudgetChars).toBe(6000);
+    expect(config.conversationMemoryTypes).toEqual([]);
+    expect(config.conversationMemoryShowType).toBe(false);
+    expect(config.conversationMemoryShowSourceTime).toBe(false);
     expect(config.conversationMemoryRetentionContext).toBe(
       "Completed team conversation turn",
     );
@@ -44,11 +47,17 @@ describe("loadTkbAdapterConfig", () => {
       TKB_CONVERSATION_MEMORY_RECALL_LIMIT: "10",
       TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS: "4000",
       TKB_CONVERSATION_MEMORY_RETENTION_CONTEXT: "Support conversation",
+      TKB_CONVERSATION_MEMORY_TYPES: "world, observation",
+      TKB_CONVERSATION_MEMORY_SHOW_TYPE: "true",
+      TKB_CONVERSATION_MEMORY_SHOW_SOURCE_TIME: "yes",
     });
     expect(config.conversationMemoryEnabled).toBe(true);
     expect(config.conversationMemoryRecallTimeoutMs).toBe(1200);
     expect(config.conversationMemoryRecallLimit).toBe(10);
     expect(config.conversationMemoryContextBudgetChars).toBe(4000);
+    expect(config.conversationMemoryTypes).toEqual(["world", "observation"]);
+    expect(config.conversationMemoryShowType).toBe(true);
+    expect(config.conversationMemoryShowSourceTime).toBe(true);
     expect(config.conversationMemoryRetentionContext).toBe("Support conversation");
 
     for (const [key, value] of [

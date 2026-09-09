@@ -25,6 +25,7 @@ from .types import (
     ConversationMemoryJob,
     ConversationMemoryQueueStats,
     RecallResult,
+    RecallFilter,
 )
 
 
@@ -98,15 +99,28 @@ class ConversationMemoryService:
             raise ValueError(f"top_k must be between 1 and {self._max_recall_results}")
         if request.mode not in {"fast", "deep"}:
             raise ValueError(f"unsupported retrieval mode: {request.mode}")
+        filter_arg = (
+            {
+                "filters": RecallFilter(
+                    memory_types=request.memory_types,
+                    source_types=("conversation",),
+                )
+            }
+            if request.memory_types
+            else {}
+        )
         recalled = await self._recall_service.recall(
             query,
             mode=request.mode,
             top_k=request.top_k,
             source_type="conversation",
+            **filter_arg,
         )
         memories = []
         for item in recalled.results:
-            if not item.session_id or not item.turn_id:
+            if (
+                not item.session_id or not item.turn_id
+            ) and item.memory_type != "observation":
                 continue
             memories.append(
                 ConversationMemoryItem(
@@ -114,10 +128,19 @@ class ConversationMemoryService:
                     text=item.text,
                     memory_type=item.memory_type,
                     document_id=item.document_id,
-                    session_id=item.session_id,
-                    turn_id=item.turn_id,
+                    session_id=item.session_id or "derived",
+                    turn_id=item.turn_id or item.id,
                     score=item.final_score,
                     metadata=dict(item.metadata),
+                    mentioned_at=item.mentioned_at
+                    if request.include_source_time
+                    else None,
+                    occurred_start=item.occurred_start
+                    if request.include_source_time
+                    else None,
+                    occurred_end=item.occurred_end
+                    if request.include_source_time
+                    else None,
                 )
             )
         return ConversationMemoryRecallResult(

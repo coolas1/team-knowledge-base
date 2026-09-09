@@ -64,10 +64,14 @@ class ConsolidationOptions:
             raise ValueError("consolidation limits must be positive")
         if not 0 <= self.semantic_threshold <= 1:
             raise ValueError("semantic threshold must be between zero and one")
-        if self.max_cost_microusd < 0 or min(
-            self.input_cost_usd_per_million,
-            self.output_cost_usd_per_million,
-        ) < 0:
+        if (
+            self.max_cost_microusd < 0
+            or min(
+                self.input_cost_usd_per_million,
+                self.output_cost_usd_per_million,
+            )
+            < 0
+        ):
             raise ValueError("consolidation cost limit cannot be negative")
         if self.max_cost_microusd and not (
             self.input_cost_usd_per_million or self.output_cost_usd_per_million
@@ -498,6 +502,19 @@ class PostgresConsolidationRepository:
             + 1
         )
         observation_id = uuid.uuid4()
+        source_types = sorted(
+            {
+                str((fact.metadata_json or {}).get("source_type") or "upload")
+                for fact in facts
+            }
+        )
+        session_ids = sorted(
+            {
+                str((fact.metadata_json or {}).get("session_id"))
+                for fact in facts
+                if (fact.metadata_json or {}).get("session_id")
+            }
+        )
         row = MemoryUnit(
             id=observation_id,
             bank_id=claim.bank_id,
@@ -518,7 +535,13 @@ class PostgresConsolidationRepository:
             scope_tags=list(claim.write_scope),
             state="active",
             memory_version=1,
-            metadata_json={"derived": True, "change_kind": action.change},
+            metadata_json={
+                "derived": True,
+                "change_kind": action.change,
+                "source_type": source_types[0] if len(source_types) == 1 else "mixed",
+                "source_types": source_types,
+                "source_session_ids": session_ids,
+            },
         )
         session.add(row)
         # Flush the observation head before evidence/link rows. The repository
@@ -594,16 +617,14 @@ class PostgresConsolidationRepository:
             row.source_memory_ids = [uuid.UUID(item) for item in action.source_fact_ids]
             row.proof_count = len(action.source_fact_ids)
             row.state = "active"
-            row.metadata_json = {
-                **dict(row.metadata_json or {}),
-                "change_kind": action.change,
-            }
             record.normalized_text = exact_key(action.text)
             record.freshness = "active"
             record.stale_reason = None
             record.has_conflict = action.change == "conflict"
             current = existing_sources
             wanted = {uuid.UUID(item) for item in action.source_fact_ids}
+            source_types: set[str] = set()
+            session_ids: set[str] = set()
             if current - wanted:
                 await session.execute(
                     ObservationEvidence.__table__.update()
@@ -615,6 +636,10 @@ class PostgresConsolidationRepository:
                 )
             for fact_id in wanted:
                 fact = await session.get(MemoryUnit, fact_id)
+                fact_metadata = fact.metadata_json or {}
+                source_types.add(str(fact_metadata.get("source_type") or "upload"))
+                if fact_metadata.get("session_id"):
+                    session_ids.add(str(fact_metadata["session_id"]))
                 await session.execute(
                     insert(ObservationEvidence)
                     .values(
@@ -642,6 +667,15 @@ class PostgresConsolidationRepository:
                     )
                     .on_conflict_do_nothing()
                 )
+            row.metadata_json = {
+                **dict(row.metadata_json or {}),
+                "change_kind": action.change,
+                "source_type": next(iter(source_types))
+                if len(source_types) == 1
+                else "mixed",
+                "source_types": sorted(source_types),
+                "source_session_ids": sorted(session_ids),
+            }
         row.memory_version = version
         record.version = version
         record.processed_through = watermark
