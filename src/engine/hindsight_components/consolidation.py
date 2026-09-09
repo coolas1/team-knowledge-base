@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,9 @@ from .models import (
     ObservationRecord,
 )
 from .utils import cosine, lexical_tokens
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -997,17 +1001,29 @@ class ConsolidationWorker:
         equivalent_indices = set()
         if pairs:
             semantic_timeout = min(60, self.options.llm_timeout_seconds)
-            verdict = await asyncio.wait_for(
-                self.providers.json(
-                    "Decide only whether two observations are semantically equivalent. "
-                    "Contradictions and changed preferences are not equivalent.",
-                    json.dumps({"pairs": pairs}, ensure_ascii=False)
-                    + '\nReturn {"equivalent_indices":[0,1]}; include only equivalent pair indices.',
+            try:
+                verdict = await asyncio.wait_for(
+                    self.providers.json(
+                        "Decide only whether two observations are semantically equivalent. "
+                        "Contradictions and changed preferences are not equivalent.",
+                        json.dumps({"pairs": pairs}, ensure_ascii=False)
+                        + '\nReturn {"equivalent_indices":[0,1]}; include only equivalent pair indices.',
+                        timeout=semantic_timeout,
+                        max_tokens=min(512, self.options.max_output_tokens),
+                    ),
                     timeout=semantic_timeout,
-                    max_tokens=min(512, self.options.max_output_tokens),
-                ),
-                timeout=semantic_timeout,
-            )
+                )
+            except Exception as error:
+                # Semantic deduplication is an optional optimization. A provider
+                # may return HTTP 200 with empty/non-JSON content, especially
+                # when a reasoning model consumes its small output allowance.
+                # Keep the already validated actions so this auxiliary verdict
+                # cannot make the whole consolidation batch retry forever.
+                logger.warning(
+                    "semantic consolidation deduplication skipped: %s",
+                    type(error).__name__,
+                )
+                return actions
             equivalent_indices = {
                 int(index)
                 for index in verdict.get("equivalent_indices", [])

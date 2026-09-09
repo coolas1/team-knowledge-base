@@ -387,6 +387,61 @@ async def test_semantic_dedup_batches_candidate_verdicts():
     assert [item.action.action for item in result] == ["update", "update"]
 
 
+@pytest.mark.parametrize(
+    "provider_error",
+    [TimeoutError(), ValueError("empty model content")],
+    ids=["timeout", "invalid-json"],
+)
+async def test_semantic_dedup_provider_failure_keeps_validated_actions(
+    provider_error, caplog
+):
+    fact_id = str(uuid.uuid4())
+    observation_id = str(uuid.uuid4())
+    actions = (
+        ValidatedAction(
+            ConsolidationAction(
+                action="create",
+                text="User likes brief replies",
+                source_fact_ids=[fact_id],
+            ),
+            None,
+            ((fact_id, 1),),
+        ),
+    )
+    read_set = ConsolidationReadSet(
+        facts={fact_id: EvidenceVersion(fact_id, 1, "a", ())},
+        fact_rows={},
+        observations={
+            observation_id: ObservationVersion(
+                observation_id, 1, "a", (), "active", (fact_id,)
+            )
+        },
+        observation_rows={
+            observation_id: MemoryUnit(
+                id=uuid.UUID(observation_id),
+                text="The user prefers concise answers",
+                state="active",
+                embedding=[1.0, 0.0],
+            )
+        },
+        deleted_fact_ids=(),
+    )
+
+    class Providers:
+        async def embed(self, _texts):
+            return [[1.0, 0.0]]
+
+        async def json(self, *_args, **_kwargs):
+            raise provider_error
+
+    result = await ConsolidationWorker(
+        None, Providers(), ConsolidationOptions(semantic_threshold=0.8)
+    )._semantic_coalesce(actions, read_set)
+
+    assert result == actions
+    assert "semantic consolidation deduplication skipped" in caplog.text
+
+
 async def test_semantic_dedup_merges_update_target_and_preserves_both_histories():
     fact_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
     observation_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
