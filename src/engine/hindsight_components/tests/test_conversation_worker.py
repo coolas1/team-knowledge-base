@@ -99,6 +99,28 @@ async def test_incomplete_extraction_is_retried_instead_of_completed(status):
     assert queue.statuses["document-1"] == "pending"
 
 
+async def test_entity_resolution_degradation_does_not_retry_committed_memory() -> None:
+    class EntityDegradedService(FakeService):
+        async def retain(self, retain_input):
+            return SimpleNamespace(
+                status="degraded",
+                stage_results={
+                    "extract": "success",
+                    "entities": "degraded",
+                    "consolidate": "queued",
+                },
+            )
+
+    queue = FakeQueue([_job()])
+    result = await ConversationRetentionWorker(
+        queue, EntityDegradedService(), FakeCleaner()
+    ).run_once()
+
+    assert result.completed == 1
+    assert result.retried == 0
+    assert queue.statuses["document-1"] == "completed"
+
+
 async def test_worker_retains_conversation_provenance_and_completes_job() -> None:
     queue = FakeQueue([_job()])
     service = FakeService()

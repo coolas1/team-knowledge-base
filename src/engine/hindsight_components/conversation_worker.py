@@ -155,7 +155,16 @@ class ConversationRetentionWorker:
                     getattr(retained, "stage_results", {}),
                     **lease_args,
                 )
-            if getattr(retained, "status", "success") in {"degraded", "failed"}:
+            stage_results = getattr(retained, "stage_results", {}) or {}
+            critical_stage_incomplete = any(
+                value in {"degraded", "failed"}
+                for stage, value in stage_results.items()
+                if stage != "entities"
+            )
+            if (
+                getattr(retained, "status", "success") == "failed"
+                or critical_stage_incomplete
+            ):
                 raise RuntimeError("retention_stage_incomplete")
         except asyncio.CancelledError:
             raise
