@@ -370,6 +370,41 @@ async def test_edit_document_content(fake_kb):
     assert fake_kb.raw[uploaded.id] == b"new"
 
 
+async def test_version_tools_delegate_to_knowledge_base(fake_kb):
+    async def list_versions(doc_id):
+        return [{"id": doc_id, "version_number": 1}]
+
+    async def diff_versions(doc_id, from_version, to_version):
+        return {
+            "doc_id": doc_id,
+            "from_version": from_version,
+            "to_version": to_version,
+            "changes": [],
+        }
+
+    async def propose_edit(doc_id, edit_request):
+        return {"doc_id": doc_id, "edit_request": edit_request}
+
+    async def confirm_version_match(doc_id, parent_doc_id):
+        return {"doc_id": doc_id, "parent_doc_id": parent_doc_id}
+
+    fake_kb.list_versions = list_versions
+    fake_kb.diff_versions = diff_versions
+    fake_kb.propose_edit = propose_edit
+    fake_kb.confirm_version_match = confirm_version_match
+
+    assert (await mcp_mod.tkb_list_versions("doc-1"))["versions"][0][
+        "version_number"
+    ] == 1
+    assert (await mcp_mod.tkb_diff_versions("doc-1", 1, 2))["to_version"] == 2
+    assert (await mcp_mod.tkb_propose_edit("doc-1", "change"))["edit_request"] == (
+        "change"
+    )
+    assert (await mcp_mod.tkb_confirm_version_match("doc-2", "doc-1"))[
+        "parent_doc_id"
+    ] == "doc-1"
+
+
 async def test_reingest_document(fake_kb):
     uploaded = await fake_kb.ingest(IngestSource(name="week.md", data=b"content"))
 

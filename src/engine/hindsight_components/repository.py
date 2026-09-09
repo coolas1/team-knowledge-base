@@ -242,7 +242,11 @@ class PostgresMemoryRepository:
                 HindsightDocumentState,
                 HindsightDocumentState.document_id == Document.id,
             )
-            .where(Document.status == "indexed", Document.raw_text != "")
+            .where(
+                Document.status == "indexed",
+                Document.raw_text != "",
+                Document.is_current.is_(True),
+            )
             .order_by(Document.created_at, Document.id)
         )
         if document_id is not None:
@@ -565,6 +569,7 @@ class PostgresMemoryRepository:
                     MemoryUnit.state == "active",
                     MemoryUnit.embedding.is_not(None),
                     Document.status == "indexed",
+                    Document.is_current.is_(True),
                     *self._recall_source_conditions(source_type),
                 )
                 .order_by(score.desc())
@@ -641,7 +646,13 @@ class PostgresMemoryRepository:
                     await session.execute(
                         select(MemoryUnit, Document)
                         .join(Document, Document.id == MemoryUnit.document_id)
-                        .where(MemoryUnit.id.in_(score_by_id))
+                        .where(
+                            MemoryUnit.id.in_(score_by_id),
+                            MemoryUnit.state == "active",
+                            Document.status == "indexed",
+                            Document.is_current.is_(True),
+                            *self._recall_source_conditions(source_type),
+                        )
                     )
                 ).all()
             )
@@ -675,6 +686,7 @@ class PostgresMemoryRepository:
                 .where(
                     MemoryUnit.state == "active",
                     Document.status == "indexed",
+                    Document.is_current.is_(True),
                     *self._recall_source_conditions(source_type),
                     or_(
                         *[
@@ -719,6 +731,7 @@ class PostgresMemoryRepository:
                                 MemoryUnit.id.in_(expanded_scores),
                                 MemoryUnit.state == "active",
                                 Document.status == "indexed",
+                                Document.is_current.is_(True),
                                 *self._recall_source_conditions(source_type),
                             )
                         )
@@ -764,6 +777,7 @@ class PostgresMemoryRepository:
                     *conditions,
                     MemoryUnit.state == "active",
                     Document.status == "indexed",
+                    Document.is_current.is_(True),
                     *self._recall_source_conditions(source_type),
                 )
                 .order_by(MemoryUnit.occurred_start.desc())

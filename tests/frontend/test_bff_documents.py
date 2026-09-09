@@ -152,6 +152,40 @@ def test_edit_document_content_not_found(client):
     assert res.status_code == 404
 
 
+def test_list_document_versions(client):
+    c, kb = client
+
+    async def list_versions(doc_id):
+        return [{"id": doc_id, "version_number": 1, "is_current": True}]
+
+    kb.list_versions = list_versions
+    res = c.get("/api/documents/doc-1/versions")
+
+    assert res.status_code == 200
+    assert res.json()["versions"][0]["version_number"] == 1
+
+
+def test_diff_document_versions(client):
+    c, kb = client
+
+    async def diff_versions(doc_id, from_version, to_version):
+        return {
+            "doc_id": doc_id,
+            "from_version": from_version,
+            "to_version": to_version,
+            "changes": [],
+        }
+
+    kb.diff_versions = diff_versions
+    res = c.get(
+        "/api/documents/doc-1/versions/diff",
+        params={"from_version": 1, "to_version": 2},
+    )
+
+    assert res.status_code == 200
+    assert res.json()["to_version"] == 2
+
+
 def test_delete_document(client):
     c, _ = client
     res = c.delete("/api/documents/abc")

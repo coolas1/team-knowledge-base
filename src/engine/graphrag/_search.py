@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.components.reranker import get_reranker
-from src.engine.components.store.models import Chunk
+from src.engine.components.store.models import Chunk, Document
 from src.engine.components.store.neo4j import Neo4jClient, GraphQueryResult
 from src.engine.components.embedder import embedder
 
@@ -46,6 +46,7 @@ async def vector_search(
     session: AsyncSession,
     query: str,
     top_k: int = DEFAULT_TOP_K,
+    current_only: bool = True,
 ) -> list[dict]:
     """第一层：向量粗筛。
 
@@ -56,6 +57,8 @@ async def vector_search(
     """
     query_embedding = await embedder.embed_text(query)
 
+    # current_only=True 时只检索版本链的最新版（is_current），历史版本
+    # 通过显式的版本工具访问。
     stmt = (
         select(
             Chunk.id.label("chunk_id"),
@@ -66,9 +69,12 @@ async def vector_search(
             Chunk.doc_id,
             (1 - Chunk.embedding.cosine_distance(query_embedding)).label("score"),
         )
+        .join(Document, Document.id == Chunk.doc_id)
         .order_by(Chunk.embedding.cosine_distance(query_embedding))
         .limit(top_k)
     )
+    if current_only:
+        stmt = stmt.where(Document.is_current.is_(True))
 
     result = await session.execute(stmt)
     rows = result.all()

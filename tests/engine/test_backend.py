@@ -138,7 +138,11 @@ async def test_internal_conversation_document_is_not_read_editable_or_removable(
             return internal
 
     pipeline = SimpleNamespace(before_remove=lambda *_args: None)
-    neo4j = SimpleNamespace(delete_document_graph=lambda *_args: None)
+
+    async def fake_delete_document_graph(*_args):
+        return None
+
+    neo4j = SimpleNamespace(delete_document_graph=fake_delete_document_graph)
     monkeypatch.setattr(backend_mod, "async_session_factory", Session)
     backend = GraphRAGBackend(neo4j, pipeline)
 
@@ -150,7 +154,8 @@ async def test_internal_conversation_document_is_not_read_editable_or_removable(
     await backend.remove(str(internal.id))
 
 
-async def test_edit_content_persists_text_and_schedules_reindex(monkeypatch):
+async def test_edit_content_creates_new_version_and_schedules_reindex(monkeypatch):
+    """版本化编辑：保存生成新版本（旧行退位），重索引新行。"""
     document_id = uuid.uuid4()
     document = SimpleNamespace(
         id=document_id,
@@ -159,7 +164,15 @@ async def test_edit_content_persists_text_and_schedules_reindex(monkeypatch):
         status="indexed",
         overview="old overview",
         error_msg="old error",
+        raw_text="old text",
+        content_hash="old-hash",
+        version_group=document_id,
+        version_number=1,
+        version_of=None,
+        is_current=True,
     )
+
+    added: list = []
 
     class FakeSession:
         async def __aenter__(self):
@@ -169,35 +182,50 @@ async def test_edit_content_persists_text_and_schedules_reindex(monkeypatch):
             return None
 
         async def get(self, _model, uid):
-            return document if uid == document_id else None
+            return document if uid == document_id else added[0]
 
-        async def execute(self, _statement):
-            document.raw_text = "updated"
-            document.status = "pending"
-            document.error_msg = None
+        def add(self, obj):
+            added.append(obj)
+
+        async def execute(self, statement):
+            # 旧版退位（生产中是 UPDATE ... SET is_current=false）
+            document.is_current = False
+            return None
 
         async def commit(self):
             return None
 
-        async def refresh(self, _document):
+        async def refresh(self, obj):
             return None
 
     calls = []
 
     class FakePipeline:
-        async def reindex_document(self, uid, content):
+        async def reindex_document(self, uid, content, previous_version=None):
             calls.append((uid, content))
 
     monkeypatch.setattr(backend_mod, "async_session_factory", FakeSession)
+    monkeypatch.setattr(
+        backend_mod, "_remove_upload_directory", lambda *_args, **_kwargs: None
+    )
     backend = GraphRAGBackend(SimpleNamespace(), FakePipeline())
 
     result = await backend.edit_content(str(document_id), "updated")
     await asyncio.sleep(0)
 
-    assert result.status == "pending"
-    assert document.raw_text == "updated"
-    assert document.error_msg is None
-    assert calls == [(document_id, "updated")]
+    # 新版本行已创建并挂链
+    assert len(added) == 1
+    new_doc = added[0]
+    assert new_doc.version_number == 2
+    assert new_doc.version_of == document_id
+    assert new_doc.version_group == document_id
+    assert document.is_current is False
+    assert new_doc.raw_text == "updated"
+    # 重索引调度到新版本行
+    assert len(calls) == 1
+    assert calls[0][0] == new_doc.id
+    assert calls[0][1] == "updated"
+    assert result.id == str(new_doc.id)
 
 
 @pytest.mark.parametrize("has_raw_text", [True, False])
@@ -421,6 +449,13 @@ async def test_ingest_batch_schedules_pipeline_per_file(monkeypatch, tmp_path):
     monkeypatch.setattr(backend_mod, "UPLOAD_DIR", tmp_path / "uploads")
     document_ids = iter([uuid.uuid4() for _ in range(2)])
 
+    class _EmptyResult:
+        def scalar_one_or_none(self):
+            return None
+
+        def all(self):
+            return []
+
     class FakeSession:
         def __init__(self):
             self.doc = None
@@ -433,6 +468,9 @@ async def test_ingest_batch_schedules_pipeline_per_file(monkeypatch, tmp_path):
 
         def add(self, doc):
             self.doc = doc
+
+        async def execute(self, _statement):
+            return _EmptyResult()
 
         async def commit(self):
             return None

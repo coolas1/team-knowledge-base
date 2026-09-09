@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import hashlib
 import logging
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
-from src.engine.components.store.models import Chunk, Document
+from src.engine.components.store.models import Chunk, Document, DocumentChange
 from src.engine.components.store.neo4j import (
     Neo4jClient,
     EntityData,
@@ -39,6 +40,16 @@ def _unwrap_exception_group(exc: BaseException) -> BaseException:
     return exc
 
 
+@dataclass
+class VersionParent:
+    """新版本上传时的上一版上下文（backend 在会话关闭前提取的纯数据）。"""
+
+    doc_id: str
+    raw_text: str
+    from_version: int
+    to_version: int
+
+
 class Pipeline:
     """文件入库 Pipeline 编排器。"""
 
@@ -58,9 +69,7 @@ class Pipeline:
 
     async def _analyze_document(
         self, raw_text: str, title: str, doc_id: UUID
-    ) -> tuple[
-        AnalysisResult, list, list[ChunkAnalysisResult], list[list[float]]
-    ]:
+    ) -> tuple[AnalysisResult, list, list[ChunkAnalysisResult], list[list[float]]]:
         """分块后并行执行：overview ∥ 逐 chunk 分析（信号量限流）∥ embedding。
 
         返回 (doc_analysis, chunks, chunk_analyses, embeddings)；
@@ -114,21 +123,20 @@ class Pipeline:
         file_path: Path,
         title: str,
         file_type: str,
+        previous_version: VersionParent | None = None,
     ) -> None:
         """处理新上传的文件：提取 -> 分块 -> 分析 -> embedding -> 写入。
 
         幂等性：通过 content_hash (SHA256) 判断，内容未变则跳过。
         doc 信号量限制并发处理的文档数；分析阶段内部并行（chunk 信号量限流）。
+        版本链：previous_version 提供上一版上下文时，成功入库后
+        追加变更抽取（LLM diff）并写入版本图谱。
         """
         async with async_session_factory() as session:
-            # 1. 读取文件并计算 hash
-            raw_bytes = file_path.read_bytes()
-            content_hash = hashlib.sha256(raw_bytes).hexdigest()
-
-            # 检查幂等性
+            # 1. 检查已完成文档；规范化的文本 hash 在提取后计算。
             doc = await session.get(Document, doc_id)
-            if doc and doc.content_hash == content_hash and doc.status == "indexed":
-                logger.info(f"文档 {doc_id} 内容未变，跳过 pipeline")
+            if doc and doc.status == "indexed":
+                logger.info(f"文档 {doc_id} 已完成，跳过 pipeline")
                 return
 
             # 2. 标记为 processing
@@ -144,6 +152,7 @@ class Pipeline:
             set_progress(str(doc_id), "extracting", "提取文本")
             async with self._doc_sem:
                 raw_text = await asyncio.to_thread(registry.extract, file_path)
+                content_hash = hashlib.sha256(raw_text.encode()).hexdigest()
                 logger.info(f"文档 {doc_id} 提取完成, {len(raw_text)} 字符")
                 (
                     doc_analysis,
@@ -172,16 +181,33 @@ class Pipeline:
             # 5. 写入 Neo4j（三层图谱）
             async with async_session_factory() as session:
                 set_progress(str(doc_id), "writing_neo4j", "写入知识图谱")
+                doc_row = await session.get(Document, doc_id)
                 await self._neo4j.upsert_document_node(
                     doc_id=str(doc_id),
                     title=title,
                     file_type=file_type,
                     overview=doc_analysis.overview,
+                    # getattr 容错：tests 用 SimpleNamespace 伪造 Document
+                    version_number=getattr(doc_row, "version_number", 1)
+                    if doc_row
+                    else 1,
+                    is_current=getattr(doc_row, "is_current", True)
+                    if doc_row
+                    else True,
                 )
                 await self._write_chunk_graph(str(doc_id), title, chunk_analyses)
                 if doc_analysis.file_relations:
                     await self._write_file_relations(
                         str(doc_id), doc_analysis.file_relations, session
+                    )
+                # 6. 版本链：抽取相邻版本 diff + 版本图谱投影
+                if previous_version is not None:
+                    await self._process_version_change(
+                        doc_id=doc_id,
+                        title=title,
+                        new_text=raw_text,
+                        previous_version=previous_version,
+                        session=session,
                     )
             await self._notify_indexed(
                 document_id=str(doc_id),
@@ -254,8 +280,17 @@ class Pipeline:
             )
             await session.commit()
 
-    async def reindex_document(self, doc_id: UUID, new_text: str) -> None:
-        """编辑后重新索引：跳过文本提取，直接从文本开始分析。"""
+    async def reindex_document(
+        self,
+        doc_id: UUID,
+        new_text: str,
+        previous_version: VersionParent | None = None,
+    ) -> None:
+        """编辑后重新索引：跳过文本提取，直接从文本开始分析。
+
+        previous_version 提供上一版上下文时，成功入库后追加
+        变更抽取（LLM diff）并写入版本图谱。
+        """
         async with async_session_factory() as session:
             doc = await session.get(Document, doc_id)
             if not doc:
@@ -263,6 +298,9 @@ class Pipeline:
 
             title = doc.title
             file_type = doc.file_type
+            version_of = doc.version_of
+            version_number = doc.version_number
+            is_current = doc.is_current
             content_hash = hashlib.sha256(new_text.encode()).hexdigest()
 
             await session.execute(
@@ -302,13 +340,30 @@ class Pipeline:
                     title=title,
                     file_type=file_type,
                     overview=doc_analysis.overview,
+                    version_number=version_number,
+                    is_current=is_current,
                 )
+                # 版本链边在 delete_document_graph 中被移除，此处重连
+                if version_of is not None:
+                    await self._neo4j.link_next_version(
+                        from_doc_id=str(version_of), to_doc_id=str(doc_id)
+                    )
                 await self._write_chunk_graph(str(doc_id), title, chunk_analyses)
 
                 # L3: file_relations -> Document↔Document 边
                 if doc_analysis.file_relations:
                     await self._write_file_relations(
                         str(doc_id), doc_analysis.file_relations, session
+                    )
+
+                # L4: 版本链：抽取相邻版本 diff + 版本图谱投影
+                if previous_version is not None:
+                    await self._process_version_change(
+                        doc_id=doc_id,
+                        title=title,
+                        new_text=new_text,
+                        previous_version=previous_version,
+                        session=session,
                     )
 
             await self._notify_indexed(
@@ -323,6 +378,90 @@ class Pipeline:
 
         except Exception as e:
             await self._mark_failed(doc_id, e, "re-index")
+
+    async def record_version_change(
+        self,
+        doc_id: UUID,
+        title: str,
+        new_text: str,
+        previous_version: VersionParent,
+        session=None,
+    ) -> None:
+        """公开入口：为已入库的文档补记版本 diff 与图谱投影。
+
+        confirm_version_match（改名确认挂链）等外部流程使用；
+        session 缺省时自开一个。
+        """
+        if session is not None:
+            await self._process_version_change(
+                doc_id=doc_id,
+                title=title,
+                new_text=new_text,
+                previous_version=previous_version,
+                session=session,
+            )
+            return
+        async with async_session_factory() as own_session:
+            await self._process_version_change(
+                doc_id=doc_id,
+                title=title,
+                new_text=new_text,
+                previous_version=previous_version,
+                session=own_session,
+            )
+
+    async def _process_version_change(
+        self,
+        doc_id: UUID,
+        title: str,
+        new_text: str,
+        previous_version: VersionParent,
+        session,
+    ) -> None:
+        """版本链入库：LLM diff -> document_changes 表 + Neo4j 版本图谱。
+
+        失败只记录日志，不影响文档本身已成功的 indexed 状态。
+        """
+        try:
+            # 1. LLM 抽取相邻版本的结构化变更
+            analysis = await self._analyzer.analyze_changes(
+                previous_version.raw_text, new_text, title
+            )
+            logger.info(
+                f"文档 {doc_id} v{previous_version.from_version}"
+                f"->v{previous_version.to_version} 变更抽取完成: "
+                f"{len(analysis.changes)} changes"
+            )
+
+            # 2. 写入 document_changes（同版本对幂等覆盖）
+            await session.execute(
+                delete(DocumentChange).where(DocumentChange.doc_id == doc_id)
+            )
+            session.add(
+                DocumentChange(
+                    doc_id=doc_id,
+                    from_version=previous_version.from_version,
+                    to_version=previous_version.to_version,
+                    summary=analysis.summary,
+                    changes=analysis.changes,
+                )
+            )
+            await session.commit()
+
+            # 3. Neo4j 版本图谱投影
+            await self._neo4j.link_next_version(
+                from_doc_id=previous_version.doc_id, to_doc_id=str(doc_id)
+            )
+            await self._neo4j.upsert_changes(
+                doc_id=str(doc_id),
+                from_version=previous_version.from_version,
+                to_version=previous_version.to_version,
+                summary=analysis.summary,
+                changes=analysis.changes,
+            )
+        except Exception:
+            # 版本元数据是附加产物；失败不得回滚文档索引本身。
+            logger.exception(f"文档 {doc_id} 版本链处理失败")
 
     async def _notify_indexed(
         self,

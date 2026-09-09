@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import MDEditor from '@uiw/react-md-editor'
 import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react'
-import { ApiError, api, type Document, type PipelineProgress } from '../api/client'
+import { ApiError, api, type Document, type DocumentVersion, type PipelineProgress } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
 
 const STAGE_LABELS: Record<string, string> = {
@@ -64,6 +64,7 @@ export function DocumentDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [doc, setDoc] = useState<Document | null>(null)
+  const [versions, setVersions] = useState<DocumentVersion[]>([])
   const [editing, setEditing] = useState(false)
   const [editContent, setEditContent] = useState('')
   const [saving, setSaving] = useState(false)
@@ -77,6 +78,13 @@ export function DocumentDetailPage() {
     try {
       const d = await api.getDocument(id)
       setDoc(d)
+      // 版本链（有多个版本时才有意义，失败静默）
+      try {
+        const v = await api.listVersions(id)
+        setVersions(v.versions || [])
+      } catch {
+        setVersions([])
+      }
       // 如果正在处理中，持续轮询
       if (d.status === 'pending' || d.status === 'processing') {
         setPolling(true)
@@ -108,9 +116,14 @@ export function DocumentDetailPage() {
     if (!id) return
     setSaving(true)
     try {
-      await api.editContent(id, editContent)
+      // 版本化编辑：保存生成新版本，跳转到新版本详情页
+      const newDoc = await api.editContent(id, editContent)
       setEditing(false)
-      loadDoc()
+      if (newDoc.id && newDoc.id !== id) {
+        navigate(`/documents/${newDoc.id}`)
+      } else {
+        loadDoc()
+      }
     } catch (err: any) {
       alert('保存失败: ' + err.message)
     } finally {
@@ -201,6 +214,50 @@ export function DocumentDetailPage() {
             <span>{retrying ? '处理中' : '重新处理'}</span>
           </button>
         </section>
+      )}
+
+      {/* 版本链（纵向迭代） */}
+      {versions.length > 1 && (
+        <div style={{ padding: 16, background: '#f6f8fa', borderRadius: 8, marginBottom: 16 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 14 }}>
+            版本历史（共 {versions.length} 个版本）
+          </div>
+          {versions.map((v) => (
+            <div
+              key={v.id}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 8,
+                padding: '6px 0',
+                borderBottom: '1px solid #eee',
+                cursor: v.id === doc.id ? 'default' : 'pointer',
+                opacity: v.id === doc.id ? 1 : 0.75,
+              }}
+              onClick={() => { if (v.id !== doc.id) navigate(`/documents/${v.id}`) }}
+            >
+              <span
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: v.is_current ? '#1890ff' : '#999',
+                  minWidth: 28,
+                }}
+              >
+                v{v.version_number}
+              </span>
+              {v.is_current && (
+                <span style={{ fontSize: 11, color: '#1890ff', background: '#e6f7ff', padding: '0 6px', borderRadius: 8 }}>当前</span>
+              )}
+              <span style={{ flex: 1, fontSize: 12, color: '#555' }}>
+                {v.change_summary || v.overview || '（无变更摘要）'}
+              </span>
+              <span style={{ fontSize: 11, color: '#999' }}>
+                {v.created_at ? new Date(v.created_at).toLocaleString() : ''}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* Overview */}

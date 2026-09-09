@@ -1,4 +1,5 @@
 """Webapp host document routes: call the in-process KnowledgeBase."""
+
 from __future__ import annotations
 
 import logging
@@ -55,8 +56,10 @@ class EditContentRequest(BaseModel):
 
 @router.get("")
 async def list_documents(
-    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
-    file_type: str | None = None, status: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    file_type: str | None = None,
+    status: str | None = None,
     kb: KnowledgeBase = Depends(deps.get_kb),
 ):
     return await kb.list_documents(page, page_size, file_type, status)
@@ -75,6 +78,27 @@ async def get_document(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
     if p is not None:
         out["pipeline"] = p
     return out
+
+
+@router.get("/{doc_id}/versions")
+async def list_versions(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
+    try:
+        return {"doc_id": doc_id, "versions": await kb.list_versions(doc_id)}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.get("/{doc_id}/versions/diff")
+async def diff_versions(
+    doc_id: str,
+    from_version: int = Query(..., ge=1),
+    to_version: int = Query(..., ge=1),
+    kb: KnowledgeBase = Depends(deps.get_kb),
+):
+    try:
+        return await kb.diff_versions(doc_id, from_version, to_version)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
 
 def _upload_file_error(filename: str | None, data: bytes) -> tuple[int, dict] | None:
@@ -138,7 +162,9 @@ async def _ingest_uploaded(kb: KnowledgeBase, filename: str, data: bytes):
 
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...), kb: KnowledgeBase = Depends(deps.get_kb)):
+async def upload_document(
+    file: UploadFile = File(...), kb: KnowledgeBase = Depends(deps.get_kb)
+):
     data = await file.read()
     error = _upload_file_error(file.filename, data)
     if error is not None:
@@ -162,9 +188,7 @@ async def upload_documents_batch(
         error = _upload_file_error(file.filename, data)
         if error is not None:
             _status, detail = error
-            items.append(
-                {"ok": False, "error": {**detail, "filename": file.filename}}
-            )
+            items.append({"ok": False, "error": {**detail, "filename": file.filename}})
             continue
         try:
             ref = await _ingest_uploaded(kb, file.filename, data)
@@ -175,18 +199,6 @@ async def upload_documents_batch(
             continue
         items.append({"ok": True, "document": asdict(ref)})
     return {"items": items}
-
-
-@router.put("/{doc_id}/content")
-async def edit_document_content(
-    doc_id: str,
-    body: EditContentRequest,
-    kb: KnowledgeBase = Depends(deps.get_kb),
-):
-    try:
-        return asdict(await kb.edit_content(doc_id, body.content))
-    except ValueError as exc:
-        raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/{doc_id}/retry")
@@ -210,6 +222,21 @@ async def retry_document(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
             "请稍后重试；如果持续失败，请检查数据库、模型和存储服务状态。",
             retryable=True,
         ) from exc
+
+
+@router.put("/{doc_id}/content")
+async def edit_document_content(
+    doc_id: str,
+    body: EditContentRequest,
+    kb: KnowledgeBase = Depends(deps.get_kb),
+):
+    """版本化编辑：保存生成新版本，旧版保留在版本链中。"""
+    if not body.content.strip():
+        raise HTTPException(400, "内容不能为空")
+    try:
+        return asdict(await kb.edit_content(doc_id, body.content))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
 
 @router.delete("/{doc_id}")

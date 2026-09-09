@@ -24,9 +24,43 @@ export interface Document {
   memory_count?: number
   memory_link_count?: number
   chunk_count?: number
+  version_group?: string
+  version_number?: number
+  is_current?: boolean
   pipeline?: PipelineProgress
   created_at?: string
   updated_at?: string
+}
+
+export interface DocumentVersion {
+  id: string
+  title: string
+  version_number: number
+  is_current: boolean
+  status: string
+  overview: string
+  change_summary: string
+  created_at?: string
+}
+
+export interface DocumentVersionList {
+  doc_id: string
+  versions: DocumentVersion[]
+}
+
+export interface DocumentChange {
+  name: string
+  description: string
+  status: 'added' | 'removed' | 'modified'
+}
+
+export interface DocumentVersionDiff {
+  doc_id: string
+  from_version: number
+  to_version: number
+  summary: string
+  changes: DocumentChange[]
+  error?: string
 }
 
 export interface DocumentList {
@@ -281,6 +315,18 @@ export const api = {
 
   deleteDocument(id: string) {
     return request<{ deleted: boolean }>(`/documents/${id}`, { method: 'DELETE' })
+  },
+
+  listVersions(id: string) {
+    return request<DocumentVersionList>(`/documents/${id}/versions`)
+  },
+
+  diffVersions(id: string, fromVersion: number, toVersion: number) {
+    const qs = new URLSearchParams({
+      from_version: String(fromVersion),
+      to_version: String(toVersion),
+    })
+    return request<DocumentVersionDiff>(`/documents/${id}/versions/diff?${qs}`)
   },
 
   // 图谱
