@@ -264,6 +264,14 @@ describe('api client', () => {
       { method: 'DELETE' },
     )
   })
+
+  it('loads the expanded memory fact window', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('[]', { status: 200 }))
+
+    await api.listMemoryFacts()
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/memory/facts?limit=500', undefined)
+  })
 })
 
   it('uploadFiles posts all files to the batch endpoint', async () => {

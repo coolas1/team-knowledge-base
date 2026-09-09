@@ -160,7 +160,7 @@ export function MemoryPage() {
           <div><strong>记忆中心</strong><span>诊断与管理</span></div>
         </div>
         <div className="memory-summary">
-          <div><strong>{facts.length}</strong><span>记忆事实</span></div>
+          <div><strong>{facts.length}</strong><span>已加载记忆</span></div>
           <div><strong>{activeTasks}</strong><span>进行中</span></div>
         </div>
         <nav className="memory-navigation" aria-label="记忆管理导航">
@@ -241,7 +241,7 @@ export function MemoryPage() {
 
               {activeSection === 'facts' && (
                 <section className="memory-workspace" aria-label="事实与证据">
-                  <div className="memory-section-toolbar"><div><strong>{facts.length} 条记忆</strong><span>点击 observation 可查看证据链</span></div></div>
+                  <div className="memory-section-toolbar"><div><strong>{facts.length} 条已加载记忆</strong><span>点击 observation 可查看证据链</span></div></div>
                   <div className="memory-fact-list">
                     {facts.map((fact) => (
                       <article className="memory-fact-card" key={fact.id}>

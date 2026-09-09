@@ -383,8 +383,8 @@ export const api = {
     )
   },
 
-  listMemoryFacts() {
-    return request<MemoryFact[]>('/memory/facts')
+  listMemoryFacts(limit = 500) {
+    return request<MemoryFact[]>(`/memory/facts?limit=${limit}`)
   },
 
   getObservation(id: string) {
