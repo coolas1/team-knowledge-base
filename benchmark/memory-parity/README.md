@@ -80,6 +80,7 @@ deletion, scope, and expansion behavior, while B7 retains the full relevance gat
 `build_full_report.py` verifies and combines the immutable one-pass model outputs
 with the real service migration/fault gates. It emits one row per corpus case and
 engine, category accuracy, failure rate, direct-model p50/p95 and token usage. Rows
-that use the pinned upstream source contract instead of an executed model call are
-labelled `upstream_reference_contract`; the report never invents latency or usage
-for them.
+without a model call are produced by `run_upstream_contract.py`, which imports and
+executes the pinned upstream lifecycle paths. Unsupported expectations are reported
+as explicit upstream gaps under `actual_upstream_contract_execution`; the report
+never invents model latency or token usage for them.

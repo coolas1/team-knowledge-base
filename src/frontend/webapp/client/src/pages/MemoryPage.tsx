@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import {
   api,
   MemoryDirective,
@@ -7,6 +8,13 @@ import {
   MemoryOperation,
   MentalModelRecord,
 } from '../api/client'
+import {
+  formatOperationStages,
+  memorySourceHref,
+  parsePolicyText,
+  validateDirectiveFields,
+  validateModelFields,
+} from './memory-page'
 
 const panel: CSSProperties = {
   border: '1px solid #e5e7eb',
@@ -57,7 +65,8 @@ export function MemoryPage() {
     const id = String(data.get('id') || '').trim()
     const name = String(data.get('name') || '').trim()
     const sourceQuery = String(data.get('source_query') || '').trim()
-    if (!id || !name || !sourceQuery) return setError('模型 ID、名称和来源问题不能为空')
+    const validationError = validateModelFields(id, name, sourceQuery)
+    if (validationError) return setError(validationError)
     await api.saveMentalModel(id, {
       name,
       source_query: sourceQuery,
@@ -76,7 +85,8 @@ export function MemoryPage() {
     const id = String(data.get('id') || '').trim()
     const name = String(data.get('name') || '').trim()
     const content = String(data.get('content') || '').trim()
-    if (!id || !name || !content) return setError('指令 ID、名称和内容不能为空')
+    const validationError = validateDirectiveFields(id, name, content)
+    if (validationError) return setError(validationError)
     await api.saveMemoryDirective(id, {
       name,
       content,
@@ -92,7 +102,7 @@ export function MemoryPage() {
   const savePolicy = async () => {
     if (!policy) return
     try {
-      const parsed = JSON.parse(policyText) as Record<string, unknown>
+      const parsed = parsePolicyText(policyText)
       await api.updateMemoryPolicy(policy.version, parsed)
       await load()
     } catch (cause) {
@@ -114,7 +124,7 @@ export function MemoryPage() {
               <tr key={operation.id}>
                 <td>{operation.status}</td>
                 <td>{operation.session_id || '—'} / {operation.turn_id || '—'}</td>
-                <td>{Object.entries(operation.stages).map(([key, value]) => `${key}:${value}`).join(' · ') || '—'}</td>
+                <td>{formatOperationStages(operation.stages)}</td>
                 <td>{operation.error || '—'}</td>
                 <td>
                   <button onClick={() => void api.retryMemoryOperation(operation.id).then(load)}>重试</button>{' '}
@@ -129,14 +139,17 @@ export function MemoryPage() {
       <section style={{ ...panel, marginBottom: 16 }}>
         <h2>事实与证据</h2>
         {facts.map((fact) => (
-          <button
-            key={fact.id}
-            style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 8, padding: 10 }}
-            onClick={() => fact.type === 'observation' && void api.getObservation(fact.id).then(setSelected)}
-          >
-            <strong>{fact.type} · {fact.freshness}</strong> {fact.text}
-            <small style={{ display: 'block' }}>来源：{fact.document_title} · {fact.mentioned_at}</small>
-          </button>
+          <article key={fact.id} style={{ marginBottom: 8, padding: 10, border: '1px solid #e5e7eb' }}>
+            <button
+              style={{ display: 'block', width: '100%', textAlign: 'left' }}
+              onClick={() => fact.type === 'observation' && void api.getObservation(fact.id).then(setSelected)}
+            >
+              <strong>{fact.type} · {fact.freshness}</strong> {fact.text}
+            </button>
+            <small>
+              来源：<Link to={memorySourceHref(fact.document_id)}>{fact.document_title}</Link> · {fact.mentioned_at}
+            </small>
+          </article>
         ))}
         {selected && <pre data-testid="observation-detail" style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(selected, null, 2)}</pre>}
       </section>

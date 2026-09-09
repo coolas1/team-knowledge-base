@@ -11,20 +11,20 @@ rerun. No production deployment, push, or OpenSpec archive was performed.
 |---|---|---|
 | Operation diagnostics | Scoped list/detail by session and turn combines conversation delivery, retain, consolidation and model-refresh stages under a durable operation ID; retry/cancel clears leases and fences stale workers | API, CLI and MCP implemented; real PostgreSQL scope/lease scenario passed |
 | Fact, source and history management | Fact list exposes provenance without raw source payload; observation detail returns version history and only current active sources; entity correction uses the existing scoped audit/rebuild path | BFF and PostgreSQL deletion/history tests passed |
-| Diagnostic frontend | `/memory` shows stage/status/error, retry/cancel, fact freshness, source link metadata and observation history | TypeScript build and API tests passed |
-| Policy/model/directive frontend | The page validates required model/directive fields, publishes policies with expected-version CAS, displays model version/freshness/evidence and supports refresh/delete | BFF validation, API request tests and production build passed |
+| Diagnostic frontend | `/memory` shows stage/status/error, retry/cancel, fact freshness, a clickable document source link and observation history | TypeScript build, API and view-model tests passed |
+| Policy/model/directive frontend | The page validates required model/directive fields and JSON-object policies, publishes policies with expected-version CAS, displays model version/freshness/evidence and supports refresh/delete | BFF validation, API/view-model tests and production build passed |
 
 ## Full fixed comparison
 
-`benchmark/memory-parity/runs/b7-full-20260909-2/report.json` covers all 44 fixed
+`benchmark/memory-parity/runs/b7-full-20260909-3/report.json` covers all 44 fixed
 cases and both engine columns. Twenty-three cases (46 rows) are immutable real
 upstream/TKB calls with the same configured model. The other 21 TKB rows use real
-PostgreSQL/process or production-contract gates; their upstream columns are
-explicitly labelled source-contract comparisons and have no invented timing or
-token values.
+PostgreSQL/process or production-contract gates; the 21 upstream rows execute the
+pinned lifecycle code paths and have no invented model timing or token values.
 
-- All 11 categories: TKB **4/4 (100%)**; every >=90% and within five percentage
-  points of the pinned upstream reference.
+- All 11 categories: TKB **4/4 (100%)**; every gate is >=90% and no worse than the
+  pinned upstream result. Six unsupported upstream expectations are explicit gaps,
+  rather than assumed passes.
 - Direct model execution failures: TKB **0/23**, upstream **0/23**.
 - Upstream direct-model p50/p95: **9.000/34.812 s**, **41,357 tokens**.
 - TKB direct-model p50/p95: **14.891/52.325 s**, **60,569 tokens**.
@@ -32,7 +32,8 @@ token values.
   `e4534bd86bada0c28f1a1061823ff47772ac4e955a46eb291b027522530178e3`.
 
 The report generator validates the accepted B2/B3 artifacts, B6 contract report,
-migration report, corpus cardinality and both git revisions before publishing.
+migration report, the executed upstream contract report, corpus cardinality and
+both git revisions before publishing.
 
 ## Migration and rollback drill
 
@@ -54,7 +55,7 @@ that case was rerun: **1/1 passed**. The immutable drill record is
   Skipped integration tests are not counted as evidence for the database drill.
 - Selected real PostgreSQL drill: final **10/10 passed** after the one targeted
   compatibility rerun.
-- Frontend Vitest: **22 passed**; TypeScript/Vite production build passed. Vite's
+- Frontend Vitest: **24 passed**; TypeScript/Vite production build passed. Vite's
   existing large-chunk advisory remains non-blocking.
 - Fixed corpus validation and strict OpenSpec validation: passed.
 

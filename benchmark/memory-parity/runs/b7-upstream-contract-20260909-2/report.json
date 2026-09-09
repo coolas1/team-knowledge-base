@@ -1,0 +1,264 @@
+{
+  "status": "complete",
+  "started_at": "2026-09-09T06:02:23.680992+00:00",
+  "finished_at": "2026-09-09T06:02:25.594411+00:00",
+  "scope": "one execution of pinned upstream non-LLM lifecycle contracts",
+  "upstream": {
+    "sha": "9676fc1699c199175809285ea0e1095ab71115d0",
+    "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "cases": 21,
+  "passed_expectations": 15,
+  "upstream_gaps": [
+    {
+      "case_id": "parity-027",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream append locking does not expose an expected-revision CAS contract",
+      "duration_ms": 0.0003,
+      "error": null
+    },
+    {
+      "case_id": "parity-028",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream delta cache has no explicit extraction-policy version key",
+      "duration_ms": 0.0002,
+      "error": null
+    },
+    {
+      "case_id": "parity-031",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream mental-model publish has no source-version/tombstone CAS fence",
+      "duration_ms": 0.0001,
+      "error": null
+    },
+    {
+      "case_id": "parity-033",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream has no Pi completed-turn delivery-intent boundary",
+      "duration_ms": 0.0001,
+      "error": null
+    },
+    {
+      "case_id": "parity-034",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream has no Pi acknowledgement replay contract",
+      "duration_ms": 0.0001,
+      "error": null
+    },
+    {
+      "case_id": "parity-036",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream retry backoff does not expose a lease-token stale-worker fence",
+      "duration_ms": 0.0001,
+      "error": null
+    }
+  ],
+  "latency_ms": {
+    "p50": 0.0028,
+    "p95": 0.0431
+  },
+  "tokens": 0,
+  "results": [
+    {
+      "case_id": "parity-017",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.004,
+      "error": null
+    },
+    {
+      "case_id": "parity-018",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0058,
+      "error": null
+    },
+    {
+      "case_id": "parity-019",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0069,
+      "error": null
+    },
+    {
+      "case_id": "parity-020",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0035,
+      "error": null
+    },
+    {
+      "case_id": "parity-025",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0194,
+      "error": null
+    },
+    {
+      "case_id": "parity-026",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0116,
+      "error": null
+    },
+    {
+      "case_id": "parity-027",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream append locking does not expose an expected-revision CAS contract",
+      "duration_ms": 0.0003,
+      "error": null
+    },
+    {
+      "case_id": "parity-028",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream delta cache has no explicit extraction-policy version key",
+      "duration_ms": 0.0002,
+      "error": null
+    },
+    {
+      "case_id": "parity-031",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream mental-model publish has no source-version/tombstone CAS fence",
+      "duration_ms": 0.0001,
+      "error": null
+    },
+    {
+      "case_id": "parity-033",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream has no Pi completed-turn delivery-intent boundary",
+      "duration_ms": 0.0001,
+      "error": null
+    },
+    {
+      "case_id": "parity-034",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream has no Pi acknowledgement replay contract",
+      "duration_ms": 0.0001,
+      "error": null
+    },
+    {
+      "case_id": "parity-035",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0042,
+      "error": null
+    },
+    {
+      "case_id": "parity-036",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": false,
+      "gap": "upstream retry backoff does not expose a lease-token stale-worker fence",
+      "duration_ms": 0.0001,
+      "error": null
+    },
+    {
+      "case_id": "parity-037",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0006,
+      "error": null
+    },
+    {
+      "case_id": "parity-038",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0018,
+      "error": null
+    },
+    {
+      "case_id": "parity-039",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0028,
+      "error": null
+    },
+    {
+      "case_id": "parity-040",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.1233,
+      "error": null
+    },
+    {
+      "case_id": "parity-041",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0006,
+      "error": null
+    },
+    {
+      "case_id": "parity-042",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0034,
+      "error": null
+    },
+    {
+      "case_id": "parity-043",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0431,
+      "error": null
+    },
+    {
+      "case_id": "parity-044",
+      "engine": "upstream",
+      "status": "completed",
+      "passed": true,
+      "gap": null,
+      "duration_ms": 0.0006,
+      "error": null
+    }
+  ]
+}

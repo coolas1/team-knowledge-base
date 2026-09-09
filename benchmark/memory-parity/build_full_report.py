@@ -52,7 +52,9 @@ def direct_model_rows() -> list[dict]:
     rows = [row for row in jsonl(b2) if row["repetition"] == 1]
     b3_rows = jsonl(b3)
     replacement = next(
-        row for row in jsonl(retry) if row["case_id"] == "parity-006" and row["engine"] == "tkb"
+        row
+        for row in jsonl(retry)
+        if row["case_id"] == "parity-006" and row["engine"] == "tkb"
     )
     rows.extend(
         replacement
@@ -91,36 +93,46 @@ def git_state(path: Path) -> dict:
     }
 
 
-def build(output: Path, migration_report: Path) -> dict:
+def build(output: Path, migration_report: Path, upstream_contract_report: Path) -> dict:
     output.mkdir(parents=True, exist_ok=False)
     corpus_path = Path(__file__).with_name("cases.json")
     cases = read_json(corpus_path)["cases"]
     if len(cases) != 44 or len({item["id"] for item in cases}) != 44:
         raise ValueError("the fixed corpus must contain exactly 44 unique cases")
 
-    b2_acceptance = read_json(RUNS / "b2-extraction-20260909-2" / "acceptance-scope.json")
+    b2_acceptance = read_json(
+        RUNS / "b2-extraction-20260909-2" / "acceptance-scope.json"
+    )
     b3_report = read_json(RUNS / "b3-consolidation-20260909-1" / "report.json")
     b6_report = read_json(RUNS / "b6-reflect-20260909-1" / "report.json")
     migration = read_json(migration_report)
+    upstream_contract = read_json(upstream_contract_report)
     if b2_acceptance["status"] != "accepted_for_B2":
         raise ValueError("B2 evidence is not accepted")
     if b3_report["status"] != "accepted":
         raise ValueError("B3 evidence is not accepted")
     if b6_report["semantic_contract_accuracy"] != 1 or migration["status"] != "passed":
         raise ValueError("deterministic B6 or migration evidence failed")
+    if upstream_contract["status"] != "complete":
+        raise ValueError("upstream lifecycle contract execution failed")
 
     model_rows = direct_model_rows()
     direct_ids = {row["case_id"] for row in model_rows}
     expected_direct = {
         item["id"]
         for item in cases
-        if item["batch"] == "B3"
-        or set(item["categories"]) & {"attribution", "time"}
+        if item["batch"] == "B3" or set(item["categories"]) & {"attribution", "time"}
     }
     if direct_ids != expected_direct or len(model_rows) != 2 * len(expected_direct):
         raise ValueError("direct upstream/TKB model evidence is incomplete")
     if any(row["status"] != "completed" for row in model_rows):
         raise ValueError("a selected direct model row failed")
+    upstream_contract_rows = {
+        row["case_id"]: row for row in upstream_contract["results"]
+    }
+    expected_contract = {item["id"] for item in cases} - direct_ids
+    if upstream_contract_rows.keys() != expected_contract:
+        raise ValueError("upstream lifecycle contract evidence is incomplete")
 
     execution = {}
     for engine in ("upstream", "tkb"):
@@ -134,6 +146,9 @@ def build(output: Path, migration_report: Path) -> dict:
             "failures": 0,
             "failure_rate": 0,
         }
+    execution["upstream"]["contract_cases"] = upstream_contract["cases"]
+    execution["upstream"]["contract_p50_ms"] = upstream_contract["latency_ms"]["p50"]
+    execution["upstream"]["contract_p95_ms"] = upstream_contract["latency_ms"]["p95"]
 
     results = []
     category_scores: dict[str, dict[str, list[bool]]] = defaultdict(
@@ -147,21 +162,26 @@ def build(output: Path, migration_report: Path) -> dict:
                 evidence = "B2 extraction or B3 consolidation immutable model output"
             elif engine == "tkb":
                 comparison = "actual_deterministic_service_gate"
-                evidence = "real PostgreSQL/process or production-contract acceptance gate"
+                evidence = (
+                    "real PostgreSQL/process or production-contract acceptance gate"
+                )
             else:
-                comparison = "upstream_reference_contract"
-                evidence = "pinned upstream capability/source contract; no synthetic latency or token use"
+                contract = upstream_contract_rows[case["id"]]
+                comparison = "actual_upstream_contract_execution"
+                evidence = (
+                    contract["gap"] or "pinned upstream lifecycle contract executed"
+                )
             row = {
                 "id": case["id"],
                 "engine": engine,
                 "categories": case["categories"],
-                "passed": True,
+                "passed": True if engine == "tkb" or is_direct else contract["passed"],
                 "comparison": comparison,
                 "evidence": evidence,
             }
             results.append(row)
             for category in case["categories"]:
-                category_scores[category][engine].append(True)
+                category_scores[category][engine].append(row["passed"])
 
     scores = {
         category: {
@@ -193,10 +213,12 @@ def build(output: Path, migration_report: Path) -> dict:
                 item["comparison"] == "actual_same_model_one_pass" for item in results
             ),
             "tkb_deterministic_service_rows": sum(
-                item["comparison"] == "actual_deterministic_service_gate" for item in results
+                item["comparison"] == "actual_deterministic_service_gate"
+                for item in results
             ),
-            "upstream_reference_contract_rows": sum(
-                item["comparison"] == "upstream_reference_contract" for item in results
+            "actual_upstream_contract_rows": sum(
+                item["comparison"] == "actual_upstream_contract_execution"
+                for item in results
             ),
         },
         "semantic_scores": scores,
@@ -204,17 +226,21 @@ def build(output: Path, migration_report: Path) -> dict:
         "execution": execution,
         "deterministic_gates": migration["gates"],
         "failure_rate": {"tkb": 0, "upstream_direct_model": 0},
+        "upstream_capability_gaps": upstream_contract["upstream_gaps"],
         "evidence_fingerprints": {
             "b2_acceptance": evidence_sha(
                 RUNS / "b2-extraction-20260909-2" / "acceptance-scope.json"
             ),
-            "b3_report": evidence_sha(RUNS / "b3-consolidation-20260909-1" / "report.json"),
+            "b3_report": evidence_sha(
+                RUNS / "b3-consolidation-20260909-1" / "report.json"
+            ),
             "b6_report": evidence_sha(RUNS / "b6-reflect-20260909-1" / "report.json"),
             "migration_report": evidence_sha(migration_report),
+            "upstream_contract_report": evidence_sha(upstream_contract_report),
         },
         "limitations": [
             "Direct model latency and usage cover the 23 extraction/consolidation semantic cases only.",
-            "Isolation, append, deletion, failure, model, and reasoning cases use deterministic service gates; the pinned upstream side is a source-contract comparison and has no invented runtime metrics.",
+            "Isolation, append, deletion, failure, model, and reasoning cases use deterministic TKB service gates and executed pinned-upstream lifecycle contracts.",
             "SDK wire compatibility, third-party integrations, and optional search backends are outside this change.",
         ],
         "results": results,
@@ -229,5 +255,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--migration-report", type=Path, required=True)
+    parser.add_argument("--upstream-contract-report", type=Path, required=True)
     value = build(**vars(parser.parse_args()))
-    print(json.dumps({key: value[key] for key in ("status", "coverage", "execution")}, indent=2))
+    print(
+        json.dumps(
+            {key: value[key] for key in ("status", "coverage", "execution")}, indent=2
+        )
+    )
