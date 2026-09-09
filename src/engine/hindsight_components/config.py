@@ -12,6 +12,7 @@ class HindsightOptions:
     entity_resolution_timeout_seconds: float = 15.0
     chunk_tokens: int = 500
     chunk_overlap_tokens: int = 50
+    retain_chunk_concurrency: int = 4
     recall_limit: int = 20
     recall_max_results: int = 100
     recall_max_candidates: int = 300
@@ -51,6 +52,7 @@ class HindsightOptions:
         positive = {
             "entity_candidate_limit": self.entity_candidate_limit,
             "entity_resolution_timeout_seconds": self.entity_resolution_timeout_seconds,
+            "retain_chunk_concurrency": self.retain_chunk_concurrency,
             "deep_total_timeout_seconds": self.deep_total_timeout_seconds,
             "query_analysis_timeout_seconds": self.query_analysis_timeout_seconds,
             "query_embedding_timeout_seconds": self.query_embedding_timeout_seconds,

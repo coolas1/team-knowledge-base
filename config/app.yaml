@@ -6,6 +6,7 @@ engine:
     doc_concurrency: 2
   memory:
     enabled: true
+    retain_chunk_concurrency: 4
     graph_worker: true
     consolidation_batch_size: 32
     consolidation_max_iterations: 100

@@ -1,10 +1,49 @@
 from __future__ import annotations
 
+import asyncio
+
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.retain import RetainEngine
 from src.engine.hindsight_components.types import RetainInput
 
 from src.engine.hindsight_components.tests.fakes import FakeProviders, FakeRepository
+
+
+async def test_fact_extraction_uses_bounded_chunk_concurrency() -> None:
+    class TrackingProviders(FakeProviders):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active = 0
+            self.peak = 0
+
+        async def json(self, system: str, user: str, *, timeout: float = 600):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0.01)
+            try:
+                return await super().json(system, user, timeout=timeout)
+            finally:
+                self.active -= 1
+
+    providers = TrackingProviders()
+    engine = RetainEngine(
+        FakeRepository(),
+        providers,
+        HindsightOptions(
+            chunk_tokens=2, chunk_overlap_tokens=0, retain_chunk_concurrency=2
+        ),
+    )
+
+    await engine.retain(
+        RetainInput(
+            document_id="parallel-doc",
+            title="parallel.txt",
+            content="aa\n\nbb\n\ncc\n\ndd\n\nee\n\nff",
+            file_type="text",
+        )
+    )
+
+    assert providers.peak == 2
 
 
 async def test_repeated_extraction_has_stable_fact_and_chunk_references():
