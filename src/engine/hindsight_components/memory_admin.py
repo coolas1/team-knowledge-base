@@ -174,6 +174,11 @@ class PostgresMemoryAdminRepository:
             item.status = self._merge_status(item.status, state.status)
             item.error = item.error or state.error_msg
         for job in consolidation:
+            diagnostic_status = (
+                "cancelled"
+                if job.error_msg == "cancelled_by_admin"
+                else job.status
+            )
             subject = (
                 "默认归纳范围"
                 if job.scope_key == "[]"
@@ -183,13 +188,13 @@ class PostgresMemoryAdminRepository:
                 str(job.operation_id),
                 OperationView(
                     id=str(job.operation_id),
-                    status=job.status,
+                    status=diagnostic_status,
                     kind="consolidation",
                     subject=subject,
                 ),
             )
-            item.stages["consolidation"] = job.status
-            item.status = self._merge_status(item.status, job.status)
+            item.stages["consolidation"] = diagnostic_status
+            item.status = self._merge_status(item.status, diagnostic_status)
             item.attempts = max(item.attempts, job.attempts)
             item.error = item.error or job.error_msg
             item.tokens += job.tokens_used
@@ -461,6 +466,7 @@ class PostgresMemoryAdminRepository:
         order = {
             "failed": 5,
             "budget_exhausted": 4,
+            "cancelled": 4,
             "processing": 3,
             "pending": 2,
             "completed": 1,
