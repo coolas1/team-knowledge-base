@@ -23,6 +23,7 @@ _query: KnowledgeQuery | None = None
 _graph_worker = None
 _conversation_worker = None
 _consolidation_worker = None
+_mental_model_worker = None
 _app_config: AppConfig | None = None
 
 
@@ -34,14 +35,9 @@ def app_config() -> AppConfig:
 
 
 async def startup() -> None:
-    global \
-        _kb, \
-        _plugin, \
-        _llm, \
-        _query, \
-        _graph_worker, \
-        _conversation_worker, \
-        _consolidation_worker
+    global _kb, _plugin, _llm, _query
+    global _graph_worker, _conversation_worker, _consolidation_worker
+    global _mental_model_worker
     cfg = app_config()
 
     from src.engine.components.store.postgres import init_db
@@ -117,6 +113,32 @@ async def startup() -> None:
         )
         await _consolidation_worker.start()
 
+    if (
+        cfg.engine.memory.enabled
+        and cfg.engine.memory.features.mental_models
+        and cfg.engine.memory.mental_model_worker
+    ):
+        from src.engine.hindsight_components.mental_model_runtime import (
+            build_mental_model_worker_runtime,
+        )
+
+        _mental_model_worker = build_mental_model_worker_runtime(
+            poll_seconds=cfg.engine.memory.mental_model_poll_seconds,
+            max_concurrent=cfg.engine.memory.mental_model_max_concurrent,
+            recall_results=cfg.engine.memory.mental_model_recall_results,
+            max_evidence_tokens=cfg.engine.memory.mental_model_max_evidence_tokens,
+            max_output_tokens=cfg.engine.memory.mental_model_max_output_tokens,
+            lease_seconds=cfg.engine.memory.mental_model_lease_seconds,
+            max_attempts=cfg.engine.memory.mental_model_max_attempts,
+            input_cost_usd_per_million=(
+                cfg.engine.memory.mental_model_input_cost_usd_per_million
+            ),
+            output_cost_usd_per_million=(
+                cfg.engine.memory.mental_model_output_cost_usd_per_million
+            ),
+        )
+        await _mental_model_worker.start()
+
     if cfg.engine.memory.enabled and settings.hindsight_conversation_memory_enabled:
         from src.engine.hindsight_components.conversation_service import (
             build_conversation_memory_service,
@@ -149,7 +171,8 @@ async def startup() -> None:
 
 
 async def shutdown() -> None:
-    global _graph_worker, _conversation_worker, _consolidation_worker, _query
+    global _graph_worker, _conversation_worker, _consolidation_worker
+    global _mental_model_worker, _query
     try:
         try:
             if _conversation_worker is not None:
@@ -157,8 +180,13 @@ async def shutdown() -> None:
         finally:
             _conversation_worker = None
             try:
-                if _consolidation_worker is not None:
-                    await _consolidation_worker.stop()
+                try:
+                    if _mental_model_worker is not None:
+                        await _mental_model_worker.stop()
+                finally:
+                    _mental_model_worker = None
+                    if _consolidation_worker is not None:
+                        await _consolidation_worker.stop()
             finally:
                 _consolidation_worker = None
                 if _graph_worker is not None:

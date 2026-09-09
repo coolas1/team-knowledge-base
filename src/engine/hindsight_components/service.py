@@ -26,6 +26,7 @@ class HindsightService:
         repository: MemoryRepository,
         providers: HindsightProviders,
         options: HindsightOptions | None = None,
+        mental_models=None,
     ) -> None:
         if options is None:
             import os
@@ -44,10 +45,21 @@ class HindsightService:
         self._retain = RetainEngine(repository, providers, self.options)
         self._recall = RecallEngine(repository, providers, self.options)
         self._reflect = ReflectEngine(self._recall, repository, providers, self.options)
+        if mental_models is None:
+            from .mental_models import PostgresMentalModelRepository
+
+            mental_models = PostgresMentalModelRepository(
+                getattr(repository, "_session_factory", None),
+                scope=getattr(repository, "scope", None),
+            )
+        self._mental_models = mental_models
 
     def with_scope(self, scope):
         return HindsightService(
-            self._repository.with_scope(scope), self._providers, self.options
+            self._repository.with_scope(scope),
+            self._providers,
+            self.options,
+            mental_models=self._mental_models.with_scope(scope),
         )
 
     def with_lease(self, document_id: str, lease_token: str):
@@ -55,7 +67,26 @@ class HindsightService:
             self._repository.with_lease(document_id, lease_token),
             self._providers,
             self.options,
+            mental_models=self._mental_models,
         )
+
+    async def create_mental_model(self, definition):
+        return await self._mental_models.create(definition)
+
+    async def get_mental_model(self, model_id: str):
+        return await self._mental_models.get(model_id)
+
+    async def list_mental_models(self):
+        return await self._mental_models.list()
+
+    async def update_mental_model(self, model_id: str, definition):
+        return await self._mental_models.update(model_id, definition)
+
+    async def delete_mental_model(self, model_id: str) -> bool:
+        return await self._mental_models.delete(model_id)
+
+    async def refresh_mental_model(self, model_id: str) -> bool:
+        return await self._mental_models.enqueue(model_id)
 
     async def retain(
         self,

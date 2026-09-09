@@ -25,6 +25,7 @@ from src.engine.interface import (
     KnowledgeQuery,
     KnowledgeQueryRequest,
     MemoryExpansionRequest,
+    MentalModelDefinition,
 )
 from src.agent.policy import HookPolicy, NeedsApproval
 
@@ -364,6 +365,58 @@ async def expand_memory(
     return asdict(result) if result is not None else {"error": "memory not found"}
 
 
+async def list_mental_models() -> list[dict[str, Any]]:
+    """List visible long-lived synthesized models and refresh state."""
+    return [asdict(item) for item in await _get_query_service().list_mental_models()]
+
+
+async def get_mental_model(model_id: str) -> dict[str, Any]:
+    """Read one visible mental model including evidence version metadata."""
+    result = await _get_query_service().get_mental_model(model_id)
+    return asdict(result) if result is not None else {"error": "model not found"}
+
+
+async def save_mental_model(
+    model_id: str,
+    name: str,
+    source_query: str,
+    description: str = "",
+    tags: list[str] | None = None,
+    refresh_mode: Literal["full", "delta"] = "full",
+    refresh_after_consolidation: bool = False,
+    refresh_interval_seconds: int | None = None,
+    update: bool = False,
+) -> dict[str, Any]:
+    """Create or update an explicit, scoped mental-model definition."""
+    definition = MentalModelDefinition(
+        id=model_id,
+        name=name,
+        source_query=source_query,
+        description=description,
+        tags=tuple(tags or ()),
+        refresh_mode=refresh_mode,
+        refresh_after_consolidation=refresh_after_consolidation,
+        refresh_interval_seconds=refresh_interval_seconds,
+    )
+    service = _get_query_service()
+    result = (
+        await service.update_mental_model(model_id, definition)
+        if update
+        else await service.create_mental_model(definition)
+    )
+    return asdict(result)
+
+
+async def delete_mental_model(model_id: str) -> dict[str, bool]:
+    """Delete a visible mental-model definition and its retained versions."""
+    return {"deleted": await _get_query_service().delete_mental_model(model_id)}
+
+
+async def refresh_mental_model(model_id: str) -> dict[str, bool]:
+    """Coalesce a durable manual refresh request for a visible model."""
+    return {"enqueued": await _get_query_service().refresh_mental_model(model_id)}
+
+
 async def search_knowledge_fast(
     query: str,
     top_k: int = 5,
@@ -563,6 +616,11 @@ _MEMORY_TOOL_NAMES = (
     "search_knowledge_fast",
     "search_knowledge_deep",
     "expand_memory",
+    "list_mental_models",
+    "get_mental_model",
+    "save_mental_model",
+    "delete_mental_model",
+    "refresh_mental_model",
 )
 
 _memory_tools_registered = False
@@ -577,6 +635,11 @@ def _register_memory_tools() -> None:
     mcp.tool()(search_knowledge_fast)
     mcp.tool()(search_knowledge_deep)
     mcp.tool()(expand_memory)
+    mcp.tool()(list_mental_models)
+    mcp.tool()(get_mental_model)
+    mcp.tool()(save_mental_model)
+    mcp.tool()(delete_mental_model)
+    mcp.tool()(refresh_mental_model)
     _memory_tools_registered = True
 
 

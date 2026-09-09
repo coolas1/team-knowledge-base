@@ -21,6 +21,8 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
             ConsolidationFactEvent,
             ConsolidationJob,
             FactTombstone,
+            MentalModelRefreshJob,
+            MentalModelVersion,
             ObservationEvidence,
             ObservationHistory,
             ObservationRecord,
@@ -33,6 +35,8 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
             FactTombstone,
             ConsolidationFactEvent,
             ConsolidationJob,
+            MentalModelVersion,
+            MentalModelRefreshJob,
         ):
             await conn.run_sync(
                 lambda sync_conn, table=model.__table__: table.create(
@@ -46,6 +50,40 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
                 "ADD COLUMN IF NOT EXISTS cost_microusd BIGINT NOT NULL DEFAULT 0"
             )
         )
+        mental_table = f'"{schema}"."mental_models"'
+        if (
+            await conn.scalar(text("SELECT to_regclass(:name)"), {"name": mental_table})
+            is not None
+        ):
+            additions = (
+                "source_query TEXT NOT NULL DEFAULT ''",
+                "version INTEGER NOT NULL DEFAULT 0",
+                "refresh_mode TEXT NOT NULL DEFAULT 'full'",
+                "refresh_after_consolidation BOOLEAN NOT NULL DEFAULT false",
+                "refresh_interval_seconds INTEGER",
+                "next_refresh_at TIMESTAMPTZ",
+                "last_success_at TIMESTAMPTZ",
+                "freshness TEXT NOT NULL DEFAULT 'empty'",
+                "error_msg TEXT",
+                "evidence_watermark BIGINT NOT NULL DEFAULT 0",
+                "source_versions JSONB NOT NULL DEFAULT '{}'::jsonb",
+            )
+            for definition in additions:
+                column = definition.split(" ", 1)[0]
+                await conn.execute(
+                    text(
+                        f"ALTER TABLE {mental_table} ADD COLUMN IF NOT EXISTS {column} {definition.split(' ', 1)[1]}"
+                    )
+                )
+            await conn.execute(
+                text(
+                    f"UPDATE {mental_table} SET source_query=description, "
+                    "version=CASE WHEN summary='' THEN 0 ELSE 1 END, "
+                    "freshness=CASE WHEN summary='' THEN 'empty' ELSE 'active' END, "
+                    "last_success_at=CASE WHEN summary='' THEN NULL ELSE updated_at END "
+                    "WHERE source_query=''"
+                )
+            )
         await conn.execute(
             text(f'''
             CREATE TABLE IF NOT EXISTS "{schema}"."retention_requests" (

@@ -29,6 +29,16 @@ class MemoryCfg(BaseModel):
     recall_max_results: int = Field(default=100, ge=1, le=1000)
     recall_max_candidates: int = Field(default=300, ge=1, le=5000)
     recall_max_tokens: int = Field(default=4096, ge=1)
+    mental_model_worker: bool = True
+    mental_model_poll_seconds: float = Field(default=5, gt=0)
+    mental_model_max_concurrent: int = Field(default=1, ge=1, le=32)
+    mental_model_recall_results: int = Field(default=30, ge=1, le=1000)
+    mental_model_max_evidence_tokens: int = Field(default=4096, ge=1)
+    mental_model_max_output_tokens: int = Field(default=2048, ge=1)
+    mental_model_lease_seconds: int = Field(default=300, ge=1)
+    mental_model_max_attempts: int = Field(default=5, ge=1, le=100)
+    mental_model_input_cost_usd_per_million: float = Field(default=0, ge=0)
+    mental_model_output_cost_usd_per_million: float = Field(default=0, ge=0)
     features: MemoryFeatures = Field(default_factory=MemoryFeatures)
 
     @model_validator(mode="after")

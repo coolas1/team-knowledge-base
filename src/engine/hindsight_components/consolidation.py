@@ -26,6 +26,8 @@ from .models import (
     HindsightGraphOutbox,
     MemoryLink,
     MemoryUnit,
+    MentalModel,
+    MentalModelRefreshJob,
     ObservationEvidence,
     ObservationHistory,
     ObservationRecord,
@@ -404,9 +406,50 @@ class PostgresConsolidationRepository:
                         else "completed"
                     )
                     job.available_at = func.now()
+                await self._enqueue_mental_models(session, claim)
                 return ConsolidationRunResult(
                     job.status, applied, job.processed_through, job.tokens_used
                 )
+
+    @staticmethod
+    async def _enqueue_mental_models(session, claim: ConsolidationClaim) -> None:
+        """Coalesce relevant refreshes in the consolidation transaction."""
+        models = list(
+            await session.scalars(
+                select(MentalModel).where(
+                    MentalModel.bank_id == claim.bank_id,
+                    MentalModel.refresh_after_consolidation.is_(True),
+                    MentalModel.tags.contained_by(list(claim.write_scope)),
+                    MentalModel.evidence_watermark < claim.claimed_through,
+                )
+            )
+        )
+        for model in models:
+            statement = insert(MentalModelRefreshJob).values(
+                bank_id=claim.bank_id,
+                model_id=model.id,
+                requested_watermark=claim.claimed_through,
+                status="pending",
+            )
+            await session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=["bank_id", "model_id"],
+                    set_={
+                        "requested_watermark": func.greatest(
+                            MentalModelRefreshJob.requested_watermark,
+                            claim.claimed_through,
+                        ),
+                        "status": "pending",
+                        "available_at": func.now(),
+                        "lease_token": None,
+                        "lease_expires_at": None,
+                        "error_msg": None,
+                        "updated_at": func.now(),
+                    },
+                    where=MentalModelRefreshJob.requested_watermark
+                    < claim.claimed_through,
+                )
+            )
 
     async def fail(self, claim: ConsolidationClaim, error: Exception) -> None:
         async with self._session_factory() as session:

@@ -219,6 +219,29 @@ class MentalModel(BankOwned, Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_query: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    refresh_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default="full", server_default="full"
+    )
+    refresh_after_consolidation: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    refresh_interval_seconds: Mapped[int | None] = mapped_column(Integer)
+    next_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    freshness: Mapped[str] = mapped_column(
+        Text, nullable=False, default="empty", server_default="empty"
+    )
+    error_msg: Mapped[str | None] = mapped_column(Text)
+    evidence_watermark: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    source_versions: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
+    )
     is_directive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     trigger: Mapped[str | None] = mapped_column(Text)
     embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
@@ -237,6 +260,76 @@ class MentalModel(BankOwned, Base):
         server_default=sql_text("now()"),
         onupdate=_utcnow,
         nullable=False,
+    )
+
+
+class MentalModelVersion(BankOwned, Base):
+    __tablename__ = "mental_model_versions"
+
+    bank_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, default="default-team", server_default="default-team"
+    )
+    model_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    source_memory_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False, default=list, server_default="{}"
+    )
+    source_versions: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
+    )
+    refresh_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    token_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    cost_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+
+
+class MentalModelRefreshJob(BankOwned, Base):
+    __tablename__ = "mental_model_refresh_jobs"
+
+    bank_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, default="default-team", server_default="default-team"
+    )
+    model_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default="pending"
+    )
+    requested_watermark: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_msg: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+        onupdate=_utcnow,
     )
 
 

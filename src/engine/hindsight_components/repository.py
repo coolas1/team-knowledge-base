@@ -30,6 +30,7 @@ from .models import (
     MemoryUnit,
     MemoryUnitEntity,
     MentalModel as MentalModelRow,
+    MentalModelRefreshJob,
     ObservationEvidence,
     ObservationRecord,
 )
@@ -1017,6 +1018,10 @@ class PostgresMemoryRepository:
                         operation="delete",
                     )
                 )
+        if removed:
+            await self._invalidate_mental_model_sources(
+                session, [row.id for row in removed]
+            )
         if not jobs or not (added or removed):
             return
         await session.flush()
@@ -1027,6 +1032,7 @@ class PostgresMemoryRepository:
                     ConsolidationFactEvent.scope_key == scope_key,
                 )
             )
+
             if pending_through is None:
                 continue
             await session.execute(
@@ -1058,6 +1064,44 @@ class PostgresMemoryRepository:
                         "error_msg": None,
                         "lease_token": None,
                         "lease_expires_at": None,
+                        "updated_at": func.now(),
+                    },
+                )
+            )
+
+    async def _invalidate_mental_model_sources(
+        self, session: AsyncSession, fact_ids: list[uuid.UUID]
+    ) -> None:
+        models = list(
+            await session.scalars(
+                select(MentalModelRow).where(
+                    MentalModelRow.bank_id == self.scope.bank_id,
+                    MentalModelRow.source_memory_ids.overlap(fact_ids),
+                )
+            )
+        )
+        for model in models:
+            model.freshness = "stale"
+            model.error_msg = "source_deleted"
+            requested = model.evidence_watermark + 1
+            statement = insert(MentalModelRefreshJob).values(
+                bank_id=model.bank_id,
+                model_id=model.id,
+                requested_watermark=requested,
+                status="pending",
+            )
+            await session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=["bank_id", "model_id"],
+                    set_={
+                        "requested_watermark": func.greatest(
+                            MentalModelRefreshJob.requested_watermark, requested
+                        ),
+                        "status": "pending",
+                        "available_at": func.now(),
+                        "lease_token": None,
+                        "lease_expires_at": None,
+                        "error_msg": "source_deleted",
                         "updated_at": func.now(),
                     },
                 )
@@ -1750,6 +1794,14 @@ class PostgresMemoryRepository:
                     if row.embedding is not None
                     else None,
                     source_memory_ids=[str(item) for item in row.source_memory_ids],
+                    source_query=row.source_query or row.description,
+                    version=row.version,
+                    freshness=row.freshness,
+                    last_success_at=row.last_success_at,
+                    source_versions={
+                        str(key): int(value)
+                        for key, value in row.source_versions.items()
+                    },
                 )
                 for row in models
             ],
@@ -1766,6 +1818,7 @@ class PostgresMemoryRepository:
         unit: MemoryUnit, document: Document, **scores: float
     ) -> RecallCandidate:
         metadata = dict(unit.metadata_json or {})
+        metadata["memory_version"] = getattr(unit, "memory_version", 1)
         mentioned_at = getattr(unit, "mentioned_at", None)
         return RecallCandidate(
             id=str(unit.id),

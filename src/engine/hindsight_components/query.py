@@ -12,7 +12,10 @@ from src.engine.interface import (
     KnowledgeSource,
     MemoryExpansionRequest,
     MemoryExpansionResult,
+    MentalModelDefinition as PublicMentalModelDefinition,
+    MentalModelRecord,
 )
+from src.engine.hindsight_components.mental_models import MentalModelDefinition
 
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.providers import ProjectHindsightProviders
@@ -52,6 +55,49 @@ class HindsightQueryService:
 
     def with_scope(self, scope):
         return HindsightQueryService(self._core.with_scope(scope))
+
+    @staticmethod
+    def _model_record(value) -> MentalModelRecord:
+        return MentalModelRecord(
+            **{
+                field: getattr(value, field)
+                for field in MentalModelRecord.__dataclass_fields__
+            }
+        )
+
+    @staticmethod
+    def _model_definition(value: PublicMentalModelDefinition) -> MentalModelDefinition:
+        return MentalModelDefinition(
+            **{
+                field: getattr(value, field)
+                for field in MentalModelDefinition.__dataclass_fields__
+            }
+        )
+
+    async def create_mental_model(self, definition):
+        value = await self._core.create_mental_model(self._model_definition(definition))
+        return self._model_record(value)
+
+    async def get_mental_model(self, model_id: str):
+        value = await self._core.get_mental_model(model_id)
+        return self._model_record(value) if value else None
+
+    async def list_mental_models(self):
+        return [
+            self._model_record(value) for value in await self._core.list_mental_models()
+        ]
+
+    async def update_mental_model(self, model_id: str, definition):
+        value = await self._core.update_mental_model(
+            model_id, self._model_definition(definition)
+        )
+        return self._model_record(value)
+
+    async def delete_mental_model(self, model_id: str) -> bool:
+        return await self._core.delete_mental_model(model_id)
+
+    async def refresh_mental_model(self, model_id: str) -> bool:
+        return await self._core.refresh_mental_model(model_id)
 
     async def expand_memory(
         self, request: MemoryExpansionRequest

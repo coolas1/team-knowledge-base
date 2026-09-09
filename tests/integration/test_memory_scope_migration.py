@@ -4,7 +4,7 @@ import os
 import uuid
 
 import pytest
-from sqlalchemy import Text, insert, literal, select, text
+from sqlalchemy import Text, func, insert, literal, select, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -2428,3 +2428,181 @@ async def test_scoped_repository_read_write_and_delete(scope_database):
     assert await restricted.document_state(str(documents["a"])) is None
     assert await repository.keyword_search("scope fixture", 10) == []
     assert (await migrate_scope(engine, schema=schema)).complete
+
+
+async def test_versioned_mental_model_refresh_and_deletion_fence(scope_database):
+    from datetime import datetime, timezone
+    from src.engine.components.store.retention_migration import migrate_retention
+    from src.engine.hindsight_components.consolidation import (
+        ConsolidationClaim,
+        PostgresConsolidationRepository,
+    )
+    from src.engine.hindsight_components.mental_models import (
+        MentalModelDefinition,
+        MentalModelRefreshOptions,
+        PostgresMentalModelRepository,
+    )
+    from src.engine.hindsight_components.models import (
+        MentalModel,
+        MentalModelRefreshJob,
+        MentalModelVersion,
+    )
+
+    engine, schema = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session, session.begin():
+        session.add(
+            MentalModel(
+                id="legacy",
+                bank_id="bank-a",
+                name="Legacy",
+                description="Legacy question",
+                summary="Legacy summary",
+                tags=["project:a"],
+            )
+        )
+    async with engine.begin() as connection:
+        await connection.execute(text("DROP TABLE mental_model_versions"))
+        await connection.execute(text("DROP TABLE mental_model_refresh_jobs"))
+        for column in (
+            "source_query",
+            "version",
+            "refresh_mode",
+            "refresh_after_consolidation",
+            "refresh_interval_seconds",
+            "next_refresh_at",
+            "last_success_at",
+            "freshness",
+            "error_msg",
+            "evidence_watermark",
+            "source_versions",
+        ):
+            await connection.execute(
+                text(f"ALTER TABLE mental_models DROP COLUMN {column}")
+            )
+    await migrate_retention(engine, schema=schema)
+    repository = PostgresMentalModelRepository(
+        sessions, scope=MemoryScope("bank-a", TagFilter(("project:a",), "all_strict"))
+    )
+    legacy = await repository.get("legacy")
+    assert legacy.source_query == "Legacy question"
+    assert legacy.version == 1 and legacy.freshness == "active"
+    created = await repository.create(
+        MentalModelDefinition(
+            id="overview",
+            name="Project overview",
+            source_query="What is the current project state?",
+            tags=("project:a",),
+            refresh_mode="delta",
+            refresh_after_consolidation=True,
+            refresh_interval_seconds=60,
+        )
+    )
+    assert created.version == 0
+    assert (
+        await PostgresMentalModelRepository(sessions, scope=MemoryScope("bank-b")).get(
+            "overview"
+        )
+        is None
+    )
+
+    document_id = uuid.uuid4()
+    fact_id = uuid.uuid4()
+    async with sessions() as session, session.begin():
+        session.add(
+            Document(
+                id=document_id,
+                bank_id="bank-a",
+                title="project",
+                file_type="markdown",
+                status="indexed",
+                raw_text="current",
+                tags=["project:a"],
+            )
+        )
+        session.add(
+            MemoryUnit(
+                id=fact_id,
+                bank_id="bank-a",
+                document_id=document_id,
+                chunk_index=0,
+                memory_index=0,
+                memory_type="world",
+                text="Milestone is complete",
+                source_text="Milestone is complete",
+                scope_tags=["project:a"],
+                tags=["project:a"],
+                memory_version=2,
+            )
+        )
+
+    assert await repository.enqueue("overview", watermark=7)
+    assert not await repository.enqueue("overview", watermark=7)
+    claim = await repository.claim(MentalModelRefreshOptions())
+    published = await repository.publish(
+        claim,
+        summary="The milestone is complete.",
+        source_versions={str(fact_id): 2},
+        mode="full",
+        token_count=12,
+        cost_microusd=3,
+    )
+    assert published.version == 1 and published.freshness == "active"
+    async with sessions() as session:
+        version = await session.get(MentalModelVersion, ("bank-a", "overview", 1))
+        assert version.source_memory_ids == [fact_id]
+
+    event_claim = ConsolidationClaim(
+        bank_id="bank-a",
+        scope_key="project:a",
+        write_scope=("project:a",),
+        lease_token=str(uuid.uuid4()),
+        processed_through=7,
+        claimed_through=8,
+        pending_through=8,
+        iterations=0,
+        tokens_used=0,
+        cost_microusd=0,
+    )
+    async with sessions() as session, session.begin():
+        await PostgresConsolidationRepository._enqueue_mental_models(
+            session, event_claim
+        )
+        await PostgresConsolidationRepository._enqueue_mental_models(
+            session, event_claim
+        )
+    refresh_claim = await repository.claim(MentalModelRefreshOptions())
+    async with sessions() as session, session.begin():
+        fact = await session.get(MemoryUnit, fact_id)
+        fact.state = "deleted"
+        await PostgresMemoryRepository(
+            sessions,
+            scope=MemoryScope("bank-a"),
+            consolidation_enabled=True,
+        )._invalidate_mental_model_sources(session, [fact_id])
+    with pytest.raises(RuntimeError, match="lease or version changed"):
+        await repository.publish(
+            refresh_claim,
+            summary="Invalid newer summary",
+            source_versions={str(fact_id): 2},
+            mode="delta",
+            token_count=4,
+            cost_microusd=1,
+        )
+    await repository.fail(refresh_claim, RuntimeError("deleted"))
+    current = await repository.get("overview")
+    assert current.version == 1
+    assert current.summary == "The milestone is complete."
+    assert current.freshness == "stale"
+    async with sessions() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(MentalModelVersion))
+            == 1
+        )
+        job = await session.get(MentalModelRefreshJob, ("bank-a", "overview"))
+        assert job.status == "pending"
+        assert job.error_msg == "source_deleted"
+        model = await session.get(MentalModel, ("overview", "bank-a"))
+        model.next_refresh_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        await session.commit()
+    assert await PostgresMentalModelRepository(sessions).schedule_due() == 1

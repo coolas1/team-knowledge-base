@@ -162,6 +162,39 @@ class MemoryExpansionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class MentalModelDefinition:
+    id: str
+    name: str
+    source_query: str
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    refresh_mode: Literal["full", "delta"] = "full"
+    refresh_after_consolidation: bool = False
+    refresh_interval_seconds: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MentalModelRecord:
+    id: str
+    name: str
+    description: str
+    source_query: str
+    tags: tuple[str, ...]
+    summary: str
+    version: int
+    refresh_mode: str
+    refresh_after_consolidation: bool
+    refresh_interval_seconds: int | None
+    next_refresh_at: datetime | None
+    last_success_at: datetime | None
+    freshness: str
+    error_msg: str | None
+    evidence_watermark: int
+    source_memory_ids: tuple[str, ...]
+    source_versions: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
 class ConversationMemoryRecallRequest:
     query: str
     top_k: int = 5
@@ -303,6 +336,22 @@ class KnowledgeQuery(Protocol):
     async def expand_memory(
         self, request: MemoryExpansionRequest
     ) -> MemoryExpansionResult | None: ...
+
+    async def create_mental_model(
+        self, definition: MentalModelDefinition
+    ) -> MentalModelRecord: ...
+
+    async def get_mental_model(self, model_id: str) -> MentalModelRecord | None: ...
+
+    async def list_mental_models(self) -> list[MentalModelRecord]: ...
+
+    async def update_mental_model(
+        self, model_id: str, definition: MentalModelDefinition
+    ) -> MentalModelRecord: ...
+
+    async def delete_mental_model(self, model_id: str) -> bool: ...
+
+    async def refresh_mental_model(self, model_id: str) -> bool: ...
 
 
 class ConversationMemory(Protocol):

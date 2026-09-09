@@ -338,6 +338,11 @@ class MentalModel:
     trigger: str | None = None
     embedding: list[float] | None = None
     source_memory_ids: list[str] = field(default_factory=list)
+    source_query: str = ""
+    version: int = 0
+    freshness: str = "empty"
+    last_success_at: datetime | None = None
+    source_versions: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
