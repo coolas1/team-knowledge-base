@@ -31,7 +31,11 @@ class EntityDecision:
 
 class CandidateReader(Protocol):
     async def entity_candidates(
-        self, names: tuple[str, ...], *, limit: int
+        self,
+        names: tuple[str, ...],
+        *,
+        limit: int,
+        exclude_document_id: str | None = None,
     ) -> list[EntityCandidate]: ...
 
 
@@ -43,6 +47,7 @@ class EntityResolver:
         *,
         candidate_limit: int = 10,
         timeout: float = 15,
+        exclude_document_id: str | None = None,
     ):
         if not 1 <= candidate_limit <= 100 or timeout <= 0:
             raise ValueError("invalid entity resolution bounds")
@@ -50,6 +55,7 @@ class EntityResolver:
         self.providers = providers
         self.candidate_limit = candidate_limit
         self.timeout = timeout
+        self.exclude_document_id = exclude_document_id
 
     async def resolve(
         self, name: str, context: str, *, aliases: tuple[str, ...] = ()
@@ -65,7 +71,9 @@ class EntityResolver:
             async with asyncio.timeout(self.timeout):
                 candidates = (
                     await self.repository.entity_candidates(
-                        names, limit=self.candidate_limit
+                        names,
+                        limit=self.candidate_limit,
+                        exclude_document_id=self.exclude_document_id,
                     )
                 )[: self.candidate_limit]
                 if not candidates:
@@ -117,35 +125,25 @@ class EntityResolver:
 
 
 async def resolve_plan_entities(
-    plan, repository, providers, *, candidate_limit=10, timeout=15
+    plan,
+    repository,
+    providers,
+    *,
+    candidate_limit=10,
+    timeout=60,
+    max_concurrent=8,
 ):
-    """Resolve before the publishing transaction; preserve original mention names."""
+    """Resolve unique document entities before publish and retain mention names."""
     from uuid import NAMESPACE_URL, uuid5
     from time import monotonic
     from .types import MemoryLinkDraft
 
-    pending: dict[str, EntityCandidate] = {}
-    created: set[str] = set()
+    if max_concurrent < 1:
+        raise ValueError("entity resolution concurrency must be positive")
 
-    class Reader:
-        async def entity_candidates(self, names, *, limit):
-            local = [
-                c
-                for c in pending.values()
-                if set(names) & {normalize_entity(n) for n in (c.name, *c.aliases)}
-            ]
-            stored = await repository.entity_candidates(names, limit=limit)
-            return list({c.id: c for c in [*local, *stored]}.values())[:limit]
-
-    resolver = EntityResolver(
-        Reader(), providers, candidate_limit=candidate_limit, timeout=timeout
-    )
-    status = "success"
-    deadline = monotonic() + timeout
-    linked: dict[str, list[str]] = {}
+    groups = {}
     for memory in plan.memories:
-        resolutions = []
-        memory.metadata["resolved_entities"] = resolutions
+        memory.metadata["resolved_entities"] = []
         if memory.is_source_chunk:
             continue
         for name in dict.fromkeys(memory.entities):
@@ -153,50 +151,90 @@ async def resolve_plan_entities(
             if not normalized:
                 continue
             aliases = tuple(
-                memory.metadata.get("entity_aliases", {}).get(normalized, ())
+                dict.fromkeys(
+                    str(alias).strip()
+                    for alias in memory.metadata.get("entity_aliases", {}).get(
+                        normalized, ()
+                    )
+                    if str(alias).strip()
+                )
             )
+            key = (
+                normalized,
+                tuple(sorted(normalize_entity(alias) for alias in aliases)),
+            )
+            groups.setdefault(key, []).append((memory, name, aliases))
+
+    status = "success"
+    deadline = monotonic() + timeout
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def resolve_group(key, mentions):
+        async with semaphore:
             remaining = deadline - monotonic()
             if remaining <= 0:
-                decision = EntityDecision(
+                return key, EntityDecision(
                     None, "degraded", "resolution_budget_exhausted"
                 )
-            else:
-                resolver.timeout = remaining
-                decision = await resolver.resolve(
-                    name,
-                    f"{memory.text}\nSource context: {memory.source_text}\n{memory.context}",
-                    aliases=aliases,
+            contexts = list(
+                dict.fromkeys(
+                    f"{memory.text}\nSource context: {memory.source_text}\n{memory.context}"
+                    for memory, _, _ in mentions
                 )
-            if decision.status == "degraded":
-                status = "degraded"
-            target = decision.entity_id
-            if target is None:
-                target = str(
-                    uuid5(
-                        NAMESPACE_URL,
-                        json.dumps(
-                            [
-                                "tkb-entity",
-                                repository.scope.bank_id,
-                                plan.document_id,
-                                memory.chunk_index,
-                                normalized,
-                                memory.text,
-                            ],
-                            ensure_ascii=False,
-                        ),
-                    )
+            )
+            resolver = EntityResolver(
+                repository,
+                providers,
+                candidate_limit=candidate_limit,
+                timeout=remaining,
+                exclude_document_id=plan.document_id,
+            )
+            _, name, aliases = mentions[0]
+            return key, await resolver.resolve(
+                name,
+                "\n\n---\n\n".join(contexts)[:12_000],
+                aliases=aliases,
+            )
+
+    decisions = dict(
+        await asyncio.gather(
+            *(resolve_group(key, mentions) for key, mentions in groups.items())
+        )
+    )
+
+    created: set[str] = set()
+    linked: dict[str, list[str]] = {}
+    for key, mentions in groups.items():
+        decision = decisions[key]
+        if decision.status == "degraded":
+            status = "degraded"
+        target = decision.entity_id
+        if target is None:
+            target = str(
+                uuid5(
+                    NAMESPACE_URL,
+                    json.dumps(
+                        [
+                            "tkb-entity-v2",
+                            repository.scope.bank_id,
+                            plan.document_id,
+                            key,
+                        ],
+                        ensure_ascii=False,
+                    ),
                 )
-                created.add(target)
-            resolutions.append(
+            )
+            created.add(target)
+        for memory, name, _ in mentions:
+            memory.metadata["resolved_entities"].append(
                 {
                     "name": name,
                     "id": target,
                     "existing": target not in created,
                     "decision": decision.status,
+                    "reason": decision.reason,
                 }
             )
-            pending[target] = EntityCandidate(target, name, aliases, (memory.text,))
             linked.setdefault(target, []).append(memory.id)
     plan.links = [link for link in plan.links if link.link_type != "entity"]
     for ids in linked.values():

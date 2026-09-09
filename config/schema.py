@@ -16,6 +16,8 @@ class MemoryCfg(BaseModel):
     graph_worker: bool = True
     retain_max_concurrent: int = Field(default=1, ge=1)
     retain_chunk_concurrency: int = Field(default=4, ge=1, le=32)
+    entity_resolution_max_concurrent: int = Field(default=8, ge=1, le=32)
+    entity_resolution_timeout_seconds: float = Field(default=60, gt=0, le=600)
     consolidation_worker: bool = True
     consolidation_batch_size: int = Field(default=64, ge=1, le=1000)
     consolidation_observation_limit: int = Field(default=1000, ge=1)

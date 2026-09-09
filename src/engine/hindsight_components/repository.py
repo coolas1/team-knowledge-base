@@ -281,7 +281,13 @@ class PostgresMemoryRepository:
                 raise RetentionRequestConflict("retention request content conflict")
             return dict(row.result_payload)
 
-    async def entity_candidates(self, names: tuple[str, ...], *, limit: int = 10):
+    async def entity_candidates(
+        self,
+        names: tuple[str, ...],
+        *,
+        limit: int = 10,
+        exclude_document_id: str | None = None,
+    ):
         from sqlalchemy import or_
         from .entity_resolver import EntityCandidate
 
@@ -294,6 +300,19 @@ class PostgresMemoryRepository:
             return []
         # Alias evidence belongs to visible facts, never to a global entity profile.
         aliases = MemoryUnitEntity.aliases
+        candidate_scope = [
+            self._memory_scope(),
+            MemoryEntity.bank_id == self.scope.bank_id,
+            or_(
+                MemoryEntity.normalized_name.in_(normalized),
+                func.lower(MemoryUnitEntity.original_name).in_(normalized),
+                aliases.overlap(list(normalized)),
+            ),
+        ]
+        if exclude_document_id is not None:
+            candidate_scope.append(
+                MemoryUnit.document_id != uuid.UUID(exclude_document_id)
+            )
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -302,15 +321,7 @@ class PostgresMemoryRepository:
                         MemoryUnitEntity, MemoryUnitEntity.entity_id == MemoryEntity.id
                     )
                     .join(MemoryUnit, MemoryUnit.id == MemoryUnitEntity.memory_id)
-                    .where(
-                        self._memory_scope(),
-                        MemoryEntity.bank_id == self.scope.bank_id,
-                        or_(
-                            MemoryEntity.normalized_name.in_(normalized),
-                            func.lower(MemoryUnitEntity.original_name).in_(normalized),
-                            aliases.overlap(list(normalized)),
-                        ),
-                    )
+                    .where(*candidate_scope)
                     .order_by(MemoryEntity.id, MemoryUnit.id)
                     .limit(limit * 3)
                 )
@@ -427,6 +438,12 @@ class PostgresMemoryRepository:
                 retained_ids = {uuid.UUID(memory.id) for memory in plan.memories} & set(
                     old_ids
                 )
+                corrected_ids = {
+                    row.id
+                    for row in old_rows
+                    if "entity_correction_id" in (row.metadata_json or {})
+                }
+                refreshable_entity_ids = retained_ids - corrected_ids
                 removed_ids = list(set(old_ids) - retained_ids)
                 impacted_documents = await self._dependent_graph_documents(
                     session,
@@ -454,6 +471,14 @@ class PostgresMemoryRepository:
                         MemoryUnit.id.in_(removed_ids),
                     )
                 )
+                if refreshable_entity_ids:
+                    await session.execute(
+                        delete(MemoryLink).where(
+                            MemoryLink.bank_id == self.scope.bank_id,
+                            MemoryLink.link_type == "entity",
+                            MemoryLink.source_memory_id.in_(refreshable_entity_ids),
+                        )
+                    )
                 await self._insert_memories(
                     session,
                     plan,
@@ -894,13 +919,15 @@ class PostgresMemoryRepository:
                 preserved = dict(existing.metadata_json or {})
                 # A stable fact keeps its manually corrected ownership and source
                 # timestamp. Updating its position must not cascade external links.
-                for key in (
-                    "entity_correction_id",
-                    "resolved_entities",
-                    "entity_mentions",
-                ):
-                    if key in preserved:
-                        row.metadata_json[key] = preserved[key]
+                corrected = "entity_correction_id" in preserved
+                if corrected:
+                    for key in (
+                        "entity_correction_id",
+                        "resolved_entities",
+                        "entity_mentions",
+                    ):
+                        if key in preserved:
+                            row.metadata_json[key] = preserved[key]
                 for attribute in (
                     "chunk_index",
                     "memory_index",
@@ -912,8 +939,16 @@ class PostgresMemoryRepository:
                     "metadata_json",
                 ):
                     setattr(existing, attribute, getattr(row, attribute))
-                continue
-            session.add(row)
+                if corrected:
+                    continue
+                await session.execute(
+                    delete(MemoryUnitEntity).where(
+                        MemoryUnitEntity.memory_id == row.id,
+                        MemoryUnitEntity.bank_id == self.scope.bank_id,
+                    )
+                )
+            else:
+                session.add(row)
             for entity_name in draft.entities:
                 normalized = normalize_entity(entity_name)
                 if not normalized:

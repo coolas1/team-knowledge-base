@@ -9,7 +9,8 @@ class HindsightOptions:
     consolidation_enabled: bool = False
     entity_resolution_enabled: bool = False
     entity_candidate_limit: int = 10
-    entity_resolution_timeout_seconds: float = 15.0
+    entity_resolution_timeout_seconds: float = 60.0
+    entity_resolution_max_concurrent: int = 8
     chunk_tokens: int = 500
     chunk_overlap_tokens: int = 50
     retain_chunk_concurrency: int = 4
@@ -52,6 +53,7 @@ class HindsightOptions:
         positive = {
             "entity_candidate_limit": self.entity_candidate_limit,
             "entity_resolution_timeout_seconds": self.entity_resolution_timeout_seconds,
+            "entity_resolution_max_concurrent": self.entity_resolution_max_concurrent,
             "retain_chunk_concurrency": self.retain_chunk_concurrency,
             "deep_total_timeout_seconds": self.deep_total_timeout_seconds,
             "query_analysis_timeout_seconds": self.query_analysis_timeout_seconds,

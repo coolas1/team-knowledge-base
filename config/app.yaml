@@ -7,6 +7,8 @@ engine:
   memory:
     enabled: true
     retain_chunk_concurrency: 4
+    entity_resolution_max_concurrent: 8
+    entity_resolution_timeout_seconds: 60
     graph_worker: true
     consolidation_batch_size: 32
     consolidation_max_iterations: 100

@@ -44,6 +44,12 @@ class HindsightService:
                 consolidation_enabled=features.consolidation,
                 adaptive_reflect_enabled=features.adaptive_reflect,
                 retain_chunk_concurrency=memory_config.retain_chunk_concurrency,
+                entity_resolution_timeout_seconds=(
+                    memory_config.entity_resolution_timeout_seconds
+                ),
+                entity_resolution_max_concurrent=(
+                    memory_config.entity_resolution_max_concurrent
+                ),
             )
         self.options = options
         self._repository = repository

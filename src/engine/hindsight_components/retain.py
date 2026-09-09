@@ -231,6 +231,7 @@ class RetainEngine:
                 self._providers,
                 candidate_limit=self._options.entity_candidate_limit,
                 timeout=self._options.entity_resolution_timeout_seconds,
+                max_concurrent=self._options.entity_resolution_max_concurrent,
             )
             if entity_status == "degraded":
                 status = "degraded"
