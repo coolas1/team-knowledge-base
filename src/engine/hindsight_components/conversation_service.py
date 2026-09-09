@@ -220,6 +220,8 @@ class ConversationMemoryService:
         cancelled = await self._queue.cancel_session(session_id)
         for document_id in document_ids:
             await self._repository.delete_document(document_id)
+        if hasattr(self._repository, "purge_orphaned_observations"):
+            await self._repository.purge_orphaned_observations()
         deleted = await self._queue.delete_documents(document_ids)
         return ConversationForgetResult(
             session_id=session_id,

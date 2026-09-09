@@ -19,6 +19,7 @@ import { appendActivity } from './tool-activity'
 import {
   applyAcceptance,
   applyCompletion,
+  deleteConversationWithMemory,
   applyFailure,
   messagesFromDetail,
   optimisticMessages,
@@ -299,11 +300,11 @@ export function AskPage() {
 
   const deleteConversation = async (sessionId: string) => {
     if (loading || sessionLoading) return
-    if (!window.confirm('确定删除这个会话吗？此操作无法撤销。')) return
+    if (!window.confirm('确定删除这个会话及其长期记忆吗？此操作无法撤销。')) return
     setSessionLoading(true)
     setError('')
     try {
-      await api.deleteAgentSession(sessionId)
+      await deleteConversationWithMemory(api, sessionId)
       const remaining = sessions.filter((session) => session.id !== sessionId)
       setSessions(remaining)
       if (sessionRef.current === sessionId) {

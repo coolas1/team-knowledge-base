@@ -32,6 +32,7 @@ from .models import (
     MentalModel as MentalModelRow,
     MentalModelRefreshJob,
     ObservationEvidence,
+    ObservationHistory,
     ObservationRecord,
 )
 from .types import (
@@ -724,6 +725,42 @@ class PostgresMemoryRepository:
                         .exists(),
                     )
                 )
+
+    async def purge_orphaned_observations(self) -> int:
+        """Physically remove stale observations after all evidence is deleted."""
+        async with self._session_factory() as session, session.begin():
+            orphaned = list(
+                await session.scalars(
+                    select(ObservationRecord.memory_id)
+                    .join(MemoryUnit, MemoryUnit.id == ObservationRecord.memory_id)
+                    .where(
+                        self._memory_scope(),
+                        ObservationRecord.freshness == "stale",
+                        ~select(ObservationEvidence.observation_id)
+                        .where(
+                            ObservationEvidence.observation_id
+                            == ObservationRecord.memory_id,
+                            ObservationEvidence.active.is_(True),
+                        )
+                        .exists(),
+                    )
+                )
+            )
+            if not orphaned:
+                return 0
+            await session.execute(
+                delete(ObservationHistory).where(
+                    ObservationHistory.bank_id == self.scope.bank_id,
+                    ObservationHistory.observation_id.in_(orphaned),
+                )
+            )
+            result = await session.execute(
+                delete(MemoryUnit).where(
+                    MemoryUnit.id.in_(orphaned),
+                    self._memory_scope(),
+                )
+            )
+            return int(result.rowcount or 0)
 
     async def list_backfill_candidates(
         self,

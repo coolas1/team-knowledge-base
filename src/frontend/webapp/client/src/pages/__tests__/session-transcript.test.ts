@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   applyAcceptance,
   applyCompletion,
+  deleteConversationWithMemory,
   applyFailure,
   optimisticMessages,
   reconcileMessages,
@@ -56,5 +57,22 @@ describe('session transcript reconciliation', () => {
     expect(reconcileMessages(local, detail)).toEqual([
       expect.objectContaining({ id: 'u1', status: 'interrupted' }),
     ])
+  })
+
+  it('forgets long-term memory before deleting a conversation', async () => {
+    const calls: string[] = []
+    const client = {
+      forgetAgentSessionMemory: async (sessionId: string) => {
+        calls.push(`forget:${sessionId}`)
+      },
+      deleteAgentSession: async (sessionId: string) => {
+        calls.push(`delete:${sessionId}`)
+        return { deleted: true }
+      },
+    }
+
+    await deleteConversationWithMemory(client, 's1')
+
+    expect(calls).toEqual(['forget:s1', 'delete:s1'])
   })
 })

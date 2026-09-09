@@ -69,9 +69,14 @@ class FakeRecall:
 class FakeRepository:
     def __init__(self) -> None:
         self.deleted = []
+        self.purged_orphaned_observations = 0
 
     async def delete_document(self, document_id):
         self.deleted.append(document_id)
+
+    async def purge_orphaned_observations(self):
+        self.purged_orphaned_observations += 1
+        return 1
 
 
 async def test_enqueue_uses_trusted_identity_and_preserves_original_source_time():
@@ -168,6 +173,7 @@ async def test_service_forgets_only_requested_session_and_reports_diagnostics():
     diagnostics = await service.conversation_memory_diagnostics()
 
     assert repository.deleted == ["document-1"]
+    assert repository.purged_orphaned_observations == 1
     assert queue.cancelled == ["session-1"]
     assert queue.deleted == ["document-1"]
     assert forgotten.cancelled_jobs == 1
