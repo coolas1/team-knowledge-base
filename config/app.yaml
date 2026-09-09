@@ -7,6 +7,7 @@ engine:
   memory:
     enabled: true
     graph_worker: true
+    consolidation_batch_size: 32
     consolidation_max_iterations: 100
     consolidation_max_tokens: 3200000
     features:

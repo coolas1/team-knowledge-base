@@ -9,6 +9,7 @@ from src.engine.hindsight_components.consolidation import (
     ConsolidationOptions,
     ConsolidationReadSet,
     ConsolidationWorker,
+    retry_batch_size,
 )
 from src.engine.hindsight_components.consolidation_actions import (
     ConsolidationAction,
@@ -23,6 +24,19 @@ from src.engine.scope import MemoryScope
 
 def evidence(identity: str, *, bank: str = "a", tags=("user:1",)):
     return EvidenceVersion(identity, 1, bank, tags)
+
+
+def test_retry_batch_size_halves_after_each_failure():
+    assert [retry_batch_size(32, attempts) for attempts in range(8)] == [
+        32,
+        16,
+        8,
+        4,
+        2,
+        1,
+        1,
+        1,
+    ]
 
 
 def test_action_validation_is_scoped_and_unions_repeated_update_evidence():

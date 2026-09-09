@@ -126,6 +126,11 @@ def _scope_lock_key(bank_id: str, scope_key: str) -> str:
     return f"tkb-consolidation:{bank_id}:{scope_key}"
 
 
+def retry_batch_size(batch_size: int, attempts: int) -> int:
+    """Reduce repeated model input while keeping a bounded minimum batch."""
+    return max(1, batch_size // (2 ** min(max(0, attempts), 6)))
+
+
 class PostgresConsolidationRepository:
     def __init__(self, session_factory=None) -> None:
         if session_factory is None:
@@ -168,7 +173,7 @@ class PostgresConsolidationRepository:
                             ConsolidationFactEvent.id <= job.pending_through,
                         )
                         .order_by(ConsolidationFactEvent.id)
-                        .limit(options.batch_size)
+                        .limit(retry_batch_size(options.batch_size, job.attempts))
                     )
                 )
                 if not event_ids:
