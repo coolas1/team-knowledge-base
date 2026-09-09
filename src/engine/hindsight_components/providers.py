@@ -54,6 +54,19 @@ class ProjectHindsightProviders:
             await self._complete(system, user, json_mode=True, timeout=timeout)
         )
 
+    async def json_with_usage(
+        self, system: str, user: str, *, timeout: float = 600
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return structured output with provider-owned usage telemetry."""
+        if not settings.llm.enabled:
+            raise RuntimeError("Hindsight LLM is disabled (LLM_BASE_URL is empty)")
+        response = await self._openai_response(
+            system, user, json_mode=True, timeout=timeout
+        )
+        content = str(response["choices"][0]["message"]["content"])
+        usage = response.get("usage")
+        return parse_json_object(content), usage if isinstance(usage, dict) else {}
+
     async def text(self, system: str, user: str, *, timeout: float = 600) -> str:
         return (
             await self._complete(system, user, json_mode=False, timeout=timeout)
@@ -79,6 +92,19 @@ class ProjectHindsightProviders:
         json_mode: bool,
         timeout: float,
     ) -> str:
+        response = await ProjectHindsightProviders._openai_response(
+            system, user, json_mode=json_mode, timeout=timeout
+        )
+        return str(response["choices"][0]["message"]["content"])
+
+    @staticmethod
+    async def _openai_response(
+        system: str,
+        user: str,
+        *,
+        json_mode: bool,
+        timeout: float,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": settings.llm.require_model(),
             "temperature": 0,
@@ -99,4 +125,7 @@ class ProjectHindsightProviders:
                 json=payload,
             )
             response.raise_for_status()
-            return str(response.json()["choices"][0]["message"]["content"])
+            value = response.json()
+            if not isinstance(value, dict):
+                raise ValueError("LLM response is not a JSON object")
+            return value

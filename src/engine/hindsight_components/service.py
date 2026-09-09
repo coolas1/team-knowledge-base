@@ -33,7 +33,8 @@ class HindsightService:
                 os.getenv("APP_CONFIG", "config/app.yaml")
             ).engine.memory.features
             options = HindsightOptions(
-                entity_resolution_enabled=features.entity_resolution
+                entity_resolution_enabled=features.entity_resolution,
+                consolidation_enabled=features.consolidation,
             )
         self.options = options
         self._repository = repository

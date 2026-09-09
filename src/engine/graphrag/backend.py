@@ -436,7 +436,9 @@ def build(config: EngineConfig) -> GraphRAGBackend:
     if config.memory is not None:
         from src.engine.hindsight_components.repository import PostgresMemoryRepository
 
-        repository = PostgresMemoryRepository()
+        repository = PostgresMemoryRepository(
+            consolidation_enabled=config.memory.consolidation_enabled
+        )
         enricher = MemoryStateEnricher(repository)
         if index_hook is None:
             index_hook = build_retain_hook(

@@ -15,12 +15,28 @@ class MemoryCfg(BaseModel):
     enabled: bool = False
     graph_worker: bool = True
     retain_max_concurrent: int = Field(default=1, ge=1)
+    consolidation_worker: bool = True
+    consolidation_batch_size: int = Field(default=64, ge=1, le=1000)
+    consolidation_observation_limit: int = Field(default=1000, ge=1)
+    consolidation_max_iterations: int = Field(default=8, ge=1, le=100)
+    consolidation_max_tokens: int = Field(default=32000, ge=1)
+    consolidation_max_cost_usd: float = Field(default=0, ge=0)
+    consolidation_input_cost_usd_per_million: float = Field(default=0, ge=0)
+    consolidation_output_cost_usd_per_million: float = Field(default=0, ge=0)
+    consolidation_max_concurrent: int = Field(default=1, ge=1, le=32)
+    consolidation_semantic_dedup: bool = True
+    consolidation_semantic_threshold: float = Field(default=0.9, ge=0, le=1)
     features: MemoryFeatures = Field(default_factory=MemoryFeatures)
 
     @model_validator(mode="after")
     def validate_features(self):
         if self.features.scope and not self.enabled:
             raise ValueError("memory features require memory.enabled")
+        if self.consolidation_max_cost_usd and not (
+            self.consolidation_input_cost_usd_per_million
+            or self.consolidation_output_cost_usd_per_million
+        ):
+            raise ValueError("consolidation cost limit requires token prices")
         return self
 
 

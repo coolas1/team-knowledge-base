@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class HindsightOptions:
+    consolidation_enabled: bool = False
     entity_resolution_enabled: bool = False
     entity_candidate_limit: int = 10
     entity_resolution_timeout_seconds: float = 15.0

@@ -5,6 +5,8 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 
 from src.engine.components.store.models import Base, Document, EMBEDDING_DIM
 from src.engine.hindsight_components.models import (
+    ConsolidationFactEvent,
+    ConsolidationJob,
     ConversationMemorySource,
     HindsightDocumentState,
     HindsightGraphOutbox,
@@ -14,6 +16,10 @@ from src.engine.hindsight_components.models import (
     MemoryUnit,
     MemoryUnitEntity,
     MentalModel,
+    ObservationEvidence,
+    ObservationHistory,
+    ObservationRecord,
+    FactTombstone,
 )
 
 
@@ -28,6 +34,12 @@ def test_hindsight_tables_share_existing_metadata_and_document_fk() -> None:
         "hindsight_document_state",
         "hindsight_graph_outbox",
         "conversation_memory_sources",
+        "observation_records",
+        "observation_history",
+        "observation_evidence",
+        "memory_fact_tombstones",
+        "consolidation_fact_events",
+        "consolidation_jobs",
     }
 
     assert expected <= set(Base.metadata.tables)
@@ -81,6 +93,12 @@ def test_all_hindsight_model_tables_are_distinct() -> None:
         HindsightDocumentState,
         HindsightGraphOutbox,
         ConversationMemorySource,
+        ObservationRecord,
+        ObservationHistory,
+        ObservationEvidence,
+        FactTombstone,
+        ConsolidationFactEvent,
+        ConsolidationJob,
     ]
 
     assert len({model.__tablename__ for model in models}) == len(models)

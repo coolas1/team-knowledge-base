@@ -15,6 +15,37 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": f"tkb-retention-migration:{schema}"},
         )
+        # ``create_all`` does not add newly introduced tables on an existing
+        # deployment. Create the B3 sidecar tables in dependency order here.
+        from src.engine.hindsight_components.models import (
+            ConsolidationFactEvent,
+            ConsolidationJob,
+            FactTombstone,
+            ObservationEvidence,
+            ObservationHistory,
+            ObservationRecord,
+        )
+
+        for model in (
+            ObservationRecord,
+            ObservationHistory,
+            ObservationEvidence,
+            FactTombstone,
+            ConsolidationFactEvent,
+            ConsolidationJob,
+        ):
+            await conn.run_sync(
+                lambda sync_conn, table=model.__table__: table.create(
+                    sync_conn.execution_options(schema_translate_map={None: schema}),
+                    checkfirst=True,
+                )
+            )
+        await conn.execute(
+            text(
+                f'ALTER TABLE "{schema}"."consolidation_jobs" '
+                "ADD COLUMN IF NOT EXISTS cost_microusd BIGINT NOT NULL DEFAULT 0"
+            )
+        )
         await conn.execute(
             text(f'''
             CREATE TABLE IF NOT EXISTS "{schema}"."retention_requests" (
@@ -28,6 +59,11 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
         ''')
         )
         memory_table = f'"{schema}"."memory_units"'
+        await conn.execute(
+            text(
+                f"ALTER TABLE {memory_table} ADD COLUMN IF NOT EXISTS memory_version INTEGER NOT NULL DEFAULT 1"
+            )
+        )
         immediate = await conn.scalar(
             text(
                 "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass(:table) AND conname='uq_memory_source_index' AND NOT condeferrable)"
@@ -40,6 +76,78 @@ async def migrate_retention(engine: AsyncEngine, *, schema: str = "public") -> N
                     f"ALTER TABLE {memory_table} DROP CONSTRAINT uq_memory_source_index, ADD CONSTRAINT uq_memory_source_index UNIQUE(document_id, chunk_index, memory_index) DEFERRABLE INITIALLY DEFERRED"
                 )
             )
+        # Legacy one-shot observations become version 1 heads with queryable
+        # evidence. Existing atomic facts enter the default write-scope queue;
+        # the unique event constraint makes an interrupted migration resumable.
+        await conn.execute(
+            text(f'''
+                INSERT INTO "{schema}"."observation_records"
+                    (memory_id, bank_id, version, normalized_text, write_scope,
+                     freshness, has_conflict, processed_through)
+                SELECT id, bank_id, 1, regexp_replace(trim(text), '\\s+', ' ', 'g'),
+                       scope_tags, CASE WHEN state='active' THEN 'active' ELSE 'stale' END,
+                       false, 0
+                FROM {memory_table}
+                WHERE memory_type='observation'
+                ON CONFLICT (memory_id) DO NOTHING
+            ''')
+        )
+        await conn.execute(
+            text(f'''
+                INSERT INTO "{schema}"."observation_evidence"
+                    (observation_id, fact_id, fact_version, bank_id, active)
+                SELECT observation.id, source_id, COALESCE(fact.memory_version, 1),
+                       observation.bank_id, fact.id IS NOT NULL AND fact.state='active'
+                FROM {memory_table} observation
+                CROSS JOIN LATERAL unnest(observation.source_memory_ids) source_id
+                LEFT JOIN {memory_table} fact ON fact.id=source_id
+                WHERE observation.memory_type='observation'
+                ON CONFLICT (observation_id, fact_id) DO NOTHING
+            ''')
+        )
+        await conn.execute(
+            text(f'''
+                INSERT INTO "{schema}"."consolidation_fact_events"
+                    (bank_id, scope_key, write_scope, fact_id, fact_version,
+                     document_id, document_revision, operation)
+                SELECT memory.bank_id, '[]', ARRAY[]::text[], memory.id,
+                       memory.memory_version, memory.document_id,
+                       COALESCE(state.revision, 1), 'upsert'
+                FROM {memory_table} memory
+                LEFT JOIN "{schema}"."hindsight_document_state" state
+                  ON state.document_id=memory.document_id
+                WHERE memory.memory_type IN ('world', 'experience')
+                  AND NOT memory.is_source_chunk AND memory.state='active'
+                ON CONFLICT (bank_id, scope_key, fact_id, fact_version, operation)
+                DO NOTHING
+            ''')
+        )
+        await conn.execute(
+            text(f'''
+                INSERT INTO "{schema}"."consolidation_jobs"
+                    (bank_id, scope_key, write_scope, status, pending_through,
+                     processed_through, attempts, iterations, tokens_used,
+                     cost_microusd, available_at)
+                SELECT bank_id, scope_key, ARRAY[]::text[], 'pending', max(id),
+                       0, 0, 0, 0, 0, now()
+                FROM "{schema}"."consolidation_fact_events"
+                GROUP BY bank_id, scope_key
+                ON CONFLICT (bank_id, scope_key) DO UPDATE SET
+                    pending_through=GREATEST(
+                        "{schema}"."consolidation_jobs".pending_through,
+                        EXCLUDED.pending_through
+                    ),
+                    status=CASE
+                        WHEN "{schema}"."consolidation_jobs".processed_through < EXCLUDED.pending_through
+                        THEN 'pending'
+                        ELSE "{schema}"."consolidation_jobs".status
+                    END,
+                    available_at=LEAST(
+                        "{schema}"."consolidation_jobs".available_at,
+                        EXCLUDED.available_at
+                    )
+            ''')
+        )
         if (
             await conn.scalar(text("SELECT to_regclass(:name)"), {"name": state_table})
             is not None

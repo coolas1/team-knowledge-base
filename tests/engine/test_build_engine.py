@@ -43,7 +43,8 @@ def test_build_memory_wiring(monkeypatch):
     built = {}
 
     class FakeRepo:
-        pass
+        def __init__(self, **kwargs):
+            built["repository_options"] = kwargs
 
     def fake_hook(*, max_concurrent, repository):
         built["hook"] = (max_concurrent, repository)
@@ -66,5 +67,6 @@ def test_build_memory_wiring(monkeypatch):
     )
     backend_mod.build(cfg)
     assert built["hook"][0] == 2
+    assert built["repository_options"] == {"consolidation_enabled": False}
     assert isinstance(built["hook"][1], FakeRepo)
     assert built["pipeline_hook"] is not None

@@ -77,6 +77,9 @@ class MemoryUnit(BankOwned, Base):
         ARRAY(Text), nullable=False, default=list, server_default="{}"
     )
     state: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    memory_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (
@@ -272,6 +275,203 @@ class RetentionRequest(BankOwned, Base):
         default=_utcnow,
         server_default=sql_text("now()"),
         nullable=False,
+    )
+
+
+class ObservationRecord(BankOwned, Base):
+    """Mutable head for a derived observation stored in ``memory_units``."""
+
+    __tablename__ = "observation_records"
+    memory_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("memory_units.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    write_scope: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
+    freshness: Mapped[str] = mapped_column(
+        Text, nullable=False, default="active", server_default="active"
+    )
+    stale_reason: Mapped[str | None] = mapped_column(Text)
+    has_conflict: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sql_text("false")
+    )
+    processed_through: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+        onupdate=_utcnow,
+    )
+
+    __table_args__ = (
+        CheckConstraint("version > 0", name="ck_observation_version_positive"),
+        CheckConstraint(
+            "freshness IN ('active', 'stale', 'tombstoned')",
+            name="ck_observation_freshness",
+        ),
+        Index("idx_observation_scope", "bank_id", "write_scope", "freshness"),
+        Index("idx_observation_exact", "bank_id", "normalized_text"),
+    )
+
+
+class ObservationHistory(BankOwned, Base):
+    __tablename__ = "observation_history"
+    observation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True
+    )
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    freshness: Mapped[str] = mapped_column(Text, nullable=False)
+    change_kind: Mapped[str] = mapped_column(Text, nullable=False, default="synthesis")
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    evidence_snapshot: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+
+
+class ObservationEvidence(BankOwned, Base):
+    __tablename__ = "observation_evidence"
+    observation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("memory_units.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    fact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    fact_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+
+    __table_args__ = (Index("idx_observation_evidence_fact", "fact_id", "active"),)
+
+
+class FactTombstone(BankOwned, Base):
+    __tablename__ = "memory_fact_tombstones"
+    fact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    fact_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    document_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    deleted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+
+
+class ConsolidationFactEvent(BankOwned, Base):
+    __tablename__ = "consolidation_fact_events"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    scope_key: Mapped[str] = mapped_column(Text, nullable=False)
+    write_scope: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list
+    )
+    fact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fact_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    document_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(
+        Text, nullable=False, default="upsert", server_default="upsert"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "bank_id",
+            "scope_key",
+            "fact_id",
+            "fact_version",
+            "operation",
+            name="uq_consolidation_fact_version",
+        ),
+        CheckConstraint(
+            "operation IN ('upsert', 'delete')", name="ck_consolidation_event_operation"
+        ),
+        Index("idx_consolidation_event_scope", "bank_id", "scope_key", "id"),
+    )
+
+
+class ConsolidationJob(BankOwned, Base):
+    __tablename__ = "consolidation_jobs"
+    scope_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    bank_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, default="default-team", server_default="default-team"
+    )
+    write_scope: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default="pending"
+    )
+    pending_through: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    processed_through: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    iterations: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    tokens_used: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    cost_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    error_msg: Mapped[str | None] = mapped_column(Text)
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+        onupdate=_utcnow,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed', 'budget_exhausted')",
+            name="ck_consolidation_job_status",
+        ),
+        Index("idx_consolidation_job_ready", "status", "available_at", "bank_id"),
     )
 
 

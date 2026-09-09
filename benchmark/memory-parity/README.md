@@ -20,8 +20,9 @@ manifest with both actual commits and dirty patch fingerprints, corpus hash,
 resolved model/provider versions, sanitized effective configuration, embedding
 dimension, timestamps, and environment identifier. Do not overwrite the baseline.
 
-For each batch, execute its subset on upstream and TKB three times using the same
-model/settings. Collect case ID, repetition, engine, result, cited source IDs,
+For each batch, execute its subset on upstream and TKB once using the same
+model/settings. Add a targeted rerun only for a concrete failure or new risk.
+Collect case ID, repetition, engine, result, cited source IDs,
 deterministic checks, human-reviewable semantic score, duration, token usage,
 errors, and operation IDs. Keep retrieved evidence separate from actual citations.
 Unavailable models/services mean `not_run`, never pass. B1 scope cases that require
@@ -37,7 +38,7 @@ future batch execution adapters and result reports are separate deliverables.
 ### B2 execution tools
 
 `run_extraction.py --upstream ../../hindsight --output <fresh-directory>` runs the
-8 attribution/time cases three times on each engine. It invokes upstream's actual
+8 attribution/time cases once on each engine by default. It invokes upstream's actual
 `extract_facts_from_text` and TKB's actual extraction stage with the configured
 model. Source/ingestion control lines are removed from source text; source time is
 passed through the API. This is extraction-stage evidence, not full retain/query
@@ -54,3 +55,14 @@ and process exit after remote acknowledgement but before local acknowledgement.
 It asserts two wire deliveries produce one durable remote record, acknowledged
 turns stop sending, and unfinished turns are excluded. The receiver is a test
 ledger, not PostgreSQL; engine queue and lease integration tests remain required.
+
+### B3 execution tool
+
+`run_consolidation.py --upstream ../../hindsight --output <fresh-directory>` runs
+the fixed B3 cases once. It calls the checked-out upstream's real consolidation
+system prompt and constrained response model, and TKB's real B3 action prompt and
+schema, through the same configured model. The adapter treats each labelled source
+segment as an already extracted atomic fact, so it measures consolidation semantics;
+PostgreSQL tests separately prove outbox, version, lease, history and deletion rules.
+Use `--case <id>` only to rerun a concrete failed row and preserve that run beside
+the original evidence.

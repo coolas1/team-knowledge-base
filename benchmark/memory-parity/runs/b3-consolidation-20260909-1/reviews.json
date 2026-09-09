@@ -1,0 +1,24 @@
+{
+  "rubric": "Expected durable meaning must be present, forbidden meaning absent, and cited evidence sufficient. Deletion lifecycle is scored by deterministic PostgreSQL gates.",
+  "reviewer": "single manual review per user efficiency requirement",
+  "superseded_rows": [{"case_id":"parity-006","engine":"tkb","reason":"Initial strict-schema validation failure; replaced by the targeted retry artifact."}],
+  "semantic_cases": [
+    {"case_id":"parity-005","upstream":true,"tkb":true,"reason":"All three Atlas facts and source IDs are preserved."},
+    {"case_id":"parity-006","upstream":true,"tkb":true,"reason":"Targeted retry links Lin, option B, and lower maintenance cost across three facts."},
+    {"case_id":"parity-007","upstream":true,"tkb":true,"reason":"Test 5434 and production 5433 remain distinct."},
+    {"case_id":"parity-008","upstream":true,"tkb":true,"reason":"Tuesday, budget, and A201 are synthesized from three sources."},
+    {"case_id":"parity-009","upstream":true,"tkb":true,"reason":"Equivalent concise-answer preferences are represented once with three sources."},
+    {"case_id":"parity-010","upstream":true,"tkb":true,"reason":"Repeated Friday release facts produce one observation."},
+    {"case_id":"parity-011","upstream":true,"tkb":true,"reason":"Equivalent PostgreSQL preferences are represented as one preference."},
+    {"case_id":"parity-012","upstream":true,"tkb":true,"reason":"The positive and negative tea statements remain an explicit conflict."},
+    {"case_id":"parity-013","upstream":true,"tkb":true,"reason":"Chinese is current and the dated change is explicit; history persistence is a deterministic gate."},
+    {"case_id":"parity-014","upstream":true,"tkb":true,"reason":"The output distinguishes the old 100-wan budget from the current 80-wan budget."},
+    {"case_id":"parity-015","upstream":true,"tkb":true,"reason":"Thursday and Friday remain an unresolved attributed conflict."},
+    {"case_id":"parity-016","upstream":true,"tkb":true,"reason":"Option B is approved and option A is explicitly obsolete."}
+  ],
+  "lifecycle_cases": [
+    {"case_id":"parity-029","tkb":true,"gate":"Explicit source deletion tombstones derived observations, re-anchors surviving evidence, and blocks deleted source expansion."},
+    {"case_id":"parity-030","tkb":true,"gate":"Publish rechecks tombstones and fact versions after the model call, preventing resurrection."},
+    {"case_id":"parity-032","tkb":true,"gate":"Conversation-history deletion does not invoke source forget or remove retained memory."}
+  ]
+}

@@ -57,6 +57,28 @@ async def test_retain_builds_atomic_memories_observation_and_links() -> None:
     )
 
 
+async def test_background_consolidation_disables_legacy_same_retain_observation():
+    repository = FakeRepository()
+    providers = FakeProviders()
+    engine = RetainEngine(
+        repository, providers, HindsightOptions(consolidation_enabled=True)
+    )
+    result = await engine.retain(
+        RetainInput(
+            document_id="document-1",
+            title="week.md",
+            content="Alice ran a survey and produced a report.",
+            file_type="markdown",
+        )
+    )
+    assert result.observations == 0
+    assert result.stage_results["consolidate"] == "queued"
+    assert all(
+        memory.memory_type != "observation" for memory in repository.plan.memories
+    )
+    assert len(providers.json_calls) == 1
+
+
 async def test_retain_skips_empty_content_without_raising() -> None:
     # Image-only docs (OCR returns no text) legitimately have nothing to
     # remember: persist an empty plan so the document reaches the "indexed"

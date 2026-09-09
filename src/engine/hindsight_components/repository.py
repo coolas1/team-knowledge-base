@@ -18,7 +18,10 @@ from src.engine.components.store.scope import scope_predicate
 from src.engine.scope import MemoryScope
 
 from .models import (
+    ConsolidationFactEvent,
+    ConsolidationJob,
     ConversationMemorySource,
+    FactTombstone,
     HindsightGraphOutbox,
     HindsightDocumentState,
     MemoryEntity,
@@ -27,6 +30,8 @@ from .models import (
     MemoryUnit,
     MemoryUnitEntity,
     MentalModel as MentalModelRow,
+    ObservationEvidence,
+    ObservationRecord,
 )
 from .types import (
     DocumentMemoryState,
@@ -60,6 +65,7 @@ class PostgresMemoryRepository:
         keyword_candidate_limit: int = 300,
         scope: MemoryScope | None = None,
         retention_lease: tuple[str, str] | None = None,
+        consolidation_enabled: bool = False,
     ) -> None:
         if session_factory is None:
             from src.engine.components.store.postgres import async_session_factory
@@ -72,6 +78,7 @@ class PostgresMemoryRepository:
         self._keyword_candidate_limit = keyword_candidate_limit
         self.scope = scope or MemoryScope()
         self._retention_lease = retention_lease
+        self._consolidation_enabled = consolidation_enabled
 
     def with_scope(self, scope: MemoryScope) -> PostgresMemoryRepository:
         return PostgresMemoryRepository(
@@ -80,6 +87,7 @@ class PostgresMemoryRepository:
             keyword_candidate_limit=self._keyword_candidate_limit,
             scope=scope,
             retention_lease=self._retention_lease,
+            consolidation_enabled=self._consolidation_enabled,
         )
 
     def with_lease(self, document_id: str, lease_token: str):
@@ -89,6 +97,7 @@ class PostgresMemoryRepository:
             keyword_candidate_limit=self._keyword_candidate_limit,
             scope=self.scope,
             retention_lease=(document_id, lease_token),
+            consolidation_enabled=self._consolidation_enabled,
         )
 
     async def retention_input(self, document_id: str):
@@ -400,13 +409,18 @@ class PostgresMemoryRepository:
                     )
                     if visible is None:
                         raise ValueError("resolved entity is no longer visible")
-                old_ids = list(
+                old_rows = list(
                     await session.scalars(
-                        select(MemoryUnit.id).where(
-                            MemoryUnit.document_id == document_id, self._memory_scope()
+                        select(MemoryUnit).where(
+                            MemoryUnit.document_id == document_id,
+                            self._memory_scope(),
+                            ~select(ObservationRecord.memory_id)
+                            .where(ObservationRecord.memory_id == MemoryUnit.id)
+                            .exists(),
                         )
                     )
                 )
+                old_ids = [row.id for row in old_rows]
                 retained_ids = {uuid.UUID(memory.id) for memory in plan.memories} & set(
                     old_ids
                 )
@@ -417,11 +431,17 @@ class PostgresMemoryRepository:
                     exclude_document_id=document_id,
                 )
                 if removed_ids:
+                    await self._invalidate_observation_evidence(
+                        session, removed_ids, reason="source_replaced"
+                    )
                     await session.execute(
                         delete(MemoryUnit).where(
                             MemoryUnit.memory_type == "observation",
                             self._memory_scope(),
                             MemoryUnit.source_memory_ids.overlap(removed_ids),
+                            ~select(ObservationRecord.memory_id)
+                            .where(ObservationRecord.memory_id == MemoryUnit.id)
+                            .exists(),
                         )
                     )
                 await session.execute(
@@ -438,6 +458,26 @@ class PostgresMemoryRepository:
                     retained_ids=retained_ids,
                 )
                 await self._insert_links(session, plan)
+                await self._enqueue_consolidation_changes(
+                    session,
+                    document_id=document_id,
+                    document_revision=plan.revision,
+                    scope_tags=tuple(getattr(document, "tags", None) or ()),
+                    added=[
+                        memory
+                        for memory in plan.memories
+                        if uuid.UUID(memory.id) not in retained_ids
+                        and not memory.is_source_chunk
+                        and memory.memory_type in {"world", "experience"}
+                    ],
+                    removed=[
+                        row
+                        for row in old_rows
+                        if row.id in removed_ids
+                        and not row.is_source_chunk
+                        and row.memory_type in {"world", "experience"}
+                    ],
+                )
                 await session.execute(
                     delete(MemoryEntity).where(
                         MemoryEntity.bank_id == self.scope.bank_id,
@@ -614,16 +654,53 @@ class PostgresMemoryRepository:
                     exclude_document_id=uid,
                 )
                 if memory_ids:
+                    rows = list(
+                        await session.scalars(
+                            select(MemoryUnit).where(MemoryUnit.id.in_(memory_ids))
+                        )
+                    )
+                    await self._invalidate_observation_evidence(
+                        session, memory_ids, reason="source_deleted"
+                    )
                     await session.execute(
                         delete(MemoryUnit).where(
                             MemoryUnit.memory_type == "observation",
                             self._memory_scope(),
                             MemoryUnit.source_memory_ids.overlap(memory_ids),
+                            ~select(ObservationRecord.memory_id)
+                            .where(ObservationRecord.memory_id == MemoryUnit.id)
+                            .exists(),
                         )
+                    )
+                    await self._reanchor_observations(session, uid)
+                    revision = int(
+                        await session.scalar(
+                            select(HindsightDocumentState.revision).where(
+                                HindsightDocumentState.document_id == uid
+                            )
+                        )
+                        or 1
+                    )
+                    await self._enqueue_consolidation_changes(
+                        session,
+                        document_id=uid,
+                        document_revision=revision + 1,
+                        scope_tags=tuple(getattr(document, "tags", None) or ()),
+                        added=[],
+                        removed=[
+                            row
+                            for row in rows
+                            if not row.is_source_chunk
+                            and row.memory_type in {"world", "experience"}
+                        ],
                     )
                 await session.execute(
                     delete(MemoryUnit).where(
-                        MemoryUnit.document_id == uid, self._memory_scope()
+                        MemoryUnit.document_id == uid,
+                        self._memory_scope(),
+                        ~select(ObservationRecord.memory_id)
+                        .where(ObservationRecord.memory_id == MemoryUnit.id)
+                        .exists(),
                     )
                 )
                 for impacted_document_id in sorted(impacted_documents, key=str):
@@ -758,6 +835,7 @@ class PostgresMemoryRepository:
                 source_memory_ids=[uuid.UUID(item) for item in draft.source_memory_ids],
                 tags=list(draft.tags),
                 scope_tags=list(scope_tags),
+                memory_version=max(1, plan.revision),
                 metadata_json={
                     **draft.metadata,
                     "entity_mentions": list(draft.entities),
@@ -876,6 +954,183 @@ class PostgresMemoryRepository:
                     .on_conflict_do_nothing()
                 )
         await session.flush()
+
+    async def _enqueue_consolidation_changes(
+        self,
+        session: AsyncSession,
+        *,
+        document_id: uuid.UUID,
+        document_revision: int,
+        scope_tags: tuple[str, ...],
+        added: list,
+        removed: list[MemoryUnit],
+    ) -> None:
+        """Write fact events and one coalesced job in the caller's transaction."""
+        import json
+
+        if not self._consolidation_enabled:
+            return
+
+        jobs: dict[str, tuple[str, ...]] = {}
+        for row in removed:
+            session.add(
+                FactTombstone(
+                    bank_id=self.scope.bank_id,
+                    fact_id=row.id,
+                    fact_version=row.memory_version,
+                    document_id=document_id,
+                    document_revision=document_revision,
+                )
+            )
+        for configured_scope in self.scope.observation_scopes or ((),):
+            write_scope = tuple(sorted(set(configured_scope)))
+            if not set(write_scope).issubset(scope_tags):
+                continue
+            scope_key = json.dumps(
+                write_scope, ensure_ascii=False, separators=(",", ":")
+            )
+            jobs[scope_key] = write_scope
+            for draft in added:
+                session.add(
+                    ConsolidationFactEvent(
+                        bank_id=self.scope.bank_id,
+                        scope_key=scope_key,
+                        write_scope=list(write_scope),
+                        fact_id=uuid.UUID(draft.id),
+                        fact_version=max(1, document_revision),
+                        document_id=document_id,
+                        document_revision=document_revision,
+                        operation="upsert",
+                    )
+                )
+            for row in removed:
+                session.add(
+                    ConsolidationFactEvent(
+                        bank_id=self.scope.bank_id,
+                        scope_key=scope_key,
+                        write_scope=list(write_scope),
+                        fact_id=row.id,
+                        fact_version=row.memory_version,
+                        document_id=document_id,
+                        document_revision=document_revision,
+                        operation="delete",
+                    )
+                )
+        if not jobs or not (added or removed):
+            return
+        await session.flush()
+        for scope_key, write_scope in jobs.items():
+            pending_through = await session.scalar(
+                select(func.max(ConsolidationFactEvent.id)).where(
+                    ConsolidationFactEvent.bank_id == self.scope.bank_id,
+                    ConsolidationFactEvent.scope_key == scope_key,
+                )
+            )
+            if pending_through is None:
+                continue
+            await session.execute(
+                insert(ConsolidationJob)
+                .values(
+                    bank_id=self.scope.bank_id,
+                    scope_key=scope_key,
+                    write_scope=list(write_scope),
+                    status="pending",
+                    pending_through=pending_through,
+                    processed_through=0,
+                    available_at=func.now(),
+                )
+                .on_conflict_do_update(
+                    index_elements=[
+                        ConsolidationJob.bank_id,
+                        ConsolidationJob.scope_key,
+                    ],
+                    set_={
+                        "pending_through": func.greatest(
+                            ConsolidationJob.pending_through, pending_through
+                        ),
+                        "status": "pending",
+                        "attempts": 0,
+                        "iterations": 0,
+                        "tokens_used": 0,
+                        "cost_microusd": 0,
+                        "available_at": func.now(),
+                        "error_msg": None,
+                        "lease_token": None,
+                        "lease_expires_at": None,
+                        "updated_at": func.now(),
+                    },
+                )
+            )
+
+    async def _invalidate_observation_evidence(
+        self, session: AsyncSession, fact_ids: list[uuid.UUID], *, reason: str
+    ) -> None:
+        if not fact_ids:
+            return
+        observation_ids = list(
+            await session.scalars(
+                select(ObservationEvidence.observation_id)
+                .where(
+                    ObservationEvidence.bank_id == self.scope.bank_id,
+                    ObservationEvidence.fact_id.in_(fact_ids),
+                    ObservationEvidence.active.is_(True),
+                )
+                .distinct()
+            )
+        )
+        if not observation_ids:
+            return
+        await session.execute(
+            ObservationEvidence.__table__.update()
+            .where(
+                ObservationEvidence.bank_id == self.scope.bank_id,
+                ObservationEvidence.fact_id.in_(fact_ids),
+            )
+            .values(active=False)
+        )
+        await session.execute(
+            ObservationRecord.__table__.update()
+            .where(ObservationRecord.memory_id.in_(observation_ids))
+            .values(freshness="stale", stale_reason=reason, updated_at=func.now())
+        )
+        await session.execute(
+            MemoryUnit.__table__.update()
+            .where(MemoryUnit.id.in_(observation_ids))
+            .values(state="stale")
+        )
+
+    async def _reanchor_observations(
+        self, session: AsyncSession, deleted_document_id: uuid.UUID
+    ) -> None:
+        """Keep cross-source observations available for safe recomputation."""
+        candidates = list(
+            await session.scalars(
+                select(MemoryUnit.id).where(
+                    MemoryUnit.document_id == deleted_document_id,
+                    MemoryUnit.memory_type == "observation",
+                    MemoryUnit.id.in_(select(ObservationRecord.memory_id)),
+                )
+            )
+        )
+        for observation_id in candidates:
+            replacement = await session.scalar(
+                select(MemoryUnit.document_id)
+                .join(ObservationEvidence, ObservationEvidence.fact_id == MemoryUnit.id)
+                .where(
+                    ObservationEvidence.observation_id == observation_id,
+                    ObservationEvidence.active.is_(True),
+                    MemoryUnit.state == "active",
+                    MemoryUnit.document_id != deleted_document_id,
+                )
+                .order_by(MemoryUnit.id)
+                .limit(1)
+            )
+            if replacement is not None:
+                await session.execute(
+                    MemoryUnit.__table__.update()
+                    .where(MemoryUnit.id == observation_id)
+                    .values(document_id=replacement)
+                )
 
     async def _dependent_graph_documents(
         self,

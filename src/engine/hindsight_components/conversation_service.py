@@ -219,9 +219,9 @@ class ConversationMemoryService:
 
 
 def build_conversation_memory_service(
-    *, max_recall_results: int = 20
+    *, max_recall_results: int = 20, consolidation_enabled: bool = False
 ) -> ConversationMemoryService:
-    repository = PostgresMemoryRepository()
+    repository = PostgresMemoryRepository(consolidation_enabled=consolidation_enabled)
     return ConversationMemoryService(
         PostgresConversationMemoryQueue(),
         HindsightService(repository, ProjectHindsightProviders()),

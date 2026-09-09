@@ -22,6 +22,7 @@ _llm = None
 _query: KnowledgeQuery | None = None
 _graph_worker = None
 _conversation_worker = None
+_consolidation_worker = None
 _app_config: AppConfig | None = None
 
 
@@ -33,7 +34,14 @@ def app_config() -> AppConfig:
 
 
 async def startup() -> None:
-    global _kb, _plugin, _llm, _query, _graph_worker, _conversation_worker
+    global \
+        _kb, \
+        _plugin, \
+        _llm, \
+        _query, \
+        _graph_worker, \
+        _conversation_worker, \
+        _consolidation_worker
     cfg = app_config()
 
     from src.engine.components.store.postgres import init_db
@@ -82,6 +90,33 @@ async def startup() -> None:
         )
         await _graph_worker.start()
 
+    if (
+        cfg.engine.memory.enabled
+        and cfg.engine.memory.features.consolidation
+        and cfg.engine.memory.consolidation_worker
+    ):
+        from src.engine.hindsight_components.consolidation_runtime import (
+            build_consolidation_worker_runtime,
+        )
+
+        _consolidation_worker = build_consolidation_worker_runtime(
+            max_concurrent=cfg.engine.memory.consolidation_max_concurrent,
+            batch_size=cfg.engine.memory.consolidation_batch_size,
+            observation_limit=cfg.engine.memory.consolidation_observation_limit,
+            max_iterations=cfg.engine.memory.consolidation_max_iterations,
+            max_tokens=cfg.engine.memory.consolidation_max_tokens,
+            max_cost_usd=cfg.engine.memory.consolidation_max_cost_usd,
+            input_cost_usd_per_million=(
+                cfg.engine.memory.consolidation_input_cost_usd_per_million
+            ),
+            output_cost_usd_per_million=(
+                cfg.engine.memory.consolidation_output_cost_usd_per_million
+            ),
+            semantic_dedup_enabled=cfg.engine.memory.consolidation_semantic_dedup,
+            semantic_threshold=cfg.engine.memory.consolidation_semantic_threshold,
+        )
+        await _consolidation_worker.start()
+
     if cfg.engine.memory.enabled and settings.hindsight_conversation_memory_enabled:
         from src.engine.hindsight_components.conversation_service import (
             build_conversation_memory_service,
@@ -92,7 +127,8 @@ async def startup() -> None:
 
         set_conversation_memory_service(
             build_conversation_memory_service(
-                max_recall_results=settings.hindsight_conversation_recall_limit
+                max_recall_results=settings.hindsight_conversation_recall_limit,
+                consolidation_enabled=cfg.engine.memory.features.consolidation,
             )
         )
         _conversation_worker = build_conversation_worker_runtime(
@@ -105,6 +141,7 @@ async def startup() -> None:
                 settings.hindsight_conversation_worker_max_retry_seconds
             ),
             retention_context=(settings.hindsight_conversation_retention_context),
+            consolidation_enabled=cfg.engine.memory.features.consolidation,
         )
         await _conversation_worker.start()
     else:
@@ -112,15 +149,20 @@ async def startup() -> None:
 
 
 async def shutdown() -> None:
-    global _graph_worker, _conversation_worker, _query
+    global _graph_worker, _conversation_worker, _consolidation_worker, _query
     try:
         try:
             if _conversation_worker is not None:
                 await _conversation_worker.stop()
         finally:
             _conversation_worker = None
-            if _graph_worker is not None:
-                await _graph_worker.stop()
+            try:
+                if _consolidation_worker is not None:
+                    await _consolidation_worker.stop()
+            finally:
+                _consolidation_worker = None
+                if _graph_worker is not None:
+                    await _graph_worker.stop()
     finally:
         _graph_worker = None
         from src.agent.tkb.mcp.server import set_conversation_memory_service

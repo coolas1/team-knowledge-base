@@ -1,0 +1,21 @@
+{
+  "status": "accepted",
+  "scope": "B3 consolidation semantic stage plus PostgreSQL lifecycle gates",
+  "selection": {"base_run":"b3-consolidation-20260909-1","targeted_retry":"../b3-consolidation-20260909-retry-006","retry_policy":"Only the single initial TKB schema-validation failure was rerun."},
+  "semantic_scores": {
+    "cross_turn": {"tkb_passed":4,"tkb_total":4,"tkb_percent":100,"upstream_percent":100},
+    "duplicate": {"tkb_passed":4,"tkb_total":4,"tkb_percent":100,"upstream_percent":100},
+    "change": {"tkb_passed":4,"tkb_total":4,"tkb_percent":100,"upstream_percent":100},
+    "overall": {"tkb_passed":12,"tkb_total":12,"tkb_percent":100,"upstream_percent":100}
+  },
+  "lifecycle_gates": {"tkb_passed":3,"tkb_total":3,"tkb_percent":100},
+  "execution": {
+    "tkb": {"completed":15,"total":15,"tokens":38620,"p50_seconds":16.556,"p95_seconds":52.325,"mean_seconds":20.182},
+    "upstream": {"completed":15,"total":15,"tokens":57909,"p50_seconds":6.611,"p95_seconds":25.717,"mean_seconds":13.373}
+  },
+  "limitations": [
+    "This adapter measures consolidation semantics after fact extraction, not end-to-end recall.",
+    "Lifecycle cases use real PostgreSQL version, tombstone, lease, and source-removal tests rather than model-only output.",
+    "One targeted retry replaces parity-006's initial TKB schema-validation failure; no other row was rerun."
+  ]
+}

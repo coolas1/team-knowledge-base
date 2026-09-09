@@ -109,3 +109,20 @@ async def test_json_mode_explicitly_requests_json(monkeypatch):
     payload = FakeClient.request[1]
     assert payload["response_format"] == {"type": "json_object"}
     assert "json" in payload["messages"][0]["content"].lower()
+
+
+async def test_json_with_usage_returns_provider_telemetry(monkeypatch):
+    monkeypatch.setattr(settings.llm, "base_url", "https://llm.example/v1")
+    monkeypatch.setattr(settings.llm, "model", "remote-model")
+    monkeypatch.setattr(provider_module.httpx, "AsyncClient", FakeClient)
+    FakeClient.response = {
+        "choices": [{"message": {"content": '{"actions": []}'}}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+    }
+
+    payload, usage = await ProjectHindsightProviders(FakeEmbedder()).json_with_usage(
+        "Consolidate.", "Evidence"
+    )
+
+    assert payload == {"actions": []}
+    assert usage["total_tokens"] == 15

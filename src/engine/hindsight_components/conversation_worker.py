@@ -250,8 +250,9 @@ def build_conversation_worker_runtime(
     retry_delay_seconds: float = 1.0,
     max_retry_delay_seconds: float = 300.0,
     retention_context: str = "Completed team conversation turn",
+    consolidation_enabled: bool = False,
 ) -> ConversationWorkerRuntime:
-    repository = PostgresMemoryRepository()
+    repository = PostgresMemoryRepository(consolidation_enabled=consolidation_enabled)
     worker = ConversationRetentionWorker(
         PostgresConversationMemoryQueue(all_banks=True),
         HindsightService(repository, ProjectHindsightProviders()),

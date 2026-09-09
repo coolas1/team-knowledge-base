@@ -123,7 +123,7 @@ are generated or installed by this change.
 Ordinary history deletion archives only undelivered completed turns under the
 namespace's transcripts/.delivery; those records are removed after acknowledgement.
 Explicit forgetting cancels pending local records before calling the engine. B3
-will add the full engine tombstone protocol for in-flight deletion races. Existing
+adds the engine tombstone protocol for in-flight deletion races. Existing
 completed turns without intent are not automatically resent; historical replay
 requires the later explicit backfill workflow.
 
@@ -194,3 +194,33 @@ disable the new entry points/worker features while retaining a scope- and
 snapshot-compatible runtime and all durable intent, request and source records.
 Do not restore an older writer that unconditionally deletes all document memories
 or uses entity names as unique identities. Deployment remains pipeline-managed.
+
+## Continuous consolidation (B3; disabled by default)
+
+Enable `engine.memory.features.consolidation` only together with its B1/B2
+dependencies. This switches retain from same-call observation generation to an
+atomic fact outbox. `engine.memory.consolidation_worker` controls consumption;
+turning it off leaves facts durably queued and is the supported rollback. Do not
+run the old synchronous consolidation path for a scope whose worker is enabled.
+
+The worker coalesces jobs by bank and configured observation write scope. It reads
+versioned current facts and observations, validates every model action against that
+read set, then publishes create/update/delete actions under a scope lock and lease
+fence. Exact normalization always runs. Optional semantic merging requires both the
+configured similarity threshold and an explicit equivalence verdict; contradictions
+are stored as conflict changes rather than similarity-only merges.
+
+Each observation head has immutable history snapshots and versioned evidence edges.
+Source replacement or deletion writes a fact tombstone and marks dependent heads
+stale in the source transaction. A worker with an older watermark loses its lease;
+remaining sources are recomputed, and heads with no valid evidence are tombstoned.
+Recall continues to exclude non-active memory rows before graph cleanup completes.
+
+The batch size, observation capacity, iterations, token/cost ceiling, worker
+concurrency, and semantic threshold are bounded by `engine.memory.consolidation_*`.
+Token counts come from the provider response. A nonzero cost ceiling also requires
+the input or output USD-per-million-token price so the worker can enforce it.
+Capacity or budget exhaustion remains visible on the durable scope job. Migration
+backfills legacy observations as version 1, reconstructs their evidence edges, and
+queues old atomic facts at a resumable cursor. Rollback must retain observation,
+history, evidence, job, event and tombstone tables so forgotten data cannot return.

@@ -12,6 +12,7 @@ from src.engine.interface import DocumentIndexHook, KnowledgeBase
 @dataclass
 class MemorySettings:
     retain_max_concurrent: int = 1
+    consolidation_enabled: bool = False
 
 
 @dataclass
@@ -32,7 +33,10 @@ class EngineConfig:
 def engine_config_from_app(app: AppConfig) -> EngineConfig:
     """Map AppConfig (engine.memory flags) onto EngineConfig."""
     memory = (
-        MemorySettings(retain_max_concurrent=app.engine.memory.retain_max_concurrent)
+        MemorySettings(
+            retain_max_concurrent=app.engine.memory.retain_max_concurrent,
+            consolidation_enabled=app.engine.memory.features.consolidation,
+        )
         if app.engine.memory.enabled
         else None
     )

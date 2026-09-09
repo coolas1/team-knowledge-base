@@ -1,0 +1,44 @@
+{
+  "status": "complete",
+  "scope": "B3 consolidation semantic stage; lifecycle gates are separate",
+  "started_at": "2026-09-09T03:35:35.878518+00:00",
+  "tkb": {
+    "sha": "08ba561349ba8e8ad2fbae6bd354a25ac075f90d",
+    "tracked_patch_sha256": "e962fb600a69f503f56de7bc819a06fc5fcf5c83664bb252298bf4b44b1e1b35",
+    "untracked_source_sha256": {
+      "benchmark/memory-parity/run_consolidation.py": "2d5057cb9c37b3bfe01df50c16ed682d07fddf5aeca38da6981520a0f44f69a3",
+      "src/engine/hindsight_components/consolidation.py": "9f3bfcf7a05fbf2b8892373939a5b972c1224174fcdb2264fefceedb5a220901",
+      "src/engine/hindsight_components/consolidation_actions.py": "e4179fad498d05765ce69caffb6e82bf5e1c9a944d1e2be154bd2869aed72f0e",
+      "src/engine/hindsight_components/consolidation_runtime.py": "e60bf98c1b34661013288a570c935dc968b5f4af65fc9308ad2dc2f97732d2be",
+      "src/engine/hindsight_components/tests/test_consolidation.py": "455d6bf06d838c4c4a48f487e7c2cf3ced6a2e402aabf5de6373f469d4e1dfc6"
+    }
+  },
+  "upstream": {
+    "sha": "9676fc1699c199175809285ea0e1095ab71115d0",
+    "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "untracked_source_sha256": {}
+  },
+  "corpus_sha256": "511a6d059695f2221d1073414b980b7830d563f0c58bae4d5037bdc7edcc8bec",
+  "adapter_sha256": "2d5057cb9c37b3bfe01df50c16ed682d07fddf5aeca38da6981520a0f44f69a3",
+  "model": "deepseek-v4-flash-vision-exp",
+  "temperature": 0,
+  "repetitions": 1,
+  "cases": [
+    "parity-005",
+    "parity-006",
+    "parity-007",
+    "parity-008",
+    "parity-009",
+    "parity-010",
+    "parity-011",
+    "parity-012",
+    "parity-013",
+    "parity-014",
+    "parity-015",
+    "parity-016",
+    "parity-029",
+    "parity-030",
+    "parity-032"
+  ],
+  "finished_at": "2026-09-09T03:38:31.765200+00:00"
+}

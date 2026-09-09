@@ -177,7 +177,10 @@ class RetainEngine:
             retain_input, chunks, cached, chunk_sources=chunk_sources
         )
         facts = [fact for group in facts_by_chunk for fact in group]
-        observations, consolidation_status = await self._consolidate(facts)
+        if self._options.consolidation_enabled:
+            observations, consolidation_status = [], "queued" if facts else "empty"
+        else:
+            observations, consolidation_status = await self._consolidate(facts)
         status = (
             "degraded"
             if "degraded" in chunk_outcomes

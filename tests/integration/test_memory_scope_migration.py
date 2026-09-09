@@ -1975,6 +1975,310 @@ async def test_fresh_schema_migration_is_idempotent(scope_database):
     assert (await migrate_scope(engine, schema=schema)).complete
 
 
+async def test_consolidation_cross_retain_dedup_history_delete_and_fencing(
+    scope_database,
+):
+    import json
+
+    from sqlalchemy import func
+
+    from src.engine.hindsight_components.consolidation import (
+        ConsolidationOptions,
+        ConsolidationWorker,
+        PostgresConsolidationRepository,
+    )
+    from src.engine.hindsight_components.models import (
+        ConsolidationFactEvent,
+        ConsolidationJob,
+        FactTombstone,
+        ObservationEvidence,
+        ObservationHistory,
+        ObservationRecord,
+    )
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    bank = "consolidation-bank"
+    scope = MemoryScope(bank_id=bank, observation_scopes=((),))
+    repository = PostgresMemoryRepository(
+        sessions, scope=scope, consolidation_enabled=True
+    )
+    consolidation_repository = PostgresConsolidationRepository(sessions)
+    options = ConsolidationOptions(semantic_dedup_enabled=False)
+    documents = [uuid.uuid4() for _ in range(4)]
+    facts = [uuid.uuid4() for _ in range(4)]
+    vector = [0.25] * 768
+
+    class Providers:
+        async def json(self, _system, user, **_kwargs):
+            payload = json.loads(user.split("\nReturn", 1)[0])
+            sources = [item["id"] for item in payload["new_facts"]]
+            return {
+                "actions": [
+                    {
+                        "action": "create",
+                        "text": "The user consistently prefers concise answers.",
+                        "source_fact_ids": sources,
+                        "change": "synthesis",
+                        "reason": "repeated preference",
+                    }
+                ]
+                if sources
+                else []
+            }
+
+        async def embed(self, texts, **_kwargs):
+            return [vector for _ in texts]
+
+    worker = ConsolidationWorker(consolidation_repository, Providers(), options)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("INSERT INTO memory_banks(id,name) VALUES (:id,:id)"), {"id": bank}
+        )
+        for index, document_id in enumerate(documents):
+            await connection.execute(
+                insert(Document).values(
+                    id=document_id,
+                    bank_id=bank,
+                    title=f"turn-{index}",
+                    file_type="conversation",
+                    status="indexed",
+                    raw_text=f"concise preference {index}",
+                    tags=[],
+                )
+            )
+
+    def plan(index):
+        return RetainPlan(
+            document_id=str(documents[index]),
+            title=f"turn-{index}",
+            file_type="conversation",
+            source_type="conversation",
+            memories=[
+                MemoryDraft(
+                    id=str(facts[index]),
+                    document_id=str(documents[index]),
+                    chunk_index=0,
+                    memory_index=1,
+                    memory_type="world",
+                    text=f"User requests concise answers, evidence {index}.",
+                    source_text=f"concise preference {index}",
+                    context="conversation",
+                    embedding=vector,
+                )
+            ],
+            links=[],
+        )
+
+    # A failed CAS rolls its fact event and job back with the memory publication.
+    invalid = plan(0)
+    invalid.expected_revision = 99
+    with pytest.raises(Exception, match="revision conflict"):
+        await repository.replace_document(invalid)
+    async with sessions() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ConsolidationFactEvent)
+            )
+            == 0
+        )
+
+    # A new fact fences a worker that planned against the previous watermark.
+    await repository.replace_document(plan(0))
+    stale_claim = await consolidation_repository.claim(options)
+    assert stale_claim is not None
+    assert await consolidation_repository.claim(options) is None
+    stale_read = await consolidation_repository.read_set(stale_claim, options)
+    await repository.replace_document(plan(1))
+    with pytest.raises(RuntimeError, match="lease lost"):
+        await consolidation_repository.publish(
+            stale_claim,
+            stale_read,
+            (),
+            {},
+            tokens_used=0,
+            cost_microusd=0,
+            options=options,
+        )
+
+    # Recovered workers consume the coalesced watermark. A repeated create is
+    # converted into an update, so observation count stays one across turns.
+    assert (await worker.run_once()).status == "completed"
+    await repository.replace_document(plan(2))
+    restarted_worker = ConsolidationWorker(
+        PostgresConsolidationRepository(sessions), Providers(), options
+    )
+    assert (await restarted_worker.run_once()).status == "completed"
+
+    async with sessions() as session:
+        observation = await session.scalar(select(ObservationRecord))
+        observation_memory = await session.get(MemoryUnit, observation.memory_id)
+        assert observation.version == 2
+        assert observation.freshness == "active"
+        assert set(observation_memory.source_memory_ids) == set(facts[:3])
+        assert (
+            await session.scalar(select(func.count()).select_from(ObservationRecord))
+            == 1
+        )
+        assert (
+            await session.scalar(select(func.count()).select_from(ObservationHistory))
+            == 2
+        )
+
+    # Source removal is immediately stale and cannot expose the removed evidence;
+    # recomputation keeps remaining evidence and adds a new history version.
+    await repository.delete_document(str(documents[0]))
+    async with sessions() as session:
+        observation = await session.scalar(select(ObservationRecord))
+        assert observation.freshness == "stale"
+        removed = await session.scalar(
+            select(ObservationEvidence).where(
+                ObservationEvidence.observation_id == observation.memory_id,
+                ObservationEvidence.fact_id == facts[0],
+            )
+        )
+        assert removed.active is False
+        assert await session.scalar(select(FactTombstone.fact_id)) == facts[0]
+    assert (await restarted_worker.run_once()).status == "completed"
+    async with sessions() as session:
+        observation = await session.scalar(select(ObservationRecord))
+        observation_memory = await session.get(MemoryUnit, observation.memory_id)
+        assert observation.version == 3
+        assert observation.freshness == "active"
+        assert set(observation_memory.source_memory_ids) == set(facts[1:3])
+        job = await session.scalar(select(ConsolidationJob))
+        assert job.processed_through == job.pending_through
+
+    # Capacity exhaustion is durable and visible instead of silently dropping
+    # the queued scope or running an unbounded model loop.
+    await repository.replace_document(plan(3))
+
+    class DistinctProviders(Providers):
+        async def json(self, _system, user, **_kwargs):
+            payload = json.loads(user.split("\nReturn", 1)[0])
+            return {
+                "actions": [
+                    {
+                        "action": "create",
+                        "text": "A separate durable observation.",
+                        "source_fact_ids": [
+                            item["id"] for item in payload["new_facts"]
+                        ],
+                        "change": "synthesis",
+                        "reason": "distinct fact",
+                    }
+                ]
+            }
+
+    limited = ConsolidationWorker(
+        consolidation_repository,
+        DistinctProviders(),
+        ConsolidationOptions(observation_limit=1, semantic_dedup_enabled=False),
+    )
+    assert (await limited.run_once()).status == "budget_exhausted"
+    async with sessions() as session:
+        job = await session.scalar(select(ConsolidationJob))
+        assert job.status == "budget_exhausted"
+        assert job.error_msg == "observation capacity reached"
+
+
+async def test_consolidation_migration_backfills_legacy_observation_and_cursor(
+    scope_database,
+):
+    from sqlalchemy import func
+
+    from src.engine.components.store.retention_migration import migrate_retention
+    from src.engine.hindsight_components.models import (
+        ConsolidationFactEvent,
+        ConsolidationJob,
+        ObservationEvidence,
+        ObservationRecord,
+    )
+
+    engine, schema = scope_database
+    document_id = uuid.uuid4()
+    fact_ids = [uuid.uuid4(), uuid.uuid4()]
+    observation_id = uuid.uuid4()
+    async with engine.begin() as connection:
+        await connection.execute(
+            insert(Document).values(
+                id=document_id,
+                title="legacy",
+                file_type="markdown",
+                status="indexed",
+                raw_text="legacy",
+            )
+        )
+        for index, fact_id in enumerate(fact_ids):
+            await connection.execute(
+                insert(MemoryUnit).values(
+                    id=fact_id,
+                    document_id=document_id,
+                    chunk_index=0,
+                    memory_index=index + 1,
+                    memory_type="world",
+                    text=f"legacy fact {index}",
+                    source_text="legacy",
+                    is_source_chunk=False,
+                )
+            )
+        await connection.execute(
+            insert(MemoryUnit).values(
+                id=observation_id,
+                document_id=document_id,
+                chunk_index=-1,
+                memory_index=1,
+                memory_type="observation",
+                text="  legacy   synthesis  ",
+                source_text="legacy",
+                source_memory_ids=fact_ids,
+            )
+        )
+        for table in (
+            "consolidation_jobs",
+            "consolidation_fact_events",
+            "memory_fact_tombstones",
+            "observation_evidence",
+            "observation_history",
+            "observation_records",
+        ):
+            await connection.execute(text(f'DROP TABLE "{schema}"."{table}" CASCADE'))
+        await connection.execute(
+            text("ALTER TABLE memory_units DROP COLUMN memory_version")
+        )
+
+    await migrate_retention(engine, schema=schema)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        record = await session.get(ObservationRecord, observation_id)
+        assert record.version == 1
+        assert record.normalized_text == "legacy synthesis"
+        assert set(
+            await session.scalars(
+                select(ObservationEvidence.fact_id).where(
+                    ObservationEvidence.observation_id == observation_id
+                )
+            )
+        ) == set(fact_ids)
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ConsolidationFactEvent)
+            )
+            == 2
+        )
+        job = await session.scalar(select(ConsolidationJob))
+        assert job.processed_through == 0
+        assert job.pending_through > 0
+    await migrate_retention(engine, schema=schema)
+    async with sessions() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ConsolidationFactEvent)
+            )
+            == 2
+        )
+
+
 async def test_scoped_repository_read_write_and_delete(scope_database):
     engine, schema = scope_database
     await migrate_scope(engine, schema=schema)
