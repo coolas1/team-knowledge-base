@@ -173,7 +173,53 @@ async def test_conversation_memory_operations_map_provider_failures(
     with pytest.raises(RuntimeError, match=message) as error:
         await operation()
 
-    assert "secret" not in str(error.value)
+    # 失败信息包含底层原因（design D9）：调用方需要区分"服务不可用"与
+    # "这次调用为什么失败"。原断言要求不透出 provider 文案，已被本
+    # 变更的 D9 决定取代。
+    assert "RuntimeError" in str(error.value)
+    assert "secret" in str(error.value)
+
+
+async def test_generate_document_does_not_block_the_event_loop(tmp_path, monkeypatch):
+    import asyncio
+    import time
+
+    monkeypatch.setenv("ARTIFACTS_DIR", str(tmp_path))
+    from src.agent import artifacts as artifacts_mod
+
+    def slow_sync_artifact(*, format, title, content, file_name=None):
+        time.sleep(0.4)  # 同步阻塞：若未走线程池会卡住整个事件循环
+        return mcp_mod_artifact(format, title)
+
+    def mcp_mod_artifact(format, title):
+        from src.agent.artifacts import Artifact
+
+        return Artifact(
+            id="a1",
+            format=format,
+            title=title,
+            filename="t.docx",
+            size=1,
+            download_url="/api/artifacts/a1",
+        )
+
+    monkeypatch.setattr(artifacts_mod, "generate_artifact", slow_sync_artifact)
+
+    ticks = 0
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        for _ in range(4):
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    _, result = await asyncio.gather(
+        heartbeat(),
+        mcp_mod.generate_document("docx", "会议纪要", "# 决议"),
+    )
+
+    assert ticks == 4  # 并发协程在生成期间持续推进，事件循环未被阻塞
+    assert result["download_url"] == "/api/artifacts/a1"
 
 
 def test_private_memory_operations_are_registered_without_removing_existing_tools():

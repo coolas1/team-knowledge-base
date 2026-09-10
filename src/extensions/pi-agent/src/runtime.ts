@@ -158,6 +158,7 @@ export interface RuntimeHealth {
     completed: number;
     failed: number;
     cancelled: number;
+    unavailable?: boolean;
   };
 }
 
@@ -362,14 +363,20 @@ export class PiAgentRuntime implements AgentRuntimeApi {
         this.conversationMemoryStatus = await this.mcpClient.getConversationMemoryStatus({
           timeoutMs: this.adapterConfig.defaultToolTimeoutMs,
         });
-      } catch {
+      } catch (error) {
+        // 状态查询失败 ≠ 队列里有失败任务：如实报告 unavailable，
+        // 不伪造 failed: 1（design D9）。
+        console.warn(
+          `conversation_memory_status_unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
         this.conversationMemoryStatus = {
           enabled: true,
           pending: 0,
           processing: 0,
           completed: 0,
-          failed: 1,
+          failed: 0,
           cancelled: 0,
+          unavailable: true,
         };
       }
     } else {
@@ -691,8 +698,12 @@ export class PiAgentRuntime implements AgentRuntimeApi {
         },
         { timeoutMs: this.adapterConfig.defaultToolTimeoutMs },
       );
-    } catch {
-      // Retention is failure-isolated from the completed answer.
+    } catch (error) {
+      // Retention is failure-isolated from the completed answer, but a
+      // swallowed failure must still be diagnosable.
+      console.warn(
+        `conversation_memory_retention_failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

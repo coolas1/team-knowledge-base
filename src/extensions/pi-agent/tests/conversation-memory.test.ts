@@ -143,3 +143,56 @@ describe("conversation memory prompt integration", () => {
     expect(block.length).toBeLessThanOrEqual(320);
   });
 });
+
+describe("conversation memory diagnostics", () => {
+  it("logs a swallowed recall failure instead of failing silently", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const enabled = loadTkbAdapterConfig({ TKB_CONVERSATION_MEMORY_ENABLED: "true" });
+      await recallMemoryForPrompt(
+        client({
+          recallConversationMemory: vi.fn(async () => {
+            throw new Error("recall endpoint offline");
+          }),
+        }),
+        "question",
+        enabled,
+      );
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("conversation_memory_recall_failed"),
+      );
+      expect(warn.mock.calls[0][0]).toContain("recall endpoint offline");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("never emits an unclosed memory tag when the budget is too small", () => {
+    for (const budget of [0, 1, 5, 50, 120]) {
+      const block = formatConversationMemoryBlock(
+        {
+          memories: [
+            {
+              memory_id: "m1",
+              text: "A remembered fact that is quite long indeed",
+              memory_type: "world",
+              document_id: "d1",
+              session_id: "s1",
+              turn_id: "t1",
+              score: 1,
+              metadata: {},
+            },
+          ],
+          trace: {},
+        },
+        budget,
+      );
+
+      const opening = block.indexOf("<untrusted_conversation_memory>");
+      const closing = block.indexOf("</untrusted_conversation_memory>");
+      expect(opening === -1).toBe(closing === -1); // 要么都出现，要么都不出现
+      expect(block.length).toBeLessThanOrEqual(budget);
+    }
+  });
+});

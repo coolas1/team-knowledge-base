@@ -35,6 +35,8 @@ export interface ConversationMemoryStatus {
   completed: number;
   failed: number;
   cancelled: number;
+  /** 状态查询本身失败：与"队列里有失败任务"（failed>0）是两回事。 */
+  unavailable?: boolean;
 }
 
 export interface McpClientLike {

@@ -35,8 +35,11 @@ export function formatConversationMemoryBlock(
   // Preserve both delimiters when a single memory line is too large.
   const prefix = [...fixed, ""].join("\n");
   const available = budgetChars - prefix.length - closing.length - 1;
-  if (available <= 0) return opening.slice(0, budgetChars);
-  return `${prefix}${lines[0].slice(0, available)}\n${closing}`.slice(0, budgetChars);
+  // 预算放不下 opening + 一行 + closing 时宁可不注入：绝不能留下未闭合的
+  // <untrusted_conversation_memory> 标签。
+  if (available <= 0) return "";
+  const truncated = `${prefix}${lines[0].slice(0, available)}\n${closing}`;
+  return truncated.length <= budgetChars ? truncated : "";
 }
 
 export async function recallMemoryForPrompt(
@@ -57,7 +60,11 @@ export async function recallMemoryForPrompt(
       result,
       config.conversationMemoryContextBudgetChars,
     );
-  } catch {
+  } catch (error) {
+    // Fail open, but never silently: recall 故障与"没有相关记忆"必须可区分。
+    console.warn(
+      `conversation_memory_recall_failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return "";
   }
 }

@@ -6,6 +6,7 @@ tools are registered."""
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
@@ -101,7 +102,11 @@ def _get_conversation_memory_service() -> ConversationMemory:
 
 
 def _conversation_operation_failed(operation: str, error: Exception) -> RuntimeError:
-    return RuntimeError(f"Conversation memory {operation} failed")
+    # 类型在前地带出底层错误：调用方需要区分"服务不可用"与"这次调用
+    # 为什么失败"，无消息异常也能标识原因（design D9）。
+    message = str(error)
+    detail = f"{type(error).__name__}: {message}" if message else type(error).__name__
+    return RuntimeError(f"Conversation memory {operation} failed: {detail}")
 
 
 async def recall_conversation_memory(
@@ -461,16 +466,18 @@ async def generate_document(
     content 使用 Markdown。生成 PPT 时以独占一行的 ``---`` 分隔幻灯片，
     每页首个 Markdown 标题作为页标题；同时返回 PPTX 和 Slidev 源文件链接。
     """
+    # generate_artifact 是同步的（reportlab/python-pptx，最多 250k 字符）；
+    # 单进程部署下直接在事件循环里跑会阻塞所有请求，放到线程池执行。
     from src.agent.artifacts import generate_artifact
 
-    return asdict(
-        generate_artifact(
-            format=format,
-            title=title,
-            content=content,
-            file_name=file_name,
-        )
+    artifact = await asyncio.to_thread(
+        generate_artifact,
+        format=format,
+        title=title,
+        content=content,
+        file_name=file_name,
     )
+    return asdict(artifact)
 
 
 # Register tools (FastMCP introspects signatures). The three memory tools are
