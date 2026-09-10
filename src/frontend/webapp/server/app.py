@@ -83,9 +83,15 @@ if _assets.is_dir():
 async def spa_fallback(full_path: str):
     """Serve the SPA shell for any non-API GET (client-side routing).
 
-    API misses and /health stay 404 so they are not masked by index.html.
+    API misses, /health, and /mcp stay 404 so they are not masked by
+    index.html (the MCP endpoint must answer JSON, never the SPA shell).
     """
-    if full_path == "health" or full_path.startswith("api/"):
+    if (
+        full_path == "health"
+        or full_path == "mcp"
+        or full_path.startswith("api/")
+        or full_path.startswith("mcp/")
+    ):
         raise HTTPException(status_code=404, detail="Not Found")
     index = SPA_DIST / "index.html"
     if index.is_file():

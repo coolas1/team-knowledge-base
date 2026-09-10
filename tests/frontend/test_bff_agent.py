@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from src.frontend.webapp.server import app as app_mod, deps
 from src.frontend.webapp.server import routes_agent
 from src.agent.loader import PluginLoader
+from src.engine.interface import NOT_FOUND_ANSWER, RecallChunk, RecallResult
 from tests.conftest import FakeKnowledgeBase
 
 
@@ -32,11 +33,36 @@ def client(monkeypatch):
     app_mod.app.dependency_overrides.clear()
 
 
-def test_agent_ask(client):
+def test_agent_ask_answers_from_llm_when_recall_clears_the_gate(client):
+    # Acme fixture above the 0.45 semantic floor: the found-chunks → LLM
+    # answer path must be exercised at the BFF level.
+    kb = FakeKnowledgeBase()
+    kb.recall_result = RecallResult(
+        chunks=[
+            RecallChunk(
+                doc_id="doc-acme",
+                title="acme.md",
+                chunk_text="Acme is in Building A.",
+                reranker_score=0.9,
+                vector_score=0.9,
+            )
+        ]
+    )
+    app_mod.app.dependency_overrides[deps.get_kb] = lambda: kb
+
+    res = client.post("/api/agent/ask", json={"query": "where is Acme?"})
+
+    assert res.status_code == 200
+    out = res.json()
+    assert out["answer"] == "ANSWER FROM LLM"
+    assert out["query"] == "where is Acme?"
+
+
+def test_agent_ask_returns_not_found_when_recall_finds_nothing(client):
     res = client.post("/api/agent/ask", json={"query": "where is Acme?"})
     assert res.status_code == 200
     out = res.json()
-    assert out["answer"] == "知识库中未找到与该问题相关的内容。"
+    assert out["answer"] == NOT_FOUND_ANSWER
     assert out["query"] == "where is Acme?"
 
 

@@ -90,7 +90,8 @@ async def startup() -> None:
 
         set_conversation_memory_service(
             build_conversation_memory_service(
-                max_recall_results=settings.hindsight_conversation_recall_limit
+                max_recall_results=settings.hindsight_conversation_recall_limit,
+                max_turn_chars=settings.hindsight_conversation_max_turn_chars,
             )
         )
         _conversation_worker = build_conversation_worker_runtime(

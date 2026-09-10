@@ -1,9 +1,16 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import MDEditor from '@uiw/react-md-editor'
 import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react'
 import { ApiError, api, type Document, type DocumentVersion, type PipelineProgress } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
+import {
+  clearedForRetry,
+  detailView,
+  latestFailureMessage,
+  loadFailureMessage,
+  shouldPoll,
+} from './document-detail'
 
 const STAGE_LABELS: Record<string, string> = {
   extracting: '提取文本',
@@ -72,12 +79,14 @@ export function DocumentDetailPage() {
   const [now, setNow] = useState(Date.now())
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState('')
+  const [loadError, setLoadError] = useState('')
 
   const loadDoc = async () => {
     if (!id) return
     try {
       const d = await api.getDocument(id)
       setDoc(d)
+      setLoadError('')
       // 版本链（有多个版本时才有意义，失败静默）
       try {
         const v = await api.listVersions(id)
@@ -85,14 +94,12 @@ export function DocumentDetailPage() {
       } catch {
         setVersions([])
       }
-      // 如果正在处理中，持续轮询
-      if (d.status === 'pending' || d.status === 'processing') {
-        setPolling(true)
-      } else {
-        setPolling(false)
-      }
+      // 只有处理中的文档才持续轮询：failed/indexed 都是终态
+      setPolling(shouldPoll(d.status))
     } catch (err: any) {
-      alert('加载失败: ' + err.message)
+      // 加载失败进入错误态，不留下永久"加载中..."轮询
+      setLoadError(loadFailureMessage(err))
+      setPolling(false)
     }
   }
 
@@ -145,6 +152,9 @@ export function DocumentDetailPage() {
     if (!id || retrying) return
     setRetrying(true)
     setRetryError('')
+    // 重试立即清掉已展示的旧失败信息并回到处理中，避免与存储的
+    // error_msg 叠加成两条错误。
+    setDoc((current) => (current ? clearedForRetry(current) : current))
     try {
       await api.retryDocument(id)
       await loadDoc()
@@ -157,7 +167,30 @@ export function DocumentDetailPage() {
     }
   }
 
-  if (!doc) return <div style={{ padding: 24 }}>加载中...</div>
+  const view = detailView(doc, loadError)
+  if (view === 'error') {
+    return (
+      <main style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+        <section
+          role="alert"
+          style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 10, padding: 16, background: '#fff7f7', border: '1px solid #fecaca', borderRadius: 6, color: '#7f1d1d' }}
+        >
+          <AlertCircle size={20} aria-hidden="true" style={{ flex: '0 0 auto', marginTop: 1, color: '#dc2626' }} />
+          <div style={{ minWidth: 180, flex: '1 1 240px' }}>
+            <div style={{ fontWeight: 650, fontSize: 14, marginBottom: 4 }}>无法打开文档</div>
+            <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{loadError}</div>
+          </div>
+          <Link
+            to="/"
+            style={{ display: 'inline-flex', minHeight: 32, flex: '0 0 auto', alignItems: 'center', padding: '5px 12px', borderRadius: 5, border: '1px solid #f1a8a8', color: '#8f1d1d', background: '#fff', fontSize: 12, fontWeight: 650, textDecoration: 'none' }}
+          >
+            返回文档列表
+          </Link>
+        </section>
+      </main>
+    )
+  }
+  if (view === 'loading' || !doc) return <div style={{ padding: 24 }}>加载中...</div>
 
   const isMarkdown = doc.file_type === 'markdown'
   const showProgress = doc.pipeline && (doc.status === 'pending' || doc.status === 'processing')
@@ -197,12 +230,11 @@ export function DocumentDetailPage() {
           <div style={{ minWidth: 180, flex: '1 1 240px' }}>
             <div style={{ fontWeight: 650, fontSize: 14, marginBottom: 3 }}>文件处理失败</div>
             <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>
-              {doc.error_msg || '处理任务未完成，服务未返回具体原因。'}
+              {latestFailureMessage(retryError, doc.error_msg)}
             </div>
             <div style={{ marginTop: 5, color: '#9f3a3a', fontSize: 12 }}>
               请确认文件可正常打开，并检查数据库、模型及 OCR 服务；修复后可直接重新处理。
             </div>
-            {retryError && <div style={{ marginTop: 6, fontSize: 12 }}>{retryError}</div>}
           </div>
           <button
             type="button"
