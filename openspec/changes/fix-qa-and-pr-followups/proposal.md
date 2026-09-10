@@ -3,11 +3,13 @@
 ## Why
 
 Two independent reviews left a backlog of confirmed, unfixed defects on current
-`main`: the 2026-09-09 web QA pass (`docs/qa-report-2026-09-09-webapp.md`) found
+`main`: the 2026-09-09 web QA pass (report since retired to git history —
+`git show 6d899180:docs/qa-report-2026-09-09-webapp.md`) found
 a 500 + eternal spinner on malformed doc IDs, transient bulk-ingest failures
 with empty `error_msg`, conversation transcripts leaking into public search
 results, and a string of smaller API/SPA defects; and the upstream PR review
-follow-ups (`docs/upstream-pr-followups.md`, PR #3/#4) list gate logic that
+follow-ups (the PR #3/#4 ledger, since retired to git history —
+`git show 6d899180:docs/upstream-pr-followups.md`) list gate logic that
 contradicts its own documentation, unbounded transcript retention,
 fire-and-forget tasks that can die silently, and an event-loop-blocking MCP
 tool. None of these are fixed yet, and the QA data-remediation (bulk resubmit

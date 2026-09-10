@@ -23,8 +23,19 @@
 - [x] 3.3 Exclude `mcp` from the SPA fallback in `app.py` (design D11); verify with a BFF test that `GET /mcp` returns a JSON 404, not the SPA shell
 - [x] 3.4 Extend the Neo4j `get_related_docs` projection with the edge `relation_type` and render it in the SPA (omitting the parenthetical when absent); verify with a contract test on the response shape and a client test that no empty `()` is rendered
 - [x] 3.5 Wire `hops` from `/api/graph/neighbors` through `get_neighbors` (`backend.py:754`) into `neo4j.query_neighbors` and return the links among the result set (design D10); verify with a test asserting the `hops=1` neighborhood and non-empty `links`, and that out-of-range `hops` stays a validation error
-- [x] 3.6 Filter conversation-derived content from public read paths (design D5): chunk query + related docs in `_search.py` (alongside PR #6's existing `is_current` filter), public-source filter for graph nodes and `related_entities`; verify with tests that a retained conversation turn's chunks/entities do not surface in public search or the graph while the memory-recall path still returns them
+- [~] 3.6 Filter conversation-derived content from public read paths (design D5): chunk query + related docs in `_search.py` (alongside PR #6's existing `is_current` filter), public-source filter for graph nodes and `related_entities`; verify with tests that a retained conversation turn's chunks/entities do not surface in public search or the graph while the memory-recall path still returns them
 - [x] 3.7 Deduplicate entity relation listings to one entry per (type, direction, endpoint); verify with a test that parallel edges collapse to a single entry
+
+> **Live-check correction (2026-09-10, post-deploy of `6d89918`):**
+> 3.1–3.3, 3.5, 3.7 verified against the LAN deployment. **3.4 and 3.6 are
+> only half-effective:** with `engine.memory.enabled: true`, `/api/search`
+> goes through `HindsightRecallAdapter` and never calls the `_search.py`
+> path these two fixes touch — so conversation chunks still appear in search
+> results and `related_docs[].relation_type` is always empty (the SPA no
+> longer renders `()`, which is why the display bug is gone). The graph half
+> of D5 *is* verified live: conversation-junk entities (`assistant`,
+> `aa6a3b7b`) no longer resolve. Follow-up: filter in the adapter
+> (`src/engine/hindsight_components/compat.py`) — see `docs/todos.md`.
 
 ## 4. SPA fixes (webapp)
 

@@ -5,8 +5,11 @@ Snapshot from the 2026-09-03 live run: native backend on `main` @ `4218e140`
 Ollama `nomic-embed-text` @10.201.186.15, LLM `deepseek-v4-flash`,
 reranker disabled (`none` — see R1). Corpus: `benchmark/raw/` (48 files);
 QA eval results in `bench/qa/RESULTS.md` (15/40, mean 0.93).
-The unchecked items in `docs/upstream-pr-followups.md` are all still open;
-this file adds what the live run verified and what it newly surfaced.
+The unchecked items in the upstream PR follow-up ledger (retired to git
+history 2026-09-10 — `git show 6d899180:docs/upstream-pr-followups.md`) were
+all open at the time of this snapshot; this file adds what the live run
+verified and what it newly surfaced. Superseded items and the current
+outstanding list live in `docs/todos.md`.
 
 ## Verified working (live evidence, not just unit tests)
 
