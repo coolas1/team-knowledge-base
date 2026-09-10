@@ -67,6 +67,10 @@ services:
     build:
       context: .
       dockerfile: Containerfile
+      # Opt-in regional PyPI mirror (empty = upstream pypi.org). The LAN
+      # pipeline sets PYPI_MIRROR; a plain `compose build` uses upstream.
+      args:
+        PYPI_MIRROR: ${PYPI_MIRROR:-}
     image: team-kb-webapp:latest
     container_name: team-kb-webapp
     depends_on:

@@ -50,18 +50,24 @@ WORKDIR /app
 # Python deps (the optional reranker extra, and therefore torch, is omitted).
 # Copying only the lock inputs keeps this layer cached across code edits.
 COPY pyproject.toml uv.lock ./
-# Use a reachable PyPI mirror in this deployment environment. The frozen lock
-# file still fixes the exact dependency graph and artifact hashes. The lock
-# records absolute PyPI artifact URLs, so remap those hosts inside the image.
-RUN sed -i \
-    -e 's#https://pypi.org/simple#https://mirrors.aliyun.com/pypi/simple#g' \
-    -e 's#https://files.pythonhosted.org/packages#https://mirrors.aliyun.com/pypi/packages#g' \
-    uv.lock
+# Package index: upstream PyPI by default. A regional mirror is opt-in via
+# --build-arg PYPI_MIRROR=<simple-index-url> (the CICD build passes Aliyun for
+# the LAN deployment), so a default build never depends on a mirror host. The
+# frozen lock fixes the dependency graph and artifact hashes either way; the
+# lock records absolute PyPI artifact URLs, so a mirror also needs those hosts
+# remapped inside the image.
+ARG PYPI_MIRROR=""
+RUN if [ -n "$PYPI_MIRROR" ]; then \
+      sed -i \
+        -e "s#https://pypi.org/simple#${PYPI_MIRROR}#g" \
+        -e "s#https://files.pythonhosted.org/packages#${PYPI_MIRROR%/simple}/packages#g" \
+        uv.lock; \
+    fi
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple \
     UV_CONCURRENT_DOWNLOADS=1 \
     UV_HTTP_TIMEOUT=600 \
-    uv sync --frozen --no-dev --no-install-project
+    sh -c 'uv sync --frozen --no-dev --no-install-project \
+      ${PYPI_MIRROR:+--default-index "$PYPI_MIRROR"}'
 
 # SPA: client source only, so a Python edit never invalidates this layer.
 # node_modules is installed and removed in the SAME layer, so it is not in

@@ -127,6 +127,51 @@ not rewrite `last-deployed`: while `origin/main` stays put, the timer no-ops
 and the rollback sticks; the next merge deploys forward again. To pin a
 rollback longer, `systemctl --user stop team-kb-cicd.timer`.
 
+## Backups
+
+Every real deploy runs `cicd/backup.sh` **before** `podman compose up` replaces
+the stack (`--dry-run` skips it, so a dry run never touches deployment data).
+Each backup writes a dated set to `<stable-dir>/backups/<sha>-<timestamp>/`:
+
+- `postgres.sql.gz` — `pg_dump --clean --if-exists` of the app database
+  (documents, chunks, vectors, memory rows);
+- `uploads.tar.gz` — snapshot of the `team-kb_uploadsdata` volume (original
+  uploaded files);
+- `deploy.env.snapshot`, `commit` — the config and SHA the backup precedes.
+
+The most recent `TKB_BACKUP_KEEP` sets (default 5) are kept; older ones are
+removed. Tune `TKB_BACKUP_KEEP` in `deploy.env`. The script header carries the
+single-operator rule: it touches the deployment's containers/volumes, so run
+it only via the pipeline (or a deliberate restore drill), never by hand in the
+dev checkout.
+
+### Restore from a backup
+
+Restore into the **LAN stack**, with the pipeline's timer stopped so it does
+not redeploy mid-restore (`systemctl --user stop team-kb-cicd.timer`). Use the
+`.deploy/deploy.env` environment for compose.
+
+```bash
+cd <stable-dir>/repo            # the clone the pipeline manages
+backup=<stable-dir>/backups/<sha>-<ts>
+
+# 1. Postgres: replace current data with the dump.
+zcat "$backup/postgres.sql.gz" \
+  | podman exec -i team-kb-postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+
+# 2. Uploads volume: recreate it from the snapshot, then restart the webapp.
+podman volume rm team-kb_uploadsdata          # only after the dump is restored
+podman volume create team-kb_uploadsdata
+zcat "$backup/uploads.tar.gz" | podman volume import team-kb_uploadsdata -
+
+podman compose --env-file .deploy/deploy.env up -d --remove-orphans
+systemctl --user start team-kb-cicd.timer     # resume the pipeline
+```
+
+Verify by searching for a document indexed before the backup and downloading
+its original file from the doc detail page; the uploads snapshot and the dump
+come from the same pre-deploy instant, so they agree.
+
 ## Ownership rule
 
 **The pipeline is the sole operator of the `team-kb` compose project.** Never

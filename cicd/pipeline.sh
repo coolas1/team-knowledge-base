@@ -37,6 +37,11 @@ TKB_CICD_VENV="${TKB_CICD_VENV:-/var/tmp/tkb-venvs/cicd}"
 TKB_NODE22_BIN="${TKB_NODE22_BIN:-/var/tmp/node22/bin}"
 # SPA tests need Node 22 (system Node is 18 and fails 3 upload tests).
 TKB_HEALTH_TIMEOUT="${TKB_HEALTH_TIMEOUT:-180}"
+# Regional PyPI mirror for LAN builds (Containerfile's PYPI_MIRROR build arg;
+# empty = upstream PyPI). Overridable from deploy.env / the environment.
+PYPI_MIRROR="${PYPI_MIRROR:-https://mirrors.aliyun.com/pypi/simple}"
+# Backups: how many dated backup sets to keep in <stable-dir>/backups/.
+TKB_BACKUP_KEEP="${TKB_BACKUP_KEEP:-5}"
 
 repo_dir="$TKB_CICD_HOME/repo"
 deploy_env="$TKB_CICD_HOME/deploy.env"
@@ -165,8 +170,11 @@ stage_gate() {
 stage_build() {
   cd "$repo_dir"
   [[ -f "$deploy_env" ]] || die "deploy.env missing at $deploy_env"
-  log "build: podman compose build"
-  podman compose --env-file "$deploy_env" build || die "compose build failed"
+  # The LAN deployment builds from a regional PyPI mirror (opt-in build arg);
+  # an unset PYPI_MIRROR means upstream PyPI.
+  log "build: podman compose build (PYPI_MIRROR=${PYPI_MIRROR:-<upstream PyPI>})"
+  PYPI_MIRROR="${PYPI_MIRROR:-}" \
+    podman compose --env-file "$deploy_env" build || die "compose build failed"
 
   SHORT_SHA="$(git -C "$repo_dir" rev-parse --short=7 "$HEAD_SHA")"
   local image
@@ -177,6 +185,15 @@ stage_build() {
       log "build: tagged $image:$SHORT_SHA"
     fi
   done
+}
+
+stage_backup() {
+  # Before the redeploy replaces the running stack: dump Postgres and snapshot
+  # the uploads volume into <stable-dir>/backups/ (keep-last-N).
+  cd "$repo_dir"
+  TKB_CICD_HOME="$TKB_CICD_HOME" TKB_BACKUP_KEEP="$TKB_BACKUP_KEEP" \
+    bash "$repo_dir/cicd/backup.sh" "$SHORT_SHA" \
+    || die "pre-deploy backup failed"
 }
 
 stage_deploy() {
@@ -226,6 +243,9 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
+# Backup before replacing the running stack (a --dry-run must not touch the
+# deployment's data, so this runs only on a real deploy).
+stage_backup
 stage_deploy
 stage_verify
 stage_record
