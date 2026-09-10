@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.engine.interface import NOT_FOUND_ANSWER
+
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.reflect import ReflectEngine
 from src.engine.hindsight_components.types import RecallResult
@@ -85,6 +87,6 @@ async def test_reflect_returns_not_found_when_no_evidence() -> None:
 
     result = await engine.reflect("unknown topic")
 
-    assert result.text == "知识库中未找到与该问题相关的内容。"
+    assert result.text == NOT_FOUND_ANSWER
     assert result.based_on == {}
     assert len(result.tool_trace) == 2

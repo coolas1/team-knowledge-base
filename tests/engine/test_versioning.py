@@ -508,13 +508,17 @@ async def test_get_full_graph_filters_stale_entities():
     assert link_query.count("is_current, true) <> false") == 3
 
 
-async def test_query_neighbors_keeps_entities_without_sources():
+async def test_query_neighbors_excludes_source_less_hindsight_entities():
     client, session = _client()
 
     await client.query_neighbors("e1", hops=2)
 
     query = session.queries[0]
-    assert "neighbor.sources IS NULL" in query  # Hindsight 实体无 sources，保留
+    # 公共图谱只含至少有一个公共来源文档的节点：Hindsight 投影实体
+    # （无 sources，会话转录产生的 assistant/doc-id 碎片等）不再泄漏进
+    # 邻居列表（design D5）。
+    assert "neighbor.sources IS NOT NULL" in query
+    assert "'conversation'" in query
 
 
 async def test_get_entity_details_filters_stale_graphrag_entities():
@@ -523,8 +527,10 @@ async def test_get_entity_details_filters_stale_graphrag_entities():
     await client.get_entity_details("Shared")
 
     query = session.queries[0]
-    # 无 sources 的实体（Hindsight）保留；有 sources 的按存活过滤
-    assert "n.sources IS NULL OR EXISTS" in query
+    # 只返回带公共来源的 GraphRAG 实体（无 sources 的 Hindsight 实体排除），
+    # 有 sources 的按存活 + 非会话转录过滤
+    assert "n.sources IS NOT NULL" in query
+    assert "'conversation'" in query
 
 
 def test_backend_implements_propose_edit():

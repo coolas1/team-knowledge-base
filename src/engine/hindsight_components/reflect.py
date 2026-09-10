@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Protocol
 
+from src.engine.interface import NOT_FOUND_ANSWER
+
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.protocols import HindsightProviders, MemoryRepository
 from src.engine.hindsight_components.types import RecallResult, ReflectResult
@@ -73,7 +75,7 @@ class ReflectEngine:
 
         if not evidence:
             return ReflectResult(
-                text="知识库中未找到与该问题相关的内容。",
+                text=NOT_FOUND_ANSWER,
                 based_on={},
                 tool_trace=tool_trace,
             )

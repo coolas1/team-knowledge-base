@@ -68,6 +68,7 @@ class FakeKnowledgeBase:
     raw: dict[str, bytes] = field(default_factory=dict)
     graph: GraphData = field(default_factory=GraphData)
     recall_calls: list[str] = field(default_factory=list)
+    recall_result: RecallResult = field(default_factory=RecallResult)
 
     async def ingest(self, source: IngestSource) -> DocumentRef:
         import uuid
@@ -102,12 +103,12 @@ class FakeKnowledgeBase:
 
     async def recall(self, request: RecallRequest) -> RecallResult:
         self.recall_calls.append(request.query)
-        return RecallResult(chunks=[], related_entities=[], related_docs=[])
+        return self.recall_result
 
     async def get_graph(self, entity: str | None = None) -> GraphData:
         return self.graph
 
-    async def get_neighbors(self, entity: str) -> GraphData:
+    async def get_neighbors(self, entity: str, hops: int = 2) -> GraphData:
         return self.graph
 
     async def list_documents(

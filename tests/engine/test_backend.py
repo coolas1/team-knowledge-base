@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,49 @@ from src.engine.graphrag.backend import (
     _safe_filename,
     build,
 )
+
+
+async def _drain_background_tasks(timeout: float = 5.0) -> None:
+    """等待注册表中的后台任务（含失败收尾任务）全部结束。"""
+
+    async def _drain() -> None:
+        while backend_mod._background_tasks:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_drain(), timeout)
+
+
+def _failed_write_params(statements: list) -> list[dict]:
+    """从 UPDATE 语句中提取 status='failed' 的写入参数。"""
+    writes = []
+    for stmt in statements:
+        try:
+            params = stmt.compile().params
+        except Exception:
+            continue
+        if params.get("status") == "failed":
+            writes.append(params)
+    return writes
+
+
+class _UpdateRecordingSession:
+    """记录 execute 语句的最小 Session 替身（供 _mark_document_failed）。"""
+
+    def __init__(self, statements: list):
+        self.statements = statements
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+        return None
+
+    async def commit(self):
+        return None
 
 
 class _QueryResult:
@@ -528,3 +572,306 @@ async def test_ingest_batch_isolates_per_file_failure(monkeypatch, tmp_path):
     assert refs[0].status == "failed"
     assert "disk full" in refs[0].error_msg
     assert refs[1] is ok_ref
+
+
+# ── 后台任务注册表（PR #4 P2 + PR #6 N2，design D4）───────────────────
+
+
+async def test_get_neighbors_threads_hops_and_maps_links():
+    from src.engine.components.store.neo4j import GraphQueryResult
+
+    captured = {}
+
+    class FakeNeo4j:
+        async def query_neighbors(self, name, hops=2):
+            captured["args"] = (name, hops)
+            return (
+                [
+                    GraphQueryResult(
+                        name="Acme",
+                        entity_type="Company",
+                        properties={"description": "园区公司"},
+                    )
+                ],
+                [
+                    {
+                        "source": "Acme",
+                        "target": "Bob",
+                        "type": "EMPLOYS",
+                        "description": "works",
+                    }
+                ],
+            )
+
+    backend = GraphRAGBackend(FakeNeo4j(), SimpleNamespace())
+
+    data = await backend.get_neighbors("Acme", hops=1)
+
+    assert captured["args"] == ("Acme", 1)  # hops 透传到 neo4j 查询
+    assert [(n.name, n.type) for n in data.nodes] == [("Acme", "Company")]
+    assert [(link.source, link.target, link.type) for link in data.links] == [
+        ("Acme", "Bob", "EMPLOYS")
+    ]
+
+
+async def test_public_vector_search_excludes_conversation_documents(monkeypatch):
+    from src.engine.graphrag import _search as search_mod
+
+    class Session:
+        def __init__(self):
+            self.statements = []
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            return SimpleNamespace(all=lambda: [])
+
+    class FakeEmbedder:
+        async def embed_text(self, _text):
+            return [0.0]
+
+    monkeypatch.setattr(search_mod, "embedder", FakeEmbedder())
+    session = Session()
+
+    await search_mod.vector_search(session, "query")
+
+    sql = str(session.statements[0]).lower()
+    assert "documents.file_type not in" in sql  # 会话转录 chunk 不进入公共检索
+    assert "documents.is_current" in sql  # PR #6 的当前版本过滤保持
+
+
+async def test_background_task_failure_marks_document_failed_and_logs(monkeypatch, caplog):
+    statements: list = []
+    monkeypatch.setattr(
+        backend_mod, "async_session_factory", lambda: _UpdateRecordingSession(statements)
+    )
+    document_id = uuid.uuid4()
+
+    async def dying():
+        raise RuntimeError("reindex died before pipeline status handling")
+
+    task = backend_mod._schedule_background(
+        dying(), document_id=document_id, label="测试任务"
+    )
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError):
+            await task
+        await _drain_background_tasks()
+
+    writes = _failed_write_params(statements)
+    assert len(writes) == 1
+    assert writes[0]["error_msg"] == (
+        "RuntimeError: reindex died before pipeline status handling"
+    )
+    assert document_id in writes[0].values()  # 标记的是受影响的文档行
+    assert "异常终止" in caplog.text
+    assert not backend_mod._background_tasks
+
+
+async def test_background_task_registry_discards_completed_task(monkeypatch):
+    statements: list = []
+    monkeypatch.setattr(
+        backend_mod, "async_session_factory", lambda: _UpdateRecordingSession(statements)
+    )
+
+    async def finishing():
+        return "done"
+
+    task = backend_mod._schedule_background(
+        finishing(), document_id=uuid.uuid4(), label="完成任务"
+    )
+
+    assert await task == "done"
+    await _drain_background_tasks()
+    assert not backend_mod._background_tasks
+    assert _failed_write_params(statements) == []
+
+
+async def test_cancelled_background_task_is_not_reported_as_failure(monkeypatch, caplog):
+    statements: list = []
+    monkeypatch.setattr(
+        backend_mod, "async_session_factory", lambda: _UpdateRecordingSession(statements)
+    )
+
+    started = asyncio.Event()
+
+    async def hanging():
+        await started.wait()
+
+    task = backend_mod._schedule_background(
+        hanging(), document_id=uuid.uuid4(), label="取消任务"
+    )
+    await asyncio.sleep(0)  # 任务已启动
+    task.cancel()
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await _drain_background_tasks()
+
+    assert _failed_write_params(statements) == []  # 取消 ≠ 失败
+    assert "已取消" in caplog.text
+    assert not backend_mod._background_tasks
+
+
+async def test_versioned_edit_reindex_failure_marks_new_version_failed_and_reingest_recovers(
+    monkeypatch, tmp_path
+):
+    """PR #6 N2：编辑后重索引死亡 → 新版本行 failed + 非空错误；重新处理可恢复。"""
+    monkeypatch.setattr(backend_mod, "UPLOAD_DIR", tmp_path / "uploads")
+    document_id = uuid.uuid4()
+    document = SimpleNamespace(
+        id=document_id,
+        title="week.md",
+        file_type="markdown",
+        status="indexed",
+        overview="",
+        error_msg=None,
+        raw_text="old text",
+        content_hash="old-hash",
+        version_group=document_id,
+        version_number=1,
+        version_of=None,
+        is_current=True,
+    )
+    documents: dict = {document_id: document}
+    failed_writes: list[dict] = []
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _model, uid):
+            if uid == document_id:
+                return document
+            # add() 后未 commit 的 SimpleNamespace 没有 id 属性变化，直接查字典
+            return next(
+                (d for d in documents.values() if getattr(d, "id", None) == uid), None
+            )
+
+        def add(self, obj):
+            documents[obj.id] = obj
+
+        async def execute(self, statement):
+            try:
+                params = statement.compile().params
+            except Exception:
+                return None
+            status = params.get("status")
+            if status == "failed":
+                failed_writes.append(params)
+            if status is not None:
+                for value in params.values():
+                    if isinstance(value, uuid.UUID) and value in documents:
+                        documents[value].status = status
+                        documents[value].error_msg = params.get("error_msg")
+            return None
+
+        async def commit(self):
+            return None
+
+        async def refresh(self, _obj):
+            return None
+
+        async def delete(self, _obj):
+            return None
+
+    class FlakyPipeline:
+        def __init__(self):
+            self.fail = True
+            self.calls = []
+
+        async def reindex_document(self, uid, content, previous_version=None):
+            self.calls.append((uid, content))
+            if self.fail:
+                raise RuntimeError("reindex died")
+
+    pipeline = FlakyPipeline()
+    monkeypatch.setattr(backend_mod, "async_session_factory", Session)
+    backend = GraphRAGBackend(SimpleNamespace(), pipeline)
+
+    result = await backend.edit_content(str(document_id), "updated text")
+    await _drain_background_tasks()
+
+    # 新版本行被标记 failed，且带非空错误
+    new_id = uuid.UUID(result.id)
+    assert new_id != document_id
+    assert result.version_number == 2
+    assert len(failed_writes) == 1
+    assert failed_writes[0]["error_msg"] == "RuntimeError: reindex died"
+    assert new_id in failed_writes[0].values()
+    assert documents[new_id].status == "failed"
+
+    # 重新处理恢复：pipeline 修好后，retry 把新版本行重新索引
+    pipeline.fail = False
+    recovered = await backend.reingest(result.id)
+    await _drain_background_tasks()
+
+    assert recovered.status == "pending"
+    assert documents[new_id].status == "pending"
+    assert documents[new_id].error_msg is None
+    assert pipeline.calls[-1] == (new_id, "updated text")
+
+
+async def test_remove_deletes_the_document_upload_directory(monkeypatch, tmp_path):
+    """QA follow-up #2 回归：remove() 必须删除 uploads/<id>/ 目录。"""
+    document_id = uuid.uuid4()
+    document = SimpleNamespace(
+        id=document_id,
+        title="t.md",
+        file_type="markdown",
+        status="indexed",
+    )
+    upload_dir = tmp_path / "uploads"
+    doc_dir = upload_dir / str(document_id)
+    doc_dir.mkdir(parents=True)
+    (doc_dir / "t.md").write_text("content", encoding="utf-8")
+
+    real_remove = backend_mod._remove_upload_directory
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _model, uid):
+            return document
+
+        async def execute(self, _statement):
+            return None
+
+        async def commit(self):
+            return None
+
+        async def delete(self, _obj):
+            return None
+
+    async def fake_delete_document_graph(*_args):
+        return None
+
+    # 包装而非替换：调用被记到 tmp 目录的真实删除上，remove() 漏掉
+    # 清理调用时该测试必须失败。
+    calls: list[uuid.UUID] = []
+
+    def wrapped_remove(uid: uuid.UUID) -> None:
+        calls.append(uid)
+        real_remove(uid, upload_dir)
+
+    async def fake_before_remove(*_args):
+        return None
+
+    monkeypatch.setattr(backend_mod, "async_session_factory", Session)
+    monkeypatch.setattr(backend_mod, "_remove_upload_directory", wrapped_remove)
+    backend = GraphRAGBackend(
+        SimpleNamespace(delete_document_graph=fake_delete_document_graph),
+        SimpleNamespace(before_remove=fake_before_remove),
+    )
+
+    await backend.remove(str(document_id))
+
+    assert calls == [document_id]
+    assert not doc_dir.exists()
+    assert upload_dir.exists()

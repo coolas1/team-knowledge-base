@@ -25,6 +25,9 @@ from .types import (
     RecallResult,
 )
 
+# 截断标记：保留内容以该标记结尾，提示内容不完整。
+TRUNCATION_MARKER = "\n\n[truncated]"
+
 
 class ConversationQueue(Protocol):
     async def enqueue(
@@ -63,13 +66,17 @@ class ConversationMemoryService:
         repository: MemoryRepository,
         *,
         max_recall_results: int = 20,
+        max_turn_chars: int = 100_000,
     ) -> None:
         if max_recall_results < 1:
             raise ValueError("max_recall_results must be greater than zero")
+        if max_turn_chars < 1:
+            raise ValueError("max_turn_chars must be greater than zero")
         self._queue = queue
         self._recall_service = recall_service
         self._repository = repository
         self._max_recall_results = max_recall_results
+        self._max_turn_chars = max_turn_chars
 
     async def recall_conversation_memory(
         self, request: ConversationMemoryRecallRequest
@@ -121,10 +128,15 @@ class ConversationMemoryService:
             raise ValueError("session_id and turn_id must not be empty")
         if not user_text or not assistant_text:
             raise ValueError("user_text and assistant_text must not be empty")
+        # 内容上界：粘贴的巨文档不再整段落库（否则每轮触发 50+ 次
+        # LLM 抽取），超出部分截断并附显式标记；恰好一次留存。
+        content = f"[user]\n{user_text}\n\n[assistant]\n{assistant_text}"
+        if len(content) > self._max_turn_chars:
+            content = content[: self._max_turn_chars] + TRUNCATION_MARKER
         job = await self._queue.enqueue(
             session_id=session_id,
             turn_id=turn_id,
-            content=(f"[user]\n{user_text}\n\n[assistant]\n{assistant_text}"),
+            content=content,
             title="Conversation turn",
         )
         return ConversationEnqueueResult(
@@ -164,7 +176,7 @@ class ConversationMemoryService:
 
 
 def build_conversation_memory_service(
-    *, max_recall_results: int = 20
+    *, max_recall_results: int = 20, max_turn_chars: int = 100_000
 ) -> ConversationMemoryService:
     repository = PostgresMemoryRepository()
     return ConversationMemoryService(
@@ -172,4 +184,5 @@ def build_conversation_memory_service(
         HindsightService(repository, ProjectHindsightProviders()),
         repository,
         max_recall_results=max_recall_results,
+        max_turn_chars=max_turn_chars,
     )

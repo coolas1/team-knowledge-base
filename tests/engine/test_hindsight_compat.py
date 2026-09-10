@@ -84,7 +84,14 @@ async def test_adapter_maps_hindsight_sources_to_original_recall_contract():
     assert result.chunks[0].vector_score == 0.73
     assert result.chunks[0].metadata["source_type"] == "conversation"
     assert result.chunks[0].metadata["session_id"] == "session-1"
-    assert result.related_docs == [{"doc_id": "document-1", "title": "week.md"}]
+    assert result.related_docs == [
+        {
+            "doc_id": "document-1",
+            "title": "week.md",
+            "relation_type": "",
+            "reason": "",
+        }
+    ]
     assert result.related_entities == [{"name": "TKB"}]
     assert result.mode_used == "fast"
     assert result.strategy_used == "recall"

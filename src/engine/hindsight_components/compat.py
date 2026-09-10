@@ -108,7 +108,16 @@ class HindsightRecallAdapter:
             )
             if source.doc_id and source.doc_id not in seen_docs:
                 seen_docs.add(source.doc_id)
-                related_docs.append({"doc_id": source.doc_id, "title": source.title})
+                # Hindsight 来源没有文档间关系类型；保持响应形状一致，
+                # SPA 在 relation_type 为空时省略括号。
+                related_docs.append(
+                    {
+                        "doc_id": source.doc_id,
+                        "title": source.title,
+                        "relation_type": "",
+                        "reason": "",
+                    }
+                )
 
         return RecallResult(
             chunks=chunks,

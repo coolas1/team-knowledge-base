@@ -176,6 +176,9 @@ def build_query_service(
     options = HindsightOptions(
         recall_min_semantic=settings.hindsight_recall_min_semantic,
         recall_min_score=settings.hindsight_recall_min_score,
+        conversation_recall_min_semantic=(
+            settings.hindsight_conversation_recall_min_semantic
+        ),
         rerank_semantic_margin=settings.hindsight_rerank_semantic_margin,
         deep_total_timeout_seconds=settings.hindsight_deep_total_timeout_seconds,
         query_analysis_timeout_seconds=settings.hindsight_query_analysis_timeout_seconds,

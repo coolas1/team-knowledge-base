@@ -8,7 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.components.reranker import get_reranker
-from src.engine.components.store.models import Chunk, Document
+from src.engine.components.store.models import (
+    Chunk,
+    Document,
+    INTERNAL_DOCUMENT_FILE_TYPES,
+)
 from src.engine.components.store.neo4j import Neo4jClient, GraphQueryResult
 from src.engine.components.embedder import embedder
 
@@ -73,6 +77,9 @@ async def vector_search(
         .order_by(Chunk.embedding.cosine_distance(query_embedding))
         .limit(top_k)
     )
+    # 公共检索排除会话记忆文档（file_type=conversation）的 chunk：
+    # 会话转录只服务记忆召回路径，不进入公开搜索结果。
+    stmt = stmt.where(Document.file_type.not_in(INTERNAL_DOCUMENT_FILE_TYPES))
     if current_only:
         stmt = stmt.where(Document.is_current.is_(True))
 

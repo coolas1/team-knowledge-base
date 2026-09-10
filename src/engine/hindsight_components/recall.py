@@ -164,7 +164,9 @@ class RecallEngine:
                 phase_outcomes,
                 phase_ms,
             )
-            ordered, filtered_count = self._filter_by_relevance(ordered, mode)
+            ordered, filtered_count = self._filter_by_relevance(
+                ordered, mode, source_type
+            )
             selected, token_count, selection_ms = self._select(ordered, limit)
             selected_count = len(selected)
             phase_ms["mmr_token_selection"] = selection_ms
@@ -603,18 +605,27 @@ class RecallEngine:
         return float(value or 0.0)
 
     def _filter_by_relevance(
-        self, ordered: list[RecallCandidate], mode: str
+        self, ordered: list[RecallCandidate], mode: str, source_type: str | None
     ) -> tuple[list[RecallCandidate], int]:
+        # Conversation-memory recall uses its own, lower semantic floor so the
+        # public-corpus gate does not determine what memories are recalled.
+        min_semantic = (
+            self._options.conversation_recall_min_semantic
+            if source_type == "conversation"
+            else self._options.recall_min_semantic
+        )
         kept: list[RecallCandidate] = []
         for item in ordered:
             if (item.keyword_score or 0.0) > 0:
                 kept.append(item)
                 continue
+            # Semantic floor applies in every mode; the deep-mode rerank-score
+            # gate applies on top of it, never instead of it.
+            if (item.semantic_score or 0.0) < min_semantic:
+                continue
             if mode == "deep" and item.reranker_score is not None:
                 if item.final_score < self._options.recall_min_score:
                     continue
-            elif (item.semantic_score or 0.0) < self._options.recall_min_semantic:
-                continue
             kept.append(item)
         return kept, len(ordered) - len(kept)
 

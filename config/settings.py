@@ -89,6 +89,11 @@ class InfraSettings(BaseSettings):
     # unrelated memories.
     hindsight_recall_min_semantic: float = Field(default=0.45, ge=0.0, le=1.0)
     hindsight_recall_min_score: float = Field(default=0.4, ge=0.0, le=1.0)
+    # Conversation-memory recall uses its own, lower semantic floor so the
+    # public-corpus gate does not determine what memories are recalled.
+    hindsight_conversation_recall_min_semantic: float = Field(
+        default=0.25, ge=0.0, le=1.0
+    )
     hindsight_rerank_semantic_margin: float = Field(default=0.25, ge=0.0)
 
     # Deep recall uses a total monotonic deadline plus shorter phase limits.
@@ -107,6 +112,8 @@ class InfraSettings(BaseSettings):
     # retention so deployments can upgrade the engine contract before enabling it.
     hindsight_conversation_memory_enabled: bool = False
     hindsight_conversation_recall_limit: int = Field(default=20, ge=1, le=100)
+    # 单轮留存内容上限（字符）：超出截断并附 [truncated] 标记。
+    hindsight_conversation_max_turn_chars: int = Field(default=100_000, ge=1)
     hindsight_conversation_worker_poll_seconds: float = Field(default=1.0, gt=0)
     hindsight_conversation_worker_lease_seconds: int = Field(default=300, ge=1)
     hindsight_conversation_worker_max_attempts: int = Field(default=10, ge=1)
@@ -124,6 +131,11 @@ class InfraSettings(BaseSettings):
     # behavior; the compose deployment sets the absolute volume mount
     # (/app/uploads) so uploads survive container recreation.
     uploads_dir: str = "uploads"
+
+    # BFF upload size cap (single and batch, per file). Over-cap uploads
+    # are rejected with 413 file_too_large; the read is bounded so the
+    # body beyond the cap is never buffered. Env: KB_MAX_UPLOAD_BYTES.
+    kb_max_upload_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
 
     # Model config groups (OpenAI-compatible endpoints). Sub-models each
     # read their own env prefix from .env; see the classes above.

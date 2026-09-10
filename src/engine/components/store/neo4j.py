@@ -31,6 +31,29 @@ def _quote_cypher_identifier(value: str, fallback: str) -> str:
     return f"`{identifier.replace('`', '``')}`"
 
 
+def _public_source_predicate(node_var: str, doc_alias: str) -> str:
+    """公共图谱节点的来源谓词（Cypher 片段）。
+
+    节点要么是公共 Document（当前版本且非会话转录），要么带 sources
+    且至少有一个公共来源文档 —— 仅以会话记忆文档（file_type=
+    conversation）为来源的实体/边从公共图谱视图与检索增强中排除；
+    无 sources 的 Hindsight 投影节点（HindsightEntity 等）同样排除。
+    """
+    return (
+        f"({node_var}:Document"
+        f" AND coalesce({node_var}.is_current, true) <> false"
+        f" AND coalesce({node_var}.file_type, '') <> 'conversation')"
+        f" OR (NOT {node_var}:Document"
+        f" AND {node_var}.sources IS NOT NULL"
+        f" AND EXISTS {{"
+        f" MATCH ({doc_alias}:Document)"
+        f" WHERE coalesce({doc_alias}.is_current, true) <> false"
+        f" AND coalesce({doc_alias}.file_type, '') <> 'conversation'"
+        f" AND {node_var}.sources CONTAINS {doc_alias}.doc_id"
+        f" }})"
+    )
+
+
 @dataclass
 class EntityData:
     name: str
@@ -630,20 +653,18 @@ class Neo4jClient:
 
     # ── 查询 ────────────────────────────────────────────────────
 
-    async def query_neighbors(self, name: str, hops: int = 2) -> list[GraphQueryResult]:
-        """获取实体 N 跳内的所有邻居。"""
+    async def query_neighbors(
+        self, name: str, hops: int = 2
+    ) -> tuple[list[GraphQueryResult], list[dict]]:
+        """获取实体 N 跳内的邻居节点 + 邻域内部的关系边。"""
+        neighbor_filter = _public_source_predicate("neighbor", "ldn")
         async with self._driver.session() as session:
             result = await session.run(
                 f"""
                 MATCH (start {{name: $name}})
                 MATCH (start)-[*1..{hops}]-(neighbor)
                 WHERE neighbor <> start
-                  AND (NOT neighbor:Document OR neighbor:Document AND coalesce(neighbor.is_current, true) <> false)
-                  AND (NOT neighbor:Document OR neighbor.sources IS NULL OR EXISTS {{
-                    MATCH (ldn:Document)
-                    WHERE coalesce(ldn.is_current, true) <> false
-                      AND neighbor.sources CONTAINS ldn.doc_id
-                  }})
+                  AND ({neighbor_filter})
                 RETURN DISTINCT neighbor, labels(neighbor) AS labels
                 """,
                 name=name,
@@ -665,7 +686,36 @@ class Neo4jClient:
                         properties=dict(node),
                     )
                 )
-            return results
+
+            # 邻域内部的关系边（图谱视图的 links）
+            link_result = await session.run(
+                f"""
+                MATCH (start {{name: $name}})
+                MATCH (start)-[*1..{hops}]-(neighbor)
+                WHERE neighbor <> start
+                  AND ({neighbor_filter})
+                WITH collect(DISTINCT neighbor) AS neighborhood
+                UNWIND neighborhood AS a
+                UNWIND neighborhood AS b
+                MATCH (a)-[r]->(b)
+                WHERE a <> b
+                RETURN coalesce(a.name, a.doc_id) AS source,
+                       coalesce(b.name, b.doc_id) AS target,
+                       type(r) AS type, r.description AS description
+                """,
+                name=name,
+            )
+            link_records = await link_result.data()
+            links = [
+                {
+                    "source": r["source"],
+                    "target": r["target"],
+                    "type": r["type"],
+                    "description": r["description"] or "",
+                }
+                for r in link_records
+            ]
+            return results, links
 
     async def get_entity_details(self, name: str) -> GraphQueryResult | None:
         """查询实体详情 + 直接关联关系。"""
@@ -674,11 +724,13 @@ class Neo4jClient:
                 """
                 MATCH (n {name: $name})
                 WHERE NOT n:Document
-                  AND (n.sources IS NULL OR EXISTS {
+                  AND n.sources IS NOT NULL
+                  AND EXISTS {
                     MATCH (ldn:Document)
                     WHERE coalesce(ldn.is_current, true) <> false
+                      AND coalesce(ldn.file_type, '') <> 'conversation'
                       AND n.sources CONTAINS ldn.doc_id
-                  })
+                  }
                 WITH n
                 ORDER BY coalesce(n.entity_type, ''), elementId(n)
                 WITH collect(n) AS matches
@@ -710,11 +762,27 @@ class Neo4jClient:
                 (label for label in labels if label != "Document"), "Unknown"
             )
 
+            # 平行边去重：同一 (type, direction, endpoint) 只保留一条
+            deduped: list[dict] = []
+            seen: set[tuple] = set()
+            for relation in record["relations"]:
+                if not relation.get("type"):
+                    continue
+                key = (
+                    relation["type"],
+                    relation["direction"],
+                    relation["other_name"],
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(relation)
+
             return GraphQueryResult(
                 name=node.get("name", ""),
                 entity_type=entity_type,
                 properties=dict(node),
-                relations=[r for r in record["relations"] if r.get("type")],
+                relations=deduped,
             )
 
     async def get_document_entities(self, doc_id: str) -> list[GraphQueryResult]:
@@ -787,7 +855,7 @@ class Neo4jClient:
     async def get_full_graph(self) -> dict:
         """返回全图数据：所有实体节点 + 所有实体间关系。"""
         async with self._driver.session() as session:
-            # 1. 查询所有实体节点（排除 Document）
+            # 1. 查询所有实体节点（排除 Document 与会话转录来源）
             node_result = await session.run(
                 """
                 MATCH (e)
@@ -795,6 +863,7 @@ class Neo4jClient:
                 AND EXISTS {
                     MATCH (ld:Document)
                     WHERE coalesce(ld.is_current, true) <> false
+                      AND coalesce(ld.file_type, '') <> 'conversation'
                       AND e.sources CONTAINS ld.doc_id
                 }
                 RETURN e.name AS name, e.description AS description,
@@ -828,16 +897,19 @@ class Neo4jClient:
                   AND EXISTS {
                     MATCH (lda:Document)
                     WHERE coalesce(lda.is_current, true) <> false
+                      AND coalesce(lda.file_type, '') <> 'conversation'
                       AND a.sources CONTAINS lda.doc_id
                   }
                   AND EXISTS {
                     MATCH (ldb:Document)
                     WHERE coalesce(ldb.is_current, true) <> false
+                      AND coalesce(ldb.file_type, '') <> 'conversation'
                       AND b.sources CONTAINS ldb.doc_id
                   }
                   AND (r.sources IS NULL OR EXISTS {
                     MATCH (ldr:Document)
                     WHERE coalesce(ldr.is_current, true) <> false
+                      AND coalesce(ldr.file_type, '') <> 'conversation'
                       AND r.sources CONTAINS ldr.doc_id
                   })
                 RETURN a.name AS source, b.name AS target,
@@ -867,10 +939,11 @@ class Neo4jClient:
                 """
                 MATCH (d1:Document)-[r:RELATED_TO]-(d2:Document)
                 WHERE d1.doc_id IN $doc_ids AND NOT d2.doc_id IN $doc_ids
+                  AND coalesce(d2.file_type, '') <> 'conversation'
                 RETURN DISTINCT d2.doc_id AS doc_id,
                        d2.title AS title,
                        type(r) AS rel_type,
-                       r.relation_type AS relation_type,
+                       coalesce(r.relation_type, type(r)) AS relation_type,
                        r.reason AS reason
                 """,
                 doc_ids=doc_ids,
@@ -880,8 +953,8 @@ class Neo4jClient:
                 {
                     "doc_id": r["doc_id"],
                     "title": r["title"],
-                    "relation_type": r.get("relation_type", ""),
-                    "reason": r.get("reason", ""),
+                    "relation_type": r.get("relation_type") or "",
+                    "reason": r.get("reason") or "",
                 }
                 for r in records
             ]

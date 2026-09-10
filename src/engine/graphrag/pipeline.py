@@ -27,6 +27,7 @@ from src.engine.components.analyzer import (
 from src.engine.components.chunker import chunk_text
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
+from src.engine.components.retry import retry_transient
 from src.engine.graphrag.progress import clear_progress, set_progress
 from src.engine.interface import DocumentIndexHook
 
@@ -38,6 +39,12 @@ def _unwrap_exception_group(exc: BaseException) -> BaseException:
     if isinstance(exc, ExceptionGroup) and len(exc.exceptions) == 1:
         return exc.exceptions[0]
     return exc
+
+
+def format_error(exc: BaseException) -> str:
+    """类型在前的错误信息：无消息异常（如取消）也能标识失败原因。"""
+    message = str(exc)
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 
 @dataclass
@@ -60,12 +67,25 @@ class Pipeline:
         index_hook: DocumentIndexHook | None = None,
         chunk_concurrency: int = 4,
         doc_concurrency: int = 2,
+        llm_retries: int = 3,
+        llm_backoff_base_seconds: float = 2.0,
     ) -> None:
         self._neo4j = neo4j
         self._analyzer = analyzer or Analyzer()
         self._index_hook = index_hook
         self._chunk_sem = asyncio.Semaphore(max(1, chunk_concurrency))
         self._doc_sem = asyncio.Semaphore(max(1, doc_concurrency))
+        self._llm_retries = llm_retries
+        self._llm_backoff_base_seconds = llm_backoff_base_seconds
+
+    async def _with_retry(self, call, *, description: str):
+        """模型调用统一走瞬时失败重试（engine.ingest.llm_retries 预算）。"""
+        return await retry_transient(
+            call,
+            retries=self._llm_retries,
+            backoff_base_seconds=self._llm_backoff_base_seconds,
+            description=description,
+        )
 
     async def _analyze_document(
         self, raw_text: str, title: str, doc_id: UUID
@@ -84,7 +104,10 @@ class Pipeline:
         async def analyze_one(index: int, text: str) -> None:
             nonlocal completed
             async with self._chunk_sem:
-                ca = await self._analyzer.analyze_chunk(text, title, index)
+                ca = await self._with_retry(
+                    lambda: self._analyzer.analyze_chunk(text, title, index),
+                    description=f"chunk {index} 实体分析",
+                )
             results[index] = ca
             completed += 1
             set_progress(
@@ -100,12 +123,18 @@ class Pipeline:
 
         async with asyncio.TaskGroup() as tg:
             overview_task = tg.create_task(
-                self._analyzer.analyze_overview(raw_text, title)
+                self._with_retry(
+                    lambda: self._analyzer.analyze_overview(raw_text, title),
+                    description="文档 overview 分析",
+                )
             )
             embed_task = tg.create_task(
-                embedder.embed_batch([c.text for c in chunks])
-                if chunks
-                else _no_embeddings()
+                self._with_retry(
+                    lambda: embedder.embed_batch([c.text for c in chunks])
+                    if chunks
+                    else _no_embeddings(),
+                    description="embedding 批量生成",
+                )
             )
             for i, chunk in enumerate(chunks):
                 tg.create_task(analyze_one(i, chunk.text))
@@ -268,7 +297,7 @@ class Pipeline:
         logger.info(f"文档 {doc_id} Postgres 写入完成")
 
     async def _mark_failed(self, doc_id: UUID, exc: Exception, stage: str) -> None:
-        """失败收尾：清进度 + 状态置为 failed。"""
+        """失败收尾：清进度 + 状态置为 failed（error_msg 永不为空）。"""
         clear_progress(str(doc_id))
         unwrapped = _unwrap_exception_group(exc)
         logger.error(f"文档 {doc_id} {stage} 失败: {unwrapped}", exc_info=True)
@@ -276,7 +305,7 @@ class Pipeline:
             await session.execute(
                 update(Document)
                 .where(Document.id == doc_id)
-                .values(status="failed", error_msg=str(unwrapped))
+                .values(status="failed", error_msg=format_error(unwrapped))
             )
             await session.commit()
 

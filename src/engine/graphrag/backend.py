@@ -12,6 +12,7 @@ import hashlib
 import logging
 import shutil
 import uuid
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,7 @@ from src.engine.components.store.models import (
 from src.engine.components.store.neo4j import Neo4jClient
 from src.engine.components.store.postgres import async_session_factory
 from src.engine.config import EngineConfig
-from src.engine.graphrag.pipeline import Pipeline, VersionParent
+from src.engine.graphrag.pipeline import Pipeline, VersionParent, format_error
 from src.engine.graphrag._version_match import find_version_candidate
 from src.engine.interface import (
     Capabilities,
@@ -54,7 +55,65 @@ UPLOAD_DIR = Path(settings.uploads_dir)
 
 logger = logging.getLogger(__name__)
 
-logger = logging.getLogger(__name__)
+# 后台 ingest/reindex 任务的强引用注册表：asyncio 只持有任务的弱引用，
+# 无引用的任务可能在执行中被 GC。调度时加入，完成回调中移除。
+_background_tasks: set[asyncio.Task] = set()
+
+
+async def _mark_document_failed(document_id: uuid.UUID, error: str) -> None:
+    """best-effort：把意外死亡的后台任务对应的文档行标记为 failed。"""
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Document)
+            .where(Document.id == document_id)
+            .values(status="failed", error_msg=error)
+        )
+        await session.commit()
+
+
+def _recovery_done_callback(task: asyncio.Task) -> None:
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error("标记文档 failed 状态时出错", exc_info=error)
+
+
+def _make_background_done_callback(
+    document_id: uuid.UUID, label: str
+) -> Callable[[asyncio.Task], None]:
+    def _callback(task: asyncio.Task) -> None:
+        _background_tasks.discard(task)
+        if task.cancelled():
+            logger.info("后台任务已取消: %s（文档 %s）", label, document_id)
+            return
+        error = task.exception()
+        if error is None:
+            return
+        # 任务在 pipeline 自身的失败收尾之外异常终止（如启动即失败）：
+        # 记录日志并 best-effort 标记文档行 failed，避免静默死亡或
+        # 永久 pending。
+        logger.error(
+            "后台任务 %s 异常终止（文档 %s）", label, document_id, exc_info=error
+        )
+        recovery = asyncio.create_task(
+            _mark_document_failed(document_id, format_error(error))
+        )
+        _background_tasks.add(recovery)
+        recovery.add_done_callback(_recovery_done_callback)
+
+    return _callback
+
+
+def _schedule_background(
+    coro: Coroutine[Any, Any, Any], *, document_id: uuid.UUID, label: str
+) -> asyncio.Task:
+    """调度后台任务并持有强引用 + 挂失败收尾回调（见 _background_tasks）。"""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_make_background_done_callback(document_id, label))
+    return task
 
 
 def _remove_upload_directory(
@@ -275,6 +334,9 @@ class GraphRAGBackend:
             )
 
         def _spawn() -> asyncio.Task:
+            # 不变量：_ingest_one 把创建的 task 返回给调用方（ingest /
+            # ingest_batch 均持有引用），任务不会被 GC，也无需注册表。
+            # 重构时若改为不返回 task，必须改用 _schedule_background。
             if previous_version is not None:
                 return asyncio.create_task(
                     self._pipeline.process_file(
@@ -365,10 +427,14 @@ class GraphRAGBackend:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(new_text, encoding="utf-8")
 
-        asyncio.create_task(
+        # 新版本行的重索引在后台执行：注册表持有强引用，意外死亡时
+        # 标记的是新版本行（D4/N2）。
+        _schedule_background(
             self._pipeline.reindex_document(
                 new_id, new_text, previous_version=previous_version
-            )
+            ),
+            document_id=new_id,
+            label="版本化编辑重建索引",
         )
         return await self._enrich(_to_ref(new_doc))
 
@@ -394,11 +460,17 @@ class GraphRAGBackend:
             ref = _to_ref(doc)
 
         if new_text:
-            asyncio.create_task(self._pipeline.reindex_document(uid, new_text))
+            _schedule_background(
+                self._pipeline.reindex_document(uid, new_text),
+                document_id=uid,
+                label="重新处理",
+            )
         else:
             assert file_path is not None
-            asyncio.create_task(
-                self._pipeline.process_file(uid, file_path, title, file_type)
+            _schedule_background(
+                self._pipeline.process_file(uid, file_path, title, file_type),
+                document_id=uid,
+                label="重新处理",
             )
         return await self._enrich(ref)
 
@@ -751,8 +823,8 @@ class GraphRAGBackend:
             ],
         )
 
-    async def get_neighbors(self, entity: str) -> GraphData:
-        results = await self._neo4j.query_neighbors(entity, hops=2)
+    async def get_neighbors(self, entity: str, hops: int = 2) -> GraphData:
+        results, links = await self._neo4j.query_neighbors(entity, hops=hops)
         return GraphData(
             nodes=[
                 GraphNode(
@@ -762,7 +834,15 @@ class GraphRAGBackend:
                 )
                 for r in results
             ],
-            links=[],
+            links=[
+                GraphLink(
+                    source=link["source"],
+                    target=link["target"],
+                    type=link["type"],
+                    description=link.get("description", ""),
+                )
+                for link in links
+            ],
         )
 
     # ── browse ───────────────────────────────────────────────────
@@ -860,5 +940,13 @@ def build(config: EngineConfig) -> GraphRAGBackend:
                 max_concurrent=config.memory.retain_max_concurrent,
                 repository=repository,
             )
-    pipeline = Pipeline(neo4j, analyzer=analyzer, index_hook=index_hook)
+    pipeline = Pipeline(
+        neo4j,
+        analyzer=analyzer,
+        index_hook=index_hook,
+        chunk_concurrency=config.ingest.chunk_concurrency,
+        doc_concurrency=config.ingest.doc_concurrency,
+        llm_retries=config.ingest.llm_retries,
+        llm_backoff_base_seconds=config.ingest.llm_backoff_base_seconds,
+    )
     return GraphRAGBackend(neo4j, pipeline, state_enricher=enricher)
