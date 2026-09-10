@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, api } from '../client'
+import {
+  AGENT_REQUEST_TIMEOUT_MS,
+  ApiError,
+  SessionRequestTimeoutError,
+  api,
+} from '../client'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
@@ -128,7 +133,10 @@ describe('api client', () => {
 
     await api.createAgentSession()
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/agent/sessions', { method: 'POST' })
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/agent/sessions',
+      expect.objectContaining({ method: 'POST', signal: expect.any(AbortSignal) }),
+    )
   })
 
   it('lists sessions and loads a session detail through the BFF', async () => {
@@ -152,8 +160,16 @@ describe('api client', () => {
 
     expect(sessions.items[0].id).toBe('s1')
     expect(detail.messages).toEqual([{ role: 'user', text: 'hello' }])
-    expect(mockFetch).toHaveBeenNthCalledWith(1, '/api/agent/sessions', undefined)
-    expect(mockFetch).toHaveBeenNthCalledWith(2, '/api/agent/sessions/session%2F1', undefined)
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/agent/sessions',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/agent/sessions/session%2F1',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
   })
 
   it('parses SSE events split across arbitrary chunks', async () => {
@@ -210,7 +226,10 @@ describe('api client', () => {
 
     await api.cancelAgentSession('s1')
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/agent/sessions/s1/cancel', { method: 'POST' })
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/agent/sessions/s1/cancel',
+      expect.objectContaining({ method: 'POST' }),
+    )
   })
 
   it('forgets agent session memory through the explicit memory endpoint', async () => {
@@ -223,8 +242,53 @@ describe('api client', () => {
 
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/agent/sessions/session%2F1/memory',
-      { method: 'DELETE' },
+      expect.objectContaining({ method: 'DELETE' }),
     )
+  })
+
+  it('bounds every session request with a client deadline above the BFF read timeout', () => {
+    // The order matters: if the client deadline were the shorter of the two,
+    // it would abort first and the BFF's more specific 504/503 would never be
+    // seen by the user.
+    expect(AGENT_REQUEST_TIMEOUT_MS).toBeGreaterThan(30_000)
+  })
+
+  it('aborts a session request that outlives the client deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      mockFetch.mockImplementationOnce(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            )
+          }),
+      )
+
+      const pending = api.listAgentSessions().catch((caught) => caught)
+      await vi.advanceTimersByTimeAsync(AGENT_REQUEST_TIMEOUT_MS + 1)
+
+      const error = await pending
+      expect(error).toBeInstanceOf(SessionRequestTimeoutError)
+      expect(error.timeoutMs).toBe(AGENT_REQUEST_TIMEOUT_MS)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not report a server error as a timeout', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 504,
+      statusText: 'Gateway Timeout',
+      json: async () => ({ detail: 'Pi Agent 响应超时' }),
+    })
+
+    const error = await api.listAgentSessions().catch((caught) => caught)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error).not.toBeInstanceOf(SessionRequestTimeoutError)
+    expect(error.message).toBe('Pi Agent 响应超时')
   })
 })
 

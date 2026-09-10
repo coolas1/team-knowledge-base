@@ -64,9 +64,41 @@ def _pi_agent_url() -> str:
     return os.getenv("PI_AGENT_URL", "http://127.0.0.1:8010").rstrip("/")
 
 
-def _pi_client() -> httpx.AsyncClient:
+# Read bound for the JSON proxy routes. The sidecar does serial per-session
+# file I/O, so the right value depends on corpus and model latency; it is
+# configurable rather than hard-coded, and deliberately conservative so a
+# working-but-slow operation is not converted into a 504.
+DEFAULT_AGENT_READ_TIMEOUT_SECONDS = 30.0
+
+
+def _agent_read_timeout() -> float | None:
+    """Read timeout for non-streaming agent-proxy routes, in seconds.
+
+    Unset/empty -> DEFAULT_AGENT_READ_TIMEOUT_SECONDS. Zero or negative
+    disables the bound (the pre-change behaviour: hang rather than 504).
+    """
+    raw = os.getenv("PI_AGENT_READ_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_AGENT_READ_TIMEOUT_SECONDS
+    try:
+        seconds = float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"PI_AGENT_READ_TIMEOUT_SECONDS must be a number, got {raw!r}"
+        ) from exc
+    return None if seconds <= 0 else seconds
+
+
+def _pi_client(read_timeout: float | None) -> httpx.AsyncClient:
+    """httpx client for the pi-agent hop.
+
+    The read bound is per route class, not per client: the SSE relay needs
+    ``read=None`` so a long model turn is not cut mid-answer, while every
+    JSON route passes a finite bound so a stalled sidecar surfaces as a
+    gateway status instead of an indefinitely pending request.
+    """
     return httpx.AsyncClient(
-        timeout=httpx.Timeout(connect=5.0, read=None, write=30.0, pool=5.0)
+        timeout=httpx.Timeout(connect=5.0, read=read_timeout, write=30.0, pool=5.0)
     )
 
 
@@ -93,12 +125,22 @@ async def _proxy_json(
     body: dict | None = None,
 ):
     try:
-        async with _pi_client() as client:
+        async with _pi_client(_agent_read_timeout()) as client:
             response = await client.request(
                 method,
                 f"{_pi_agent_url()}{path}",
                 json=body,
             )
+    except httpx.ConnectTimeout as exc:
+        # Connect-phase failure: the sidecar was never reachable. Connect is
+        # bounded separately from read, so this is the "unreachable" case, not
+        # the bounded-read case below — reporting it as a read timeout would
+        # point the user at the wrong cause.
+        raise HTTPException(503, "Pi Agent 当前不可用") from exc
+    except httpx.TimeoutException as exc:
+        # The sidecar accepted the connection but did not answer within the
+        # read bound.
+        raise HTTPException(504, "Pi Agent 响应超时") from exc
     except httpx.RequestError as exc:
         raise HTTPException(503, "Pi Agent 当前不可用") from exc
     if response.is_error:
@@ -159,7 +201,8 @@ async def stream_agent_message(session_id: str, body: AgentMessageRequest):
     if not body.message.strip():
         raise HTTPException(400, "message must not be empty")
 
-    client = _pi_client()
+    # Unbounded read: the relay must survive long pauses between events.
+    client = _pi_client(None)
     try:
         request = client.build_request(
             "POST",

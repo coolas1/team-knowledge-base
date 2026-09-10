@@ -566,6 +566,30 @@
   margin-top: 1px;
 }
 
+.ask-error span {
+  flex: 1 1 auto;
+}
+
+.ask-error-retry {
+  flex: 0 0 auto;
+  padding: 3px 12px;
+  border: 1px solid var(--ask-danger);
+  border-radius: 4px;
+  color: var(--ask-danger);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ask-error-retry:hover:not(:disabled) {
+  background: rgba(180, 60, 50, 0.08);
+}
+
+.ask-error-retry:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .ask-composer-zone {
   z-index: 2;
   padding: 12px 28px 18px;

@@ -1,5 +1,17 @@
 const BASE = '/api'
 
+/**
+ * Client-side deadline for session requests.
+ *
+ * The BFF bounds its own read of the sidecar, but that cannot protect the
+ * browser↔BFF hop — a proxy holding the connection, a sleeping laptop, dropped
+ * Wi-Fi. This is the guarantee that the UI settles, so it is the load-bearing
+ * bound. It MUST exceed the BFF read timeout (PI_AGENT_READ_TIMEOUT_SECONDS,
+ * default 30s) so that a sidecar stall normally surfaces as the server's more
+ * specific error rather than as a generic client timeout.
+ */
+export const AGENT_REQUEST_TIMEOUT_MS = 45_000
+
 export interface PipelineProgress {
   stage: string
   detail: string
@@ -169,6 +181,18 @@ export class AgentStreamError extends Error {
   }
 }
 
+/**
+ * A session request that received no response before its client deadline. Kept
+ * distinct from ApiError so the UI can say "timed out" rather than reporting a
+ * server status the server never sent.
+ */
+export class SessionRequestTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`请求超时（${Math.round(timeoutMs / 1000)} 秒无响应）`)
+    this.name = 'SessionRequestTimeoutError'
+  }
+}
+
 async function responseError(res: Response): Promise<Error> {
   const body = await res.json().catch(() => undefined)
   const detail = body?.detail
@@ -202,6 +226,31 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     throw await responseError(res)
   }
   return res.json()
+}
+
+/**
+ * `request` bounded by a client-side deadline. A stalled transport resolves
+ * into a SessionRequestTimeoutError instead of an indefinite pending state.
+ */
+async function requestWithDeadline<T>(
+  url: string,
+  options?: RequestInit,
+  timeoutMs = AGENT_REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  try {
+    return await request<T>(url, { ...options, signal: controller.signal })
+  } catch (error) {
+    if (timedOut) throw new SessionRequestTimeoutError(timeoutMs)
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export async function readSseEvents(
@@ -359,35 +408,35 @@ export const api = {
   },
 
   createAgentSession() {
-    return request<AgentSession>('/agent/sessions', { method: 'POST' })
+    return requestWithDeadline<AgentSession>('/agent/sessions', { method: 'POST' })
   },
 
   listAgentSessions() {
-    return request<AgentSessionList>('/agent/sessions')
+    return requestWithDeadline<AgentSessionList>('/agent/sessions')
   },
 
   getAgentSession(sessionId: string) {
-    return request<AgentSessionDetail>(
+    return requestWithDeadline<AgentSessionDetail>(
       `/agent/sessions/${encodeURIComponent(sessionId)}`,
     )
   },
 
   cancelAgentSession(sessionId: string) {
-    return request<{ cancelled: boolean; sessionId: string }>(
+    return requestWithDeadline<{ cancelled: boolean; sessionId: string }>(
       `/agent/sessions/${encodeURIComponent(sessionId)}/cancel`,
       { method: 'POST' },
     )
   },
 
   deleteAgentSession(sessionId: string) {
-    return request<{ deleted: boolean; sessionId: string }>(
+    return requestWithDeadline<{ deleted: boolean; sessionId: string }>(
       `/agent/sessions/${encodeURIComponent(sessionId)}`,
       { method: 'DELETE' },
     )
   },
 
   forgetAgentSessionMemory(sessionId: string) {
-    return request<{
+    return requestWithDeadline<{
       sessionId: string
       cancelledJobs: number
       deletedDocuments: number
