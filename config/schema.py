@@ -66,6 +66,7 @@ class MemoryCfg(BaseModel):
 class IngestCfg(BaseModel):
     """Ingest parallelism knobs (1 restores fully serial behavior)."""
 
+    vector_only: bool = True
     chunk_concurrency: int = Field(default=4, ge=1)
     doc_concurrency: int = Field(default=2, ge=1)
 

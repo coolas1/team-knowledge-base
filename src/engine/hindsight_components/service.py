@@ -35,11 +35,13 @@ class HindsightService:
             import os
             from config.schema import load_config
 
-            memory_config = load_config(
+            app_config = load_config(
                 os.getenv("APP_CONFIG", "config/app.yaml")
-            ).engine.memory
+            )
+            memory_config = app_config.engine.memory
             features = memory_config.features
             options = HindsightOptions(
+                file_summary_enabled=app_config.engine.ingest.vector_only,
                 entity_resolution_enabled=features.entity_resolution,
                 consolidation_enabled=features.consolidation,
                 adaptive_reflect_enabled=features.adaptive_reflect,

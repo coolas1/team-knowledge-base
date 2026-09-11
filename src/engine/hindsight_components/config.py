@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class HindsightOptions:
+    file_summary_enabled: bool = False
     adaptive_reflect_enabled: bool = False
     consolidation_enabled: bool = False
     entity_resolution_enabled: bool = False

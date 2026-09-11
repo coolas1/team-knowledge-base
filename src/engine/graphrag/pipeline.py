@@ -50,7 +50,11 @@ class Pipeline:
         index_hook: DocumentIndexHook | None = None,
         chunk_concurrency: int = 4,
         doc_concurrency: int = 2,
+        vector_only: bool = False,
+        summary_manager=None,
     ) -> None:
+        self._summary_manager = summary_manager
+        self._vector_only = vector_only
         self._neo4j = neo4j
         self._analyzer = analyzer or Analyzer()
         self._index_hook = index_hook
@@ -90,14 +94,16 @@ class Pipeline:
 
         async with asyncio.TaskGroup() as tg:
             overview_task = tg.create_task(
-                self._analyzer.analyze_overview(raw_text, title)
+                self._summary_overview(raw_text, title, doc_id)
+                if self._vector_only
+                else self._analyzer.analyze_overview(raw_text, title)
             )
             embed_task = tg.create_task(
                 embedder.embed_batch([c.text for c in chunks])
                 if chunks
                 else _no_embeddings()
             )
-            for i, chunk in enumerate(chunks):
+            for i, chunk in enumerate(chunks if not self._vector_only else []):
                 tg.create_task(analyze_one(i, chunk.text))
 
         return (
@@ -106,6 +112,12 @@ class Pipeline:
             [ca for ca in results if ca is not None],
             embed_task.result(),
         )
+
+    async def _summary_overview(self, raw_text, title, doc_id):
+        if self._summary_manager is None:
+            return await self._analyzer.summarize_document(raw_text, title)
+        summary = await self._summary_manager.prepare(str(doc_id), raw_text, title)
+        return AnalysisResult(overview=summary.text)
 
     async def process_file(
         self,

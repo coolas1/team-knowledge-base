@@ -392,10 +392,12 @@ def build_query_service(
         keyword_index_enabled=settings.hindsight_keyword_index_enabled,
         keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
     )
-    memory_config = load_config(
+    app_config = load_config(
         os.getenv("APP_CONFIG", "config/app.yaml")
-    ).engine.memory
+    )
+    memory_config = app_config.engine.memory
     options = HindsightOptions(
+        file_summary_enabled=app_config.engine.ingest.vector_only,
         adaptive_reflect_enabled=memory_config.features.adaptive_reflect,
         recall_max_results=memory_config.recall_max_results,
         recall_max_candidates=memory_config.recall_max_candidates,

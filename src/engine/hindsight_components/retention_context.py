@@ -16,6 +16,11 @@ def extraction_context(value: RetainInput) -> str:
             else None,
             "reference_timezone": value.reference_timezone,
             "policy_version": value.policy_version,
+            **(
+                {"file_summary": value.metadata["file_summary"]}
+                if "file_summary" in value.metadata
+                else {}
+            ),
         },
         ensure_ascii=False,
     )

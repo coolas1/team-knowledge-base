@@ -88,6 +88,26 @@ class RetainEngine:
                         return RetainResult(**cached)
                 raise RetentionRevisionConflict("retention revision conflict")
             revision = current
+        prepare_file = getattr(self._repository, "prepare_file_retention", None)
+        summary_snapshot = any(
+            item.get("source", {}).get("metadata", {}).get("file_summary")
+            for item in snapshot.get("chunks", [])
+        )
+        if (
+            retain_input.file_type != "conversation"
+            and prepare_file is not None
+            and (self._options.file_summary_enabled or summary_snapshot)
+        ):
+            retain_input = await prepare_file(retain_input)
+            current_summary = retain_input.metadata.get("file_summary")
+            if any(
+                item.get("source", {}).get("metadata", {}).get("file_summary")
+                != current_summary
+                for item in snapshot.get("chunks", [])
+            ):
+                snapshot = {}
+            replay_snapshot = False
+
         chunks = chunk_text(
             retain_input.content,
             chunk_size=self._options.chunk_tokens,

@@ -15,7 +15,7 @@ from src.engine.scope import MemoryScope
 pytestmark = pytest.mark.integration
 
 
-async def test_file_summary_upgrade_reuse_scope_and_original_preservation():
+async def test_file_summary_upgrade_reuse_scope_and_original_preservation(monkeypatch):
     dsn = os.getenv("SCOPE_TEST_DSN")
     if not dsn:
         pytest.skip("SCOPE_TEST_DSN must select a disposable PostgreSQL database")
@@ -68,6 +68,39 @@ async def test_file_summary_upgrade_reuse_scope_and_original_preservation():
                 original.raw_text == "original text"
                 and original.overview == "legacy overview"
             )
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from config.settings import settings
+        from src.engine.components.analyzer import AnalysisResult
+        from src.engine.components.file_summary import FileSummaryManager
+
+        monkeypatch.setattr(
+            settings,
+            "llm",
+            SimpleNamespace(enabled=True, require_model=lambda: "summary-model"),
+        )
+        analyzer = SimpleNamespace(
+            summarize_document=AsyncMock(
+                return_value=AnalysisResult(overview="persisted summary")
+            )
+        )
+        manager = FileSummaryManager(
+            sessions, analyzer=analyzer, scope=MemoryScope(bank_id="team-a")
+        )
+        first = await manager.prepare(str(document_id), "original text", "legacy")
+        second = await manager.prepare(str(document_id), "original text", "legacy")
+        assert first == second
+        analyzer.summarize_document.assert_awaited_once()
+        await manager.prepare(str(document_id), "new original text", "legacy")
+        assert analyzer.summarize_document.await_count == 2
+        analyzer.summarize_document.side_effect = [
+            RuntimeError("failed"),
+            AnalysisResult(overview="recovered"),
+        ]
+        with pytest.raises(RuntimeError):
+            await manager.prepare(str(document_id), "another text", "legacy")
+        recovered = await manager.prepare(str(document_id), "another text", "legacy")
+        assert recovered.text == "recovered"
     finally:
         async with engine.begin() as connection:
             await connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))

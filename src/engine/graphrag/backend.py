@@ -445,5 +445,15 @@ def build(config: EngineConfig) -> GraphRAGBackend:
                 max_concurrent=config.memory.retain_max_concurrent,
                 repository=repository,
             )
-    pipeline = Pipeline(neo4j, analyzer=analyzer, index_hook=index_hook)
+    from src.engine.components.file_summary import FileSummaryManager
+
+    pipeline = Pipeline(
+        neo4j,
+        analyzer=analyzer,
+        index_hook=index_hook,
+        vector_only=config.ingest.vector_only,
+        summary_manager=FileSummaryManager(async_session_factory, analyzer=analyzer),
+        chunk_concurrency=config.ingest.chunk_concurrency,
+        doc_concurrency=config.ingest.doc_concurrency,
+    )
     return GraphRAGBackend(neo4j, pipeline, state_enricher=enricher)

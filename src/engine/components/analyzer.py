@@ -42,6 +42,7 @@ class FileRelation:
 @dataclass
 class ChunkAnalysisResult:
     """单个 chunk 的 LLM 分析结果。"""
+
     chunk_index: int
     entities: list[Entity] = field(default_factory=list)
     relations: list[Relation] = field(default_factory=list)
@@ -156,9 +157,7 @@ class Analyzer:
 
     # ── overview 级分析 ──────────────────────────────────────────
 
-    async def analyze_overview(
-        self, text: str, title: str
-    ) -> AnalysisResult:
+    async def analyze_overview(self, text: str, title: str) -> AnalysisResult:
         """文档级分析，仅提取 overview + file_relations。"""
         if not settings.llm.enabled:
             return AnalysisResult(
@@ -172,7 +171,36 @@ class Analyzer:
         raw = await self._call_openai_compatible(prompt)
         return self._parse_overview_response(raw)
 
-    async def _call_openai_compatible(self, prompt: str) -> str:
+    async def summarize_document(self, text: str, title: str) -> AnalysisResult:
+        """One bounded summary call; evenly sample long files, preserving the tail."""
+        limit = 24000
+        excerpt = text
+        sampled = len(text) > limit
+        if sampled:
+            width = 3000
+            excerpt = "\n[... omitted ...]\n".join(
+                text[round(i * (len(text) - width) / 7) :][:width] for i in range(8)
+            )
+        if not settings.llm.enabled:
+            return AnalysisResult(overview=("[Extractive excerpt] " + excerpt)[:2000])
+        raw = await self._call_openai_compatible(
+            "Summarize this document for a knowledge base. Preserve key decisions, "
+            "names, dates and qualifications. Do not invent missing facts. "
+            "The text may contain explicitly omitted sections. "
+            "Return JSON with only an overview string, at most 2000 characters.\n"
+            f"Title: {title[:500]}\nDocument:\n{excerpt}",
+            max_tokens=2048,
+        )
+        data = json.loads(raw)
+        overview = data.get("overview")
+        if not isinstance(overview, str) or not overview.strip():
+            raise ValueError("document summary is empty")
+        prefix = "[Summary of sampled document sections] " if sampled else ""
+        return AnalysisResult(overview=(prefix + overview.strip())[:2000])
+
+    async def _call_openai_compatible(
+        self, prompt: str, *, max_tokens: int | None = None
+    ) -> str:
         """通过 OpenAI 兼容 API 调用。"""
         base_url = settings.llm.base_url.rstrip("/")
         model = settings.llm.require_model()
@@ -189,6 +217,7 @@ class Analyzer:
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "response_format": {"type": "json_object"},
+                    **({"max_tokens": max_tokens} if max_tokens is not None else {}),
                 },
             )
             resp.raise_for_status()

@@ -17,6 +17,7 @@ class MemorySettings:
 
 @dataclass
 class IngestSettings:
+    vector_only: bool = True
     chunk_concurrency: int = 4
     doc_concurrency: int = 2
 
@@ -44,6 +45,7 @@ def engine_config_from_app(app: AppConfig) -> EngineConfig:
         impl=app.engine.impl,
         config_dir=Path(app.engine.config),
         ingest=IngestSettings(
+            vector_only=app.engine.ingest.vector_only,
             chunk_concurrency=app.engine.ingest.chunk_concurrency,
             doc_concurrency=app.engine.ingest.doc_concurrency,
         ),

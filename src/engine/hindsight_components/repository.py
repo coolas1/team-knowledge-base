@@ -103,6 +103,44 @@ class PostgresMemoryRepository:
             consolidation_enabled=self._consolidation_enabled,
         )
 
+    async def prepare_file_retention(self, value):
+        from dataclasses import asdict, replace
+        from src.engine.components.file_summary import FileSummaryManager
+        from .types import RetentionRevisionConflict
+
+        async with self._session_factory() as session:
+            document = await session.scalar(
+                select(Document).where(
+                    Document.id == uuid.UUID(value.document_id), self._document_scope()
+                )
+            )
+            if document is None:
+                raise ValueError("document is not visible")
+            if document.file_type == "conversation":
+                return value
+            if value.content != document.raw_text:
+                raise RetentionRevisionConflict(
+                    "file source changed before summary retention"
+                )
+            title, source = document.title, document.raw_text
+        summary = await FileSummaryManager(
+            self._session_factory, scope=self.scope
+        ).prepare(value.document_id, source, title)
+        return replace(
+            value,
+            content=summary.text,
+            title=title,
+            update_mode="replace",
+            metadata={
+                **value.metadata,
+                "file_summary": {
+                    **asdict(summary.identity),
+                    "key": summary.identity.key,
+                    "coverage": summary.coverage,
+                },
+            },
+        )
+
     async def retention_input(self, document_id: str):
         from .types import RetainInput
         from datetime import datetime

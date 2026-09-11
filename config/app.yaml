@@ -2,6 +2,7 @@ engine:
   impl: graphrag
   config: config/engine/graphrag
   ingest:
+    vector_only: true
     chunk_concurrency: 4
     doc_concurrency: 2
   memory:

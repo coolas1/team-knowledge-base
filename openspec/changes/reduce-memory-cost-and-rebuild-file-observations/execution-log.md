@@ -40,3 +40,14 @@
 - 独立临时 pgvector:pg16 容器，127.0.0.1:46639/summary_test，无现有数据挂载、tmpfs 数据目录；每次集成测试再使用随机隔离 schema。
 - `RUN_INTEGRATION=1` + 本机测试 DSN 执行 `tests/integration/test_file_summary_migration.py`：1 passed，覆盖旧 documents 表升级两次、摘要复用、跨 bank 隔离、原文保留及迟到失败不覆盖成功。
 - 测试数据库升级已通过；提交 SHA 在提交后追加。
+
+第一批提交：`979acc7`，五项任务均已完成。
+
+## 批次二验收
+
+统一 FileSummaryManager，pipeline 先持久化摘要后 retain 按当前原文 identity 复用。retention preprocess 覆盖 backfill/replay，摘要策略写入 extraction context，策略变化不能继承全文 provenance。原文变化冲突拒绝旧输入。
+
+- ruff：通过。全库及内部记忆测试：516 passed / 33 skipped。
+- 文件入口矩阵：10 passed，覆盖三种 source_type × replay，已迁移策略保持、对话/显式旧模式、摘要失败不发布。
+- 独立 PostgreSQL 升级+manager 复用/变化/失败恢复：1 passed。
+- 暂存按功能拆分共享 config/service/query 文件，缓存部分留给第三批。

@@ -55,7 +55,7 @@ def test_build_memory_wiring(monkeypatch):
     monkeypatch.setattr(
         backend_mod,
         "Pipeline",
-        lambda neo4j, analyzer, index_hook: built.update(pipeline_hook=index_hook),
+        lambda neo4j, analyzer, index_hook, **kwargs: built.update(pipeline_hook=index_hook),
     )
     monkeypatch.setattr(repo_mod, "PostgresMemoryRepository", FakeRepo)
     monkeypatch.setattr(backend_mod, "build_retain_hook", fake_hook)
