@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True, slots=True)
 class ConsolidationOptions:
     batch_size: int = 64
+    action_limit: int | None = None
     observation_limit: int = 1000
     max_iterations: int = 8
     max_tokens: int = 32000
@@ -60,6 +61,8 @@ class ConsolidationOptions:
     max_attempts: int = 10
 
     def __post_init__(self) -> None:
+        if self.action_limit is not None and self.action_limit < 1:
+            raise ValueError("action limit must be positive")
         if (
             min(
                 self.batch_size,
@@ -935,7 +938,7 @@ class ConsolidationWorker:
                 "write_scope": claim.write_scope,
                 "facts": read_set.facts,
                 "observations": read_set.observations,
-                "max_actions": self.options.batch_size,
+                "max_actions": self.options.action_limit or self.options.batch_size,
             }
             try:
                 actions = validate_actions(payload, **validation_args)
@@ -1214,7 +1217,7 @@ class ConsolidationWorker:
             '\nReturn {"actions":[{"action":"create|update|delete",'
             '"observation_id":null,"text":"...","source_fact_ids":["..."],'
             '"change":"synthesis|change|conflict","reason":"..."}]}. '
-            f"Return at most {self.options.batch_size} actions. A create/update must "
+            f"Return at most {self.options.action_limit or self.options.batch_size} actions. A create/update must "
             "cite only IDs listed in new_facts. Observation IDs may only appear in "
             "observation_id. Delete requires a reason."
         )

@@ -156,6 +156,31 @@ class RebuildConsolidationRepository(PostgresConsolidationRepository):
                     "unrelated pending consolidation must drain before migration"
                 )
         original = await super().read_set(claim, options)
+        old_ids = {i for t in self.manifest["targets"] for i in t["fact_versions"]}
+        if not original.fact_rows and set(original.deleted_fact_ids).issubset(old_ids):
+            # Retirement already invalidated the complete legacy evidence
+            # closure. Consuming these tombstones needs no model synthesis.
+            async with self._session_factory() as session:
+                active = await session.scalar(
+                    select(func.count())
+                    .select_from(ObservationEvidence)
+                    .where(
+                        ObservationEvidence.fact_id.in_(
+                            [uuid.UUID(i) for i in old_ids]
+                        ),
+                        ObservationEvidence.active.is_(True),
+                    )
+                )
+                if active:
+                    raise ValueError("legacy evidence unexpectedly active")
+            return replace(
+                original,
+                facts={},
+                fact_rows={},
+                observations={},
+                observation_rows={},
+                deleted_fact_ids=(),
+            )
         doc_ids = {t["document_id"] for t in self.manifest["targets"]}
         survivor_ids = {
             i for o in self.manifest["observations"] for i in o["retained_fact_ids"]
@@ -454,8 +479,11 @@ class FileRebuildRunner:
                 consolidation_repo,
                 budget,
                 ConsolidationOptions(
-                    batch_size=4,
-                    max_output_tokens=8192,
+                    batch_size=64,
+                    action_limit=4,
+                    candidate_limit=4,
+                    max_iterations=256,
+                    max_output_tokens=4096,
                     semantic_dedup_enabled=False,
                 ),
             )
