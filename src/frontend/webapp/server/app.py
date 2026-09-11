@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.frontend.webapp.server import deps
+from src.frontend.webapp.server.version import load_commit, load_version
 from src.frontend.webapp.server.routes_documents import router as documents_router
 from src.frontend.webapp.server.routes_search import router as search_router
 from src.frontend.webapp.server.routes_graph import router as graph_router
@@ -52,7 +53,12 @@ async def lifespan(app: FastAPI):
         await deps.shutdown()
 
 
-app = FastAPI(title="Team Knowledge Base BFF", version="0.1.0", lifespan=lifespan)
+# Read once at import: the version is fixed for the life of the process.
+APP_VERSION = load_version()
+
+app = FastAPI(
+    title="Team Knowledge Base BFF", version=APP_VERSION, lifespan=lifespan
+)
 
 # API under /api.
 api = APIRouter(prefix="/api")
@@ -72,6 +78,12 @@ app.mount("/mcp", build_mcp_app(), name="mcp")
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/version")
+async def version():
+    """Which release this instance runs (see version.py for the source)."""
+    return {"version": APP_VERSION, "commit": load_commit()}
 
 
 # A stale cached shell can reference a hashed bundle a later deploy removed.
@@ -144,8 +156,8 @@ if _assets.is_dir():
 async def spa_fallback(full_path: str):
     """Serve the SPA shell for any non-API GET (client-side routing).
 
-    API misses, /health, and /mcp stay 404 so they are not masked by
-    index.html (the MCP endpoint must answer JSON, never the SPA shell).
+    API misses, /health, /version, and /mcp stay 404 so they are not masked
+    by index.html (the MCP endpoint must answer JSON, never the SPA shell).
 
     Static-asset misses are carved out too: a request under the built
     ``assets/`` directory is never a client-side route, so it must not be
@@ -153,6 +165,7 @@ async def spa_fallback(full_path: str):
     """
     if (
         full_path == "health"
+        or full_path == "version"
         or full_path == "mcp"
         or full_path.startswith("api/")
         or full_path.startswith("mcp/")

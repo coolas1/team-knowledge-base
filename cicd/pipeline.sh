@@ -171,12 +171,14 @@ stage_build() {
   cd "$repo_dir"
   [[ -f "$deploy_env" ]] || die "deploy.env missing at $deploy_env"
   # The LAN deployment builds from a regional PyPI mirror (opt-in build arg);
-  # an unset PYPI_MIRROR means upstream PyPI.
-  log "build: podman compose build (PYPI_MIRROR=${PYPI_MIRROR:-<upstream PyPI>})"
+  # an unset PYPI_MIRROR means upstream PyPI. GIT_COMMIT is the source SHA
+  # the built image reports through /version (Containerfile GIT_COMMIT arg).
+  SHORT_SHA="$(git -C "$repo_dir" rev-parse --short=7 "$HEAD_SHA")"
+  export GIT_COMMIT="$SHORT_SHA"
+  log "build: podman compose build (PYPI_MIRROR=${PYPI_MIRROR:-<upstream PyPI>}, GIT_COMMIT=$SHORT_SHA)"
   PYPI_MIRROR="${PYPI_MIRROR:-}" \
     podman compose --env-file "$deploy_env" build || die "compose build failed"
 
-  SHORT_SHA="$(git -C "$repo_dir" rev-parse --short=7 "$HEAD_SHA")"
   local image
   for image in "${compose_images[@]}"; do
     if podman image exists "$image:latest"; then

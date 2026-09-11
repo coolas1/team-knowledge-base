@@ -83,10 +83,16 @@ RUN cd src/frontend/webapp/client \
 # App source + config: the most frequently changed inputs, last.
 COPY src/ ./src/
 COPY config/ ./config/
+# The runtime semantic version (see src/frontend/webapp/server/version.py).
+COPY VERSION ./
 
+# Source commit this image was built from (the pipeline passes SHORT_SHA;
+# empty = unknown, which /version reports as commit: null).
+ARG GIT_COMMIT=""
 ENV PYTHONPATH=/app \
     SPA_DIST=/app/src/frontend/webapp/client/dist \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    GIT_COMMIT=${GIT_COMMIT}
 
 EXPOSE 8000
 

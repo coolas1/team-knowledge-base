@@ -5,6 +5,7 @@
 *
 !src
 !config
+!VERSION
 !pyproject.toml
 !uv.lock
 **/node_modules

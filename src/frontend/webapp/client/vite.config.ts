@@ -109,6 +109,11 @@ export default defineConfig({
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
+      // The version footer reads the BFF's /version endpoint directly.
+      '/version': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
     },
   },
 })
