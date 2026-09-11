@@ -112,3 +112,17 @@
 - 实际 HTTP 文件尾部查询 Top-5 命中原文。真实 PostgreSQL 对话事实配合固定 planner：冷检索 1 次，热新增检索 0 次，命中 1 次，答案/引用有效；此控制实验无生成调用，不推算线上费用节省率。
 - 最终全库单元/契约回归 526 passed / 39 skipped，ruff 通过；最终 PostgreSQL 模块 25 passed / 7 skipped（未设置 Neo4j 等专项开关），原始文件检索专项 1 passed。前序完整 PostgreSQL/Neo4j 回归 31 passed。独立临时测试容器已关闭，用户服务继续运行。
 - 原始证据保存在非提交 output/：rebuild-final-verification.json、rebuild-api-verification.json、rebuild-provider-usage.json 与执行日志。操作说明与脱敏报告位于 docs/memory-cost-controls.md 和 docs/file-memory-migration-2026-09-11.md。
+
+
+## 六批最终提交索引
+
+| 批次 | 主提交 | 验收 |
+|---|---|---|
+| 1 摘要版本与模式 | `979acc7c` | 数据库升级、摘要身份与隔离测试通过 |
+| 2 摘要 retain | `51294d77` | 原文向量保留，摘要抽取与复用通过 |
+| 3 fact cache | `14b5aaaa` | TTL/LRU、权限及版本失效、证据按需展开通过 |
+| 4 历史退休 | `565de81f` | 混合来源清理、图与缓存失效、恢复演练通过 |
+| 5 可靠续跑 | `2457708c` | 故障续跑、预算、并发 fencing 和端到端验证通过 |
+| 6 目标迁移 | `ebfd2c5` | 实际目标 verified、页面 108、原文召回与缓存对照通过 |
+
+第六批运行修复提交见上节，最终运行代码 `c5d410e8`。OpenSpec strict validate 和最终 ruff 均通过。全部任务完成，当前分支 `feat/memory-consolidation`；未 push、merge 或 archive。备份与私有运行材料不进入提交。

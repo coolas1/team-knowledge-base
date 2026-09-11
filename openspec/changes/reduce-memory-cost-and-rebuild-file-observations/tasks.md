@@ -49,4 +49,4 @@
 - [x] 6.4 核验全部目标旧全文 facts active=0、有效旧 evidence=0、旧图投影/缓存不可用，非目标对话与文件校验和保持一致；验收：保存可复查查询结果，所有迁移项 verified/empty，失败和待处理为零。来源不明尚未解决时本批保持未完成。
 - [x] 6.5 运行固定文件细节查询、对话查询及重复 fact 查询对照，输出调用次数、真实 provider usage（缺失时明确标注估算）、累计 tokens、缓存命中和回答证据核验；验收：重复摘要调用为零、相关缓存用例上下文/重复检索减少、文件原文细节可找回，不宣称未测量的费用节省率。
 - [x] 6.6 更新操作手册、回滚/续跑指令及脱敏迁移报告，执行全库检查与 OpenSpec strict validate，提交 `docs(engine): record file memory migration`；验收：提交仍在 `feat/memory-consolidation`，无备份/凭据/无关改动混入。
-- [ ] 6.7 提交后将最终批 SHA 和六批验收索引补入 execution-log.md，单独提交 `docs(engine): finalize batch audit trail`；验收：`git log` 可逐一对应六批记录，所有 checkbox 均有实际证据后才勾选，未自动 push/merge/archive。
+- [x] 6.7 提交后将最终批 SHA 和六批验收索引补入 execution-log.md，单独提交 `docs(engine): finalize batch audit trail`；验收：`git log` 可逐一对应六批记录，所有 checkbox 均有实际证据后才勾选，未自动 push/merge/archive。
