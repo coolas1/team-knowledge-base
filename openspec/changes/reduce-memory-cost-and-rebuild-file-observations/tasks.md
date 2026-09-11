@@ -21,15 +21,15 @@
 - [x] 3.3 完成删除、版本变更、权限变化、迁移与多 worker 的当前状态校验；验收：上述变更之后旧文本不得进入提示，校验失败正常回退检索。
 - [x] 3.4 完成 observation 按问题选择来源 facts、数量/token 限制和截断补查；验收：大量来源 fixture 仅返回预算内相关子集，完整审阅接口可用，模型收到缓存文本与出处而不只是 ID。
 - [x] 3.5 增加命中/失效/驱逐及证据 token 观测，运行固定重复查询对照；验收：有效缓存减少重复工具调用或输入 token，冷查询/未命中仍正确，报告不包含秘密。
-- [ ] 3.6 执行 `uv run pytest tests src/engine/hindsight_components/tests` 与全库 ruff，提交 `feat(engine): cache recent relevant facts`；验收：全部适用测试通过并记录本批 SHA。
+- [x] 3.6 执行 `uv run pytest tests src/engine/hindsight_components/tests` 与全库 ruff，提交 `feat(engine): cache recent relevant facts`；验收：全部适用测试通过并记录本批 SHA。
 
 ## 4. 批次四：旧文件 observation 清理器
 
-- [ ] 4.1 实现只读 dry-run 和可保存 manifest，识别旧全文策略目标、revision 与完整 evidence 闭包；验收：预览零写入、零生成模型调用，来源不明报告并排除自动删除。
-- [ ] 4.2 实现目标范围备份导出及恢复校验；验收：隔离数据库可以还原文件派生事实、observation/evidence 与作业状态，备份不提交到 Git。
-- [ ] 4.3 实现纯文件 observation 当前内容清理及旧全文 facts 失效；验收：活跃 observation、旧 facts 和有效 edges 按 manifest 归零，原文/向量未删除。
-- [ ] 4.4 实现混合来源 observation 清理与重算排队；验收：旧正文不再有效，对话与非目标文件原始 facts 保留，不能仅删 edge 却保留旧正文。
-- [ ] 4.5 联动 mental model 失效、graph outbox 清理和 cache 版本失效；验收：检索、模型上下文、图和缓存均无法返回旧文件派生内容，审计历史不参与再生成。
+- [x] 4.1 实现只读 dry-run 和可保存 manifest，识别旧全文策略目标、revision 与完整 evidence 闭包；验收：预览零写入、零生成模型调用，来源不明报告并排除自动删除。
+- [x] 4.2 实现目标范围备份导出及恢复校验；验收：隔离数据库可以还原文件派生事实、observation/evidence 与作业状态，备份不提交到 Git。
+- [x] 4.3 实现纯文件 observation 当前内容清理及旧全文 facts 失效；验收：活跃 observation、旧 facts 和有效 edges 按 manifest 归零，原文/向量未删除。
+- [x] 4.4 实现混合来源 observation 清理与重算排队；验收：旧正文不再有效，对话与非目标文件原始 facts 保留，不能仅删 edge 却保留旧正文。
+- [x] 4.5 联动 mental model 失效、graph outbox 清理和 cache 版本失效；验收：检索、模型上下文、图和缓存均无法返回旧文件派生内容，审计历史不参与再生成。
 - [ ] 4.6 在隔离真实数据库运行删除范围和恢复集成测试，执行全库检查，提交 `feat(engine): retire legacy file observations`；验收：非目标校验和一致且记录集成环境标识与本批 SHA。本批不对目标实例运行清理。
 
 ## 5. 批次五：摘要重处理与可靠续跑

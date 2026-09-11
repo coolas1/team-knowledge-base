@@ -18,6 +18,14 @@ async def migrate_file_summaries(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": f"tkb-file-summary-migration:{schema}"},
         )
+        from src.engine.hindsight_components.file_rebuild import FileRebuildRun
+
+        await connection.run_sync(
+            lambda sync: FileRebuildRun.__table__.create(
+                sync.execution_options(schema_translate_map={None: schema}),
+                checkfirst=True,
+            )
+        )
         await connection.run_sync(
             lambda sync: FileSummary.__table__.create(
                 sync.execution_options(schema_translate_map={None: schema}),

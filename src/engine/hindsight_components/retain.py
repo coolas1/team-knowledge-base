@@ -89,7 +89,7 @@ class RetainEngine:
                 raise RetentionRevisionConflict("retention revision conflict")
             revision = current
         prepare_file = getattr(self._repository, "prepare_file_retention", None)
-        summary_snapshot = any(
+        summary_snapshot = snapshot.get("file_summary_policy") or any(
             item.get("source", {}).get("metadata", {}).get("file_summary")
             for item in snapshot.get("chunks", [])
         )

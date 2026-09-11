@@ -60,3 +60,13 @@
 - 使用 load_cached_facts 批量读取当前权限、类型、标签、时间过滤及 memory_version；两个 worker 修改/删事实和修改文档可见标签后旧内容失效。
 - 固定 follow-up fixture：冷请求 1 次 recall，热请求新增 0 次 recall、cache hits=1，答案及引用不变。这是工具调用测试，不是实际 DeepSeek 账单节省率。
 - 全库及内部记忆测试：519 passed / 34 skipped，ruff passed。独立 PostgreSQL 多 worker 失效测试：1 passed。
+
+第三批提交：`14b5aaa`。
+
+## 批次四验收
+
+- 新增持久化 FileRebuildRun 与 preview/plan/retire/restore CLI；manifest 固定数据库身份、源 hash、revision、完整来源闭包。
+- 恢复材料导出带 checksum；未导出不能清理。retire 将旧 facts/observations 设 retired，清空旧 observation 当前文本、tombstone observation head，保留审计历史；原文、对话、非目标事实不变。
+- PostgreSQL + 独立 Neo4j 演练发现原 graph_projection 未过滤 inactive 行，已修复为只投影 active memories / 链接目标；真实图清理和既有图契约 2 passed。
+- 从实际导出文件恢复、拒绝后续写入后的恢复：1 passed；fixture 验证纯文件/跨文件/混合来源和派生 mental model。
+- 全库及内部记忆测试：519 passed / 35 skipped；ruff passed。未在目标 TKB 运行清理。

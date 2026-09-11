@@ -888,7 +888,11 @@ class PostgresMemoryRepository:
             memories = list(
                 await session.scalars(
                     select(MemoryUnit)
-                    .where(MemoryUnit.document_id == uid, self._memory_scope())
+                    .where(
+                        MemoryUnit.document_id == uid,
+                        self._memory_scope(),
+                        MemoryUnit.state == "active",
+                    )
                     .order_by(
                         MemoryUnit.chunk_index,
                         MemoryUnit.memory_index,
@@ -915,7 +919,12 @@ class PostgresMemoryRepository:
                 links = list(
                     await session.scalars(
                         select(MemoryLink).where(
-                            MemoryLink.source_memory_id.in_(memory_ids)
+                            MemoryLink.source_memory_id.in_(memory_ids),
+                            MemoryLink.target_memory_id.in_(
+                                select(MemoryUnit.id).where(
+                                    self._memory_scope(), MemoryUnit.state == "active"
+                                )
+                            ),
                         )
                     )
                 )

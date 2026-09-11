@@ -2946,3 +2946,194 @@ async def test_cached_fact_validation_across_workers_and_mutations(scope_databas
             update(MemoryUnit).where(MemoryUnit.id == fact_id).values(state="deleted")
         )
     assert await worker_b.load_cached_facts([str(fact_id)]) == {}
+
+
+async def test_file_rebuild_precise_retirement_and_guarded_restore(
+    scope_database, tmp_path, scope_graph
+):
+    import json
+    from pathlib import Path
+    from sqlalchemy import update
+    from src.engine.components.store.file_summary_migration import (
+        migrate_file_summaries,
+    )
+    from src.engine.hindsight_components.file_rebuild import FileMemoryRebuild, digest
+    from src.engine.hindsight_components.models import (
+        HindsightDocumentState,
+        ObservationRecord,
+        ObservationEvidence,
+        MentalModel,
+        HindsightGraphOutbox,
+    )
+
+    engine, schema = scope_database
+    await migrate_file_summaries(engine, schema=schema)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = json.loads(
+        Path("tests/fixtures/file_memory_rebuild.json").read_text(encoding="utf-8")
+    )
+    ids = {
+        row["id"]: uuid.uuid5(uuid.NAMESPACE_URL, row["id"])
+        for group in ("documents", "facts", "observations")
+        for row in fixture[group]
+    }
+    driver, bank = scope_graph
+    async with sessions() as session, session.begin():
+        for doc in fixture["documents"]:
+            raw = (
+                doc.get("text")
+                or doc["prefix"]
+                + doc["repeat_text"] * doc["repeat_count"]
+                + doc["suffix"]
+            )
+            session.add(
+                Document(
+                    id=ids[doc["id"]],
+                    bank_id=bank,
+                    tags=doc["tags"],
+                    title=doc["id"],
+                    file_type="conversation"
+                    if doc["source_type"] == "conversation"
+                    else "markdown",
+                    raw_text=raw,
+                    overview="",
+                    status="indexed",
+                )
+            )
+        await session.flush()
+        docs = {d["id"]: d for d in fixture["documents"]}
+        for fact in fixture["facts"]:
+            doc = docs[fact["document_id"]]
+            session.add(
+                MemoryUnit(
+                    id=ids[fact["id"]],
+                    document_id=ids[doc["id"]],
+                    bank_id=bank,
+                    chunk_index=0,
+                    memory_index=0,
+                    text=fact["text"],
+                    source_text=fact["text"],
+                    scope_tags=doc["tags"],
+                    metadata_json={"source_type": doc["source_type"]},
+                )
+            )
+        for i, obs in enumerate(fixture["observations"], start=1):
+            session.add(
+                MemoryUnit(
+                    id=ids[obs["id"]],
+                    document_id=ids[obs["document_id"]],
+                    bank_id=bank,
+                    chunk_index=-1,
+                    memory_index=i,
+                    memory_type="observation",
+                    text=obs["id"],
+                    source_text=obs["id"],
+                    source_memory_ids=[ids[f] for f in obs["fact_ids"]],
+                )
+            )
+        await session.flush()
+        for obs in fixture["observations"]:
+            session.add(
+                ObservationRecord(
+                    memory_id=ids[obs["id"]], bank_id=bank, normalized_text=obs["id"]
+                )
+            )
+            for fact_id in obs["fact_ids"]:
+                session.add(
+                    ObservationEvidence(
+                        observation_id=ids[obs["id"]],
+                        fact_id=ids[fact_id],
+                        fact_version=1,
+                        bank_id=bank,
+                    )
+                )
+        for d in fixture["target_documents"]:
+            session.add(
+                HindsightDocumentState(
+                    document_id=ids[d], bank_id=bank, revision=1, status="indexed"
+                )
+            )
+        session.add(
+            MentalModel(
+                id="derived",
+                bank_id=bank,
+                name="derived",
+                description="",
+                summary="old derived summary",
+                freshness="active",
+                source_memory_ids=[ids["o-mixed"]],
+            )
+        )
+    rebuild = FileMemoryRebuild(sessions, scope=MemoryScope(bank_id=bank))
+    from src.engine.hindsight_components.neo4j_graph import HindsightNeo4jGraphStore
+    from src.engine.hindsight_components.graph_outbox import (
+        PostgresGraphOutbox,
+        GraphProjectionWorker,
+    )
+    from src.engine.hindsight_components.graph_projector import MemoryGraphProjector
+
+    graph = HindsightNeo4jGraphStore(driver, scope=MemoryScope(bank_id=bank))
+    await graph.ensure_schema()
+    for doc in fixture["documents"]:
+        projection = await rebuild.repository.graph_projection(str(ids[doc["id"]]))
+        await graph.replace_document(projection)
+    worker = GraphProjectionWorker(
+        PostgresGraphOutbox(sessions), rebuild.repository, MemoryGraphProjector(graph)
+    )
+    manifest = await rebuild.preview([str(ids[d]) for d in fixture["target_documents"]])
+    assert {o["id"] for o in manifest["observations"]} == {
+        str(ids[o]) for o in fixture["expected_affected_observations"]
+    }
+    run_id = await rebuild.create_run(manifest)
+    with pytest.raises(ValueError, match="export recovery"):
+        await rebuild.retire(run_id)
+    await rebuild.export_backup(run_id, tmp_path / "backup.json")
+    backup = json.loads((tmp_path / "backup.json").read_text(encoding="utf-8"))
+    assert backup.pop("checksum") == digest(backup)
+    await rebuild.retire(run_id)
+    await rebuild.retire(run_id)
+    async with sessions() as session:
+        for obs in fixture["expected_affected_observations"]:
+            row = await session.get(MemoryUnit, ids[obs])
+            assert row.state == "retired" and row.text == ""
+        for fact_id in fixture["expected_preserved_facts"]:
+            assert (await session.get(MemoryUnit, ids[fact_id])).state == "active"
+        assert (await session.get(MentalModel, ("derived", bank))).freshness == "stale"
+        assert list(await session.scalars(select(HindsightGraphOutbox.id)))
+        assert (await session.get(Document, ids["short-file"])).raw_text == docs[
+            "short-file"
+        ]["text"]
+    assert await rebuild.repository.load_cached_facts([str(ids["f-short"])]) == {}
+    events = await worker.drain(limit=100)
+    assert events and all(e.status == "completed" for e in events)
+    async with driver.session() as graph_session:
+        count = await (
+            await graph_session.run(
+                "MATCH (m:HindsightMemory) WHERE m.bank_id=$bank AND m.id IN $ids RETURN count(m) AS count",
+                bank=bank,
+                ids=[str(ids[o]) for o in fixture["expected_affected_observations"]],
+            )
+        ).single()
+        assert count["count"] == 0
+    await rebuild.restore_retired(run_id, backup_path=tmp_path / "backup.json")
+    async with sessions() as session:
+        assert (await session.get(MemoryUnit, ids["o-mixed"])).text == "o-mixed"
+        assert (await session.get(MemoryUnit, ids["f-short"])).state == "active"
+        assert (await session.get(MentalModel, ("derived", bank))).freshness == "active"
+        assert (
+            await rebuild._snapshot(session, manifest)
+            == (await rebuild.get_run(run_id)).backup
+        )
+    new_run = await rebuild.create_run(
+        await rebuild.preview([str(ids[d]) for d in fixture["target_documents"]])
+    )
+    await rebuild.export_backup(new_run, tmp_path / "backup2.json")
+    await rebuild.retire(new_run)
+    async with sessions() as session, session.begin():
+        await session.execute(
+            update(MemoryUnit)
+            .where(MemoryUnit.id == ids["f-short"])
+            .values(memory_version=99)
+        )
+    with pytest.raises(ValueError, match="intervening"):
+        await rebuild.restore_retired(new_run)
