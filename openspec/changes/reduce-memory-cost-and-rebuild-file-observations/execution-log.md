@@ -98,3 +98,17 @@
 - 拟执行策略：代码 `2457708c`，batch_size=1，run 累计生成 token 上限 100000；每次调用前预留，达到上限暂停。尚无目标实际 provider usage 或费用节省结论。
 - 当前待决：根 CLAUDE.md 要求 team-kb 由 pipeline 操作，禁止手动 compose up；已配置流程面向 Linux LAN 的 origin/main，当前运行的是 Windows Docker 本机实例。版本切换需用户明确授权本机例外或通过其发布流程完成。不自动 push/merge，不把“继续实现”解释成绕过部署约束。
 - 6.2–6.7 保持未完成：虽已具备备份与恢复证明，目标版本切换、实际清理/摘要重处理、最终查询对照和六批最终审计尚未完成。
+
+
+## 批次六执行验收（替代上方准备状态）
+
+- 用户明确回复“授权”，批准本次 Windows Docker 本机版本切换例外；随后已实际完成升级、退休与重处理，无 push/merge/archive。
+- run `8f3854e9-eff0-4ec7-b479-4653d878d5d0` 已 verified。页面 361 → 108：文件 facts 258 → 51，文件依赖 observations 57 → 11，对话 facts 33 与独立 observations 13 保持不变。
+- 旧有效 memories/evidence/图节点均为 0，旧 ID cache 权威校验为空；新 observation 仅引用有效 facts。原文、14 原始向量块和非目标记忆指纹不变。所有后台队列完成，失败与待处理为 0。
+- 恢复材料与独立恢复演练沿用上述 checksum；目标已有新写入，后续应前向修复，不能覆盖恢复旧状态。
+- 运行问题修复：`82e6938c` 同名实体图投影；`b39ed586` DeepSeek 有界 JSON；`78ff7f9b`/`4460f1ac`/`c67ec38f` 有界输出及旧删除事件免综合；`b28c81f6`/`c5d410e8` 原始文件向量与精确关键词召回。
+- 最终运行镜像 `team-kb-webapp:c5d410e8`，manifest `sha256:9d63c389d107b953b90eef7cb6e385c16d0f8904c95902c07bc314eb5278f3ab`；本地 latest 同步指向此镜像，原镜像保留为 `team-kb-webapp:base-7dfd9a841893`。源代码来自 Git 快照，依赖和前端输入核对一致，未包含无关工作区改动。
+- 累计迁移生成调用 14 次，13 次 usage 合计 41677 tokens；首次失败 usage 缺失。成功摘要仅 1 次，续跑复用。预算计入 85024 tokens，保守保留失败预留，未提高 100000 上限。未配置价格，不能把 cost=0 当作免费。详见迁移报告。
+- 实际 HTTP 文件尾部查询 Top-5 命中原文。真实 PostgreSQL 对话事实配合固定 planner：冷检索 1 次，热新增检索 0 次，命中 1 次，答案/引用有效；此控制实验无生成调用，不推算线上费用节省率。
+- 最终全库单元/契约回归 526 passed / 39 skipped，ruff 通过；最终 PostgreSQL 模块 25 passed / 7 skipped（未设置 Neo4j 等专项开关），原始文件检索专项 1 passed。前序完整 PostgreSQL/Neo4j 回归 31 passed。独立临时测试容器已关闭，用户服务继续运行。
+- 原始证据保存在非提交 output/：rebuild-final-verification.json、rebuild-api-verification.json、rebuild-provider-usage.json 与执行日志。操作说明与脱敏报告位于 docs/memory-cost-controls.md 和 docs/file-memory-migration-2026-09-11.md。

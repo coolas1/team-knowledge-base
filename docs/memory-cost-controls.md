@@ -53,3 +53,12 @@ uv run python -m src.engine.hindsight_components.file_rebuild_runner verify --ba
 运行拒绝源内容/revision/摘要策略变化。已有新写入时采用前向修复，禁止把旧备份覆盖回去。`awaiting_unrelated_consolidation` 要求当前范围的其他来源队列先完成；迁移不会吞掉那些事件。不同 scope 的任务不由本次迁移领取。
 
 迁移前确认所有读写 worker 使用相同的新版本；旧容器不会因为当前分支有提交而自动更新。按仓库部署流程升级后，重新生成并核对 manifest 和备份，再运行迁移。目标备份、原文和凭据保存在 `output/` 等非提交位置。
+
+
+## 运行参数与本次验收
+
+当前摘要模板为 `bounded-overview-v2`。DeepSeek V4/V3.2 的有界 JSON 调用使用非思考模式，避免小额输出预算在 JSON 产生前耗尽；其他模型和未限定输出的调用不附加此参数。
+
+迁移 consolidation 的事件 batch=64、action limit=4、输出最多 4,096 tokens，二者独立。对已完成证据失效的旧删除事件只推进队列，不重复生成。普通关键词和向量召回可以返回原文 chunk，原文 chunk 不进入 fact cache；显式 conversation/observation 过滤或不请求 chunks 时不会混入文件片段。
+
+本机历史数据已完成迁移：361 → 108 条页面可见记忆。备份、非目标校验、调用统计和回滚边界见 [2026-09-11 验收报告](file-memory-migration-2026-09-11.md)。

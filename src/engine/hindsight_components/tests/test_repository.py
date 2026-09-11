@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
+from src.engine.hindsight_components.types import RecallFilter
 from src.engine.hindsight_components.utils import (
     document_lock_key,
     lexical_tokens,
@@ -173,7 +174,12 @@ async def test_indexed_keyword_search_limits_materialized_candidates() -> None:
         keyword_index_enabled=True,
         keyword_candidate_limit=300,
     )
-    assert await repository.keyword_search("TKB 知识库", 50) == []
+    assert (
+        await repository.keyword_search(
+            "TKB 知识库", 50, filters=RecallFilter(include=())
+        )
+        == []
+    )
 
     compiled = session.statement.compile(dialect=postgresql.dialect())
     sql = str(compiled).lower()
