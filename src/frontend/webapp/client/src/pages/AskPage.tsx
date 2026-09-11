@@ -20,6 +20,7 @@ import {
   type AgentSessionDetail,
   type PiAgentEvent,
 } from '../api/client'
+import { randomUUID } from '../api/uuid'
 import './AskPage.css'
 import { appendActivity } from './tool-activity'
 import {
@@ -296,7 +297,7 @@ export function AskPage() {
     const sessionId = sessionRef.current
     if (!sessionId) return
 
-    const clientMessageId = crypto.randomUUID()
+    const clientMessageId = randomUUID()
     const pending = optimisticMessages(prompt, clientMessageId)
     const assistantId = pending[1].id
     // A send implies a session is ready, so no session operation is pending.
