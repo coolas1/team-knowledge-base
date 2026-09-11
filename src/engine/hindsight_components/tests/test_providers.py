@@ -96,3 +96,53 @@ async def test_enabled_llm_without_model_raises(
 
     with pytest.raises(ValueError, match="LLM_MODEL"):
         await provider.text("system", "user")
+
+
+async def test_json_mode_explicitly_requests_json(monkeypatch):
+    monkeypatch.setattr(settings.llm, "base_url", "https://llm.example/v1")
+    monkeypatch.setattr(settings.llm, "model", "remote-model")
+    monkeypatch.setattr(provider_module.httpx, "AsyncClient", FakeClient)
+    FakeClient.response = {"choices": [{"message": {"content": '{"facts": []}'}}]}
+    assert await ProjectHindsightProviders(FakeEmbedder()).json(
+        "Extract facts.", "Source"
+    ) == {"facts": []}
+    payload = FakeClient.request[1]
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "json" in payload["messages"][0]["content"].lower()
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("deepseek-v4-flash-vision-exp", {"type": "disabled"}),
+        ("deepseek-v3.2", {"type": "disabled"}),
+        ("remote-model", None),
+    ],
+)
+async def test_bounded_json_reserves_output_for_json(monkeypatch, model, expected):
+    monkeypatch.setattr(settings.llm, "base_url", "https://llm.example/v1")
+    monkeypatch.setattr(settings.llm, "model", model)
+    monkeypatch.setattr(provider_module.httpx, "AsyncClient", FakeClient)
+    FakeClient.response = {"choices": [{"message": {"content": '{"facts": []}'}}]}
+    provider = ProjectHindsightProviders(FakeEmbedder())
+    await provider.json("Extract facts", "Source", max_tokens=2048)
+    assert FakeClient.request[1].get("thinking") == expected
+    await provider.json("Unbounded reasoning", "Source")
+    assert "thinking" not in FakeClient.request[1]
+
+
+async def test_json_with_usage_returns_provider_telemetry(monkeypatch):
+    monkeypatch.setattr(settings.llm, "base_url", "https://llm.example/v1")
+    monkeypatch.setattr(settings.llm, "model", "remote-model")
+    monkeypatch.setattr(provider_module.httpx, "AsyncClient", FakeClient)
+    FakeClient.response = {
+        "choices": [{"message": {"content": '{"actions": []}'}}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+    }
+
+    payload, usage = await ProjectHindsightProviders(FakeEmbedder()).json_with_usage(
+        "Consolidate.", "Evidence"
+    )
+
+    assert payload == {"actions": []}
+    assert usage["total_tokens"] == 15

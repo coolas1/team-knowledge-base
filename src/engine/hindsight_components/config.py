@@ -5,9 +5,23 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class HindsightOptions:
+    file_summary_enabled: bool = False
+    adaptive_reflect_enabled: bool = False
+    consolidation_enabled: bool = False
+    entity_resolution_enabled: bool = False
+    entity_candidate_limit: int = 10
+    entity_resolution_timeout_seconds: float = 60.0
+    entity_resolution_max_concurrent: int = 8
     chunk_tokens: int = 500
     chunk_overlap_tokens: int = 50
+    retain_chunk_concurrency: int = 4
+    fact_cache_capacity: int = 256
+    fact_cache_ttl_seconds: float = 1800
+    fact_context_limit: int = 8
+    fact_context_max_tokens: int = 1200
     recall_limit: int = 20
+    recall_max_results: int = 100
+    recall_max_candidates: int = 300
     recall_max_tokens: int = 4096
     retrieval_arm_minimum: int = 30
     rerank_limit: int = 40
@@ -38,12 +52,26 @@ class HindsightOptions:
     rerank_semantic_margin: float = 0.25
     reflect_subquery_limit: int = 3
     reflect_model_limit: int = 5
+    reflect_max_iterations: int = 8
+    reflect_max_tokens: int = 8192
+    reflect_total_timeout_seconds: float = 60
     # 自动留存的单轮对话内容上限（字符）：超出部分截断并附 [truncated]
     # 标记，避免粘贴的巨文档每轮触发数十次 LLM 抽取。
     conversation_max_turn_chars: int = 100_000
 
     def __post_init__(self) -> None:
+        if self.entity_candidate_limit > 100:
+            raise ValueError("entity_candidate_limit cannot exceed 100")
+        if self.fact_cache_capacity < 0:
+            raise ValueError("fact_cache_capacity cannot be negative")
         positive = {
+            "fact_cache_ttl_seconds": self.fact_cache_ttl_seconds,
+            "fact_context_limit": self.fact_context_limit,
+            "fact_context_max_tokens": self.fact_context_max_tokens,
+            "entity_candidate_limit": self.entity_candidate_limit,
+            "entity_resolution_timeout_seconds": self.entity_resolution_timeout_seconds,
+            "entity_resolution_max_concurrent": self.entity_resolution_max_concurrent,
+            "retain_chunk_concurrency": self.retain_chunk_concurrency,
             "deep_total_timeout_seconds": self.deep_total_timeout_seconds,
             "query_analysis_timeout_seconds": self.query_analysis_timeout_seconds,
             "query_embedding_timeout_seconds": self.query_embedding_timeout_seconds,
@@ -53,6 +81,12 @@ class HindsightOptions:
             "rerank_text_limit_chars": self.rerank_text_limit_chars,
             "rerank_total_chars": self.rerank_total_chars,
             "keyword_candidate_limit": self.keyword_candidate_limit,
+            "recall_max_results": self.recall_max_results,
+            "recall_max_candidates": self.recall_max_candidates,
+            "recall_max_tokens": self.recall_max_tokens,
+            "reflect_max_iterations": self.reflect_max_iterations,
+            "reflect_max_tokens": self.reflect_max_tokens,
+            "reflect_total_timeout_seconds": self.reflect_total_timeout_seconds,
         }
         invalid = [name for name, value in positive.items() if value <= 0]
         if invalid:

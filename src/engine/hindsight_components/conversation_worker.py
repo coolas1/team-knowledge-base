@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
+from src.engine.scope import MemoryScope, TagFilter
 from typing import Protocol
 
 from .conversation_queue import PostgresConversationMemoryQueue
@@ -14,6 +16,7 @@ from .types import (
     ConversationMemoryJob,
     ConversationRetentionBatchResult,
     RetainInput,
+    RetentionLeaseLost,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,7 +33,9 @@ class ConversationQueue(Protocol):
 
     async def get_status(self, document_id: str) -> str | None: ...
 
-    async def complete(self, document_id: str) -> bool: ...
+    async def complete(
+        self, document_id: str, *, lease_token: str | None = None
+    ) -> bool: ...
 
     async def fail(
         self,
@@ -39,6 +44,7 @@ class ConversationQueue(Protocol):
         *,
         max_attempts: int,
         retry_delay_seconds: float,
+        lease_token: str | None = None,
     ) -> str: ...
 
 
@@ -96,10 +102,24 @@ class ConversationRetentionWorker:
         )
 
     async def _process(self, job: ConversationMemoryJob) -> str:
-        if await self._queue.get_status(job.document_id) != "processing":
+        queue, service, cleaner = self._queue, self._service, self._memory_cleaner
+        scope = MemoryScope(
+            bank_id=job.bank_id,
+            visibility=TagFilter(job.tags, "all_strict") if job.tags else None,
+        )
+        if hasattr(queue, "with_scope"):
+            queue = queue.with_scope(scope)
+            service = service.with_scope(scope)
+            cleaner = cleaner.with_scope(scope)
+        elif scope != MemoryScope():
+            raise ValueError("worker dependencies do not support isolated scopes")
+        if await queue.get_status(job.document_id) != "processing":
             return "cancelled"
+        lease_args = {"lease_token": job.lease_token} if job.lease_token else {}
+        if job.lease_token:
+            service = service.with_lease(job.document_id, job.lease_token)
         try:
-            await self._service.retain(
+            retained = await service.retain(
                 RetainInput(
                     document_id=job.document_id,
                     title=job.title,
@@ -107,32 +127,72 @@ class ConversationRetentionWorker:
                     file_type="conversation",
                     source_type="conversation",
                     context=self._retention_context,
-                    tags=("conversation", f"session:{job.session_id}"),
+                    tags=tuple(
+                        dict.fromkeys(
+                            (*job.tags, "conversation", f"session:{job.session_id}")
+                        )
+                    ),
                     metadata={
                         "session_id": job.session_id,
                         "turn_id": job.turn_id,
                     },
+                    agent_name=job.source_context.get("agent_name"),
+                    speakers=job.source_context.get("speakers", {}),
+                    source_timestamp=datetime.fromisoformat(
+                        job.source_context["source_timestamp"]
+                    )
+                    if job.source_context.get("source_timestamp")
+                    else None,
+                    reference_timezone=job.source_context.get(
+                        "reference_timezone", "UTC"
+                    ),
+                    policy_version=job.source_context.get("policy_version", 1),
                 )
             )
+            if job.lease_token and hasattr(queue, "record_stages"):
+                await queue.record_stages(
+                    job.document_id,
+                    getattr(retained, "stage_results", {}),
+                    **lease_args,
+                )
+            stage_results = getattr(retained, "stage_results", {}) or {}
+            critical_stage_incomplete = any(
+                value in {"degraded", "failed"}
+                for stage, value in stage_results.items()
+                if stage != "entities"
+            )
+            if (
+                getattr(retained, "status", "success") == "failed"
+                or critical_stage_incomplete
+            ):
+                raise RuntimeError("retention_stage_incomplete")
         except asyncio.CancelledError:
             raise
+        except RetentionLeaseLost:
+            return "cancelled"
         except Exception as error:
             delay = min(
                 self._retry_delay_seconds * (2 ** max(job.attempts - 1, 0)),
                 self._max_retry_delay_seconds,
             )
-            return await self._queue.fail(
+            return await queue.fail(
                 job.document_id,
-                str(error),
+                f"{type(error).__name__}: retention_failed",
                 max_attempts=self._max_attempts,
                 retry_delay_seconds=delay,
+                **lease_args,
             )
 
-        if await self._queue.complete(job.document_id):
+        if await queue.complete(job.document_id, **lease_args):
             return "completed"
 
+        if job.lease_token:
+            # A new worker may already have committed; stale cleanup must not
+            # remove its result. Explicit forgetting owns cancellation cleanup.
+            return "cancelled"
+
         try:
-            await self._memory_cleaner.delete_document(job.document_id)
+            await cleaner.delete_document(job.document_id)
         except Exception:
             logger.exception(
                 "Failed to clean cancelled conversation memory %s", job.document_id
@@ -199,10 +259,11 @@ def build_conversation_worker_runtime(
     retry_delay_seconds: float = 1.0,
     max_retry_delay_seconds: float = 300.0,
     retention_context: str = "Completed team conversation turn",
+    consolidation_enabled: bool = False,
 ) -> ConversationWorkerRuntime:
-    repository = PostgresMemoryRepository()
+    repository = PostgresMemoryRepository(consolidation_enabled=consolidation_enabled)
     worker = ConversationRetentionWorker(
-        PostgresConversationMemoryQueue(),
+        PostgresConversationMemoryQueue(all_banks=True),
         HindsightService(repository, ProjectHindsightProviders()),
         repository,
         max_concurrent=max_concurrent,

@@ -12,10 +12,12 @@ from src.engine.interface import DocumentIndexHook, KnowledgeBase
 @dataclass
 class MemorySettings:
     retain_max_concurrent: int = 1
+    consolidation_enabled: bool = False
 
 
 @dataclass
 class IngestSettings:
+    vector_only: bool = True
     chunk_concurrency: int = 4
     doc_concurrency: int = 2
     llm_retries: int = 3
@@ -34,7 +36,10 @@ class EngineConfig:
 def engine_config_from_app(app: AppConfig) -> EngineConfig:
     """Map AppConfig (engine.memory flags) onto EngineConfig."""
     memory = (
-        MemorySettings(retain_max_concurrent=app.engine.memory.retain_max_concurrent)
+        MemorySettings(
+            retain_max_concurrent=app.engine.memory.retain_max_concurrent,
+            consolidation_enabled=app.engine.memory.features.consolidation,
+        )
         if app.engine.memory.enabled
         else None
     )
@@ -42,6 +47,7 @@ def engine_config_from_app(app: AppConfig) -> EngineConfig:
         impl=app.engine.impl,
         config_dir=Path(app.engine.config),
         ingest=IngestSettings(
+            vector_only=app.engine.ingest.vector_only,
             chunk_concurrency=app.engine.ingest.chunk_concurrency,
             doc_concurrency=app.engine.ingest.doc_concurrency,
             llm_retries=app.engine.ingest.llm_retries,

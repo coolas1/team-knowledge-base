@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from src.engine.scope import DEFAULT_BANK_ID
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,6 +13,8 @@ class MemoryGraphDocument:
     title: str
     file_type: str
     overview: str = ""
+    bank_id: str = DEFAULT_BANK_ID
+    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

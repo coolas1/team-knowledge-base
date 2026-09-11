@@ -1,0 +1,45 @@
+{
+  "scope": "extraction_only",
+  "status": "failed",
+  "expected_records": 48,
+  "missing_results": [],
+  "missing_reviews": [],
+  "engines": {
+    "upstream": {
+      "records": 24,
+      "failed_or_degraded": 0,
+      "p50_seconds": 15.6875,
+      "p95_seconds": 30.968000000000757,
+      "missing_usage_records": 0,
+      "tokens": {
+        "input": 75258,
+        "visible_output": 3298,
+        "reasoning": 43388,
+        "total": 121944
+      }
+    },
+    "tkb": {
+      "records": 24,
+      "failed_or_degraded": 0,
+      "p50_seconds": 19.03900000000067,
+      "p95_seconds": 43.875,
+      "missing_usage_records": 0,
+      "tokens": {
+        "input": 11241,
+        "visible_output": 2824,
+        "reasoning": 56049,
+        "total": 70114
+      }
+    }
+  },
+  "semantic_scores": {
+    "attribution": {
+      "upstream": 0.5,
+      "tkb": 1.0
+    },
+    "time": {
+      "upstream": 1.0,
+      "tkb": 0.75
+    }
+  }
+}

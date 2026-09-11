@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -78,6 +79,22 @@ async def test_dry_run_only_lists_candidates():
     assert source.calls == [("d1", False)]
     assert service.calls == []
     assert states.states == []
+
+
+@pytest.mark.parametrize("outcome", ["degraded", "failed"])
+async def test_backfill_does_not_count_incomplete_extraction_as_success(outcome):
+    class IncompleteService(FakeService):
+        async def retain(self, **kwargs):
+            result = await super().retain(**kwargs)
+            return replace(result, status=outcome, error_code="extraction_incomplete")
+
+    report = await run_backfill(
+        FakeSource([candidate("d1")]), IncompleteService(), FakeStateStore()
+    )
+    assert report.succeeded == 0
+    assert report.failed == 1
+    assert report.items[0].status == outcome
+    assert report.items[0].error == "extraction_incomplete"
 
 
 async def test_backfill_retains_raw_text_without_reindexing():

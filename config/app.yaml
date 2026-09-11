@@ -2,6 +2,7 @@ engine:
   impl: graphrag
   config: config/engine/graphrag
   ingest:
+    vector_only: true
     chunk_concurrency: 4
     doc_concurrency: 2
     # 模型端点瞬时失败（超时/连接错误/HTTP 429/5xx）的有界重试：
@@ -10,6 +11,26 @@ engine:
     llm_backoff_base_seconds: 2
   memory:
     enabled: true
+    fact_cache_capacity: 256
+    fact_cache_ttl_seconds: 1800
+    fact_context_limit: 8
+    fact_context_max_tokens: 1200
+    retain_chunk_concurrency: 4
+    entity_resolution_max_concurrent: 8
+    entity_resolution_timeout_seconds: 60
     graph_worker: true
+    consolidation_batch_size: 32
+    consolidation_max_iterations: 100
+    consolidation_max_tokens: 3200000
+    consolidation_llm_timeout_seconds: 300
+    consolidation_lease_seconds: 720
+    features:
+      scope: true
+      reliable_retention: true
+      entity_resolution: true
+      consolidation: true
+      evidence_retrieval: true
+      mental_models: true
+      adaptive_reflect: true
 plugin:
   impl: tkb

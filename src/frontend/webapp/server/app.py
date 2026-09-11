@@ -26,6 +26,7 @@ from src.frontend.webapp.server.routes_query import router as query_router
 from src.frontend.webapp.server.routes_agent import router as agent_router
 from src.frontend.webapp.server.routes_artifacts import router as artifacts_router
 from src.frontend.webapp.server.routes_config import router as config_router
+from src.frontend.webapp.server.routes_memory import router as memory_router
 from src.agent.tkb.mcp.server import build_app as build_mcp_app
 
 SPA_DIST = Path(os.getenv("SPA_DIST", "src/frontend/webapp/client/dist"))
@@ -69,6 +70,7 @@ api.include_router(graph_router)
 api.include_router(agent_router)
 api.include_router(artifacts_router)
 api.include_router(config_router)
+api.include_router(memory_router)
 app.include_router(api)
 
 # MCP: always mounted in-process (single-app wiring).

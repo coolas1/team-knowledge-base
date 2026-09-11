@@ -72,6 +72,11 @@ describe("conversation memory health reporting", () => {
     ).mockRejectedValue(new Error("retention endpoint down"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
+    vi.spyOn(runtime as any, "loadSession").mockResolvedValue({
+      mcpClient: new TkbMcpClient(loadTkbAdapterConfig()),
+    });
+    vi.spyOn(runtime as any, "findSubmissionByTurn").mockResolvedValue(undefined);
+
     await (
       runtime as unknown as {
         enqueueCompletedTurn: (

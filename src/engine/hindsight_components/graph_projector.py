@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from .graph_types import MemoryGraphProjection
+from src.engine.scope import MemoryScope
 
 MEMORY_LINK_RELATIONSHIPS = {
     "caused_by": "CAUSED_BY",
@@ -16,6 +17,8 @@ MEMORY_LINK_RELATIONSHIPS = {
 
 
 class MemoryGraphStore(Protocol):
+    def with_scope(self, scope: MemoryScope) -> MemoryGraphStore: ...
+
     async def ensure_schema(self) -> None: ...
 
     async def replace_document(self, projection: MemoryGraphProjection) -> None: ...
@@ -28,6 +31,9 @@ class MemoryGraphProjector:
 
     def __init__(self, store: MemoryGraphStore) -> None:
         self._store = store
+
+    def with_scope(self, scope: MemoryScope) -> MemoryGraphProjector:
+        return MemoryGraphProjector(self._store.with_scope(scope))
 
     async def ensure_schema(self) -> None:
         await self._store.ensure_schema()
@@ -43,6 +49,7 @@ class MemoryGraphProjector:
 
     @staticmethod
     def _validate(projection: MemoryGraphProjection) -> None:
+        MemoryScope(bank_id=projection.document.bank_id)
         document_id = projection.document.id.strip()
         if not document_id:
             raise ValueError("document id cannot be empty")
@@ -61,18 +68,14 @@ class MemoryGraphProjector:
             memory_ids.add(memory.id)
 
         entity_ids: set[str] = set()
-        normalized_names: set[str] = set()
         for entity in projection.entities:
             if not entity.id.strip() or not entity.normalized_name.strip():
                 raise ValueError("entity id and normalized_name cannot be empty")
             if entity.id in entity_ids:
                 raise ValueError(f"duplicate entity id: {entity.id}")
-            if entity.normalized_name in normalized_names:
-                raise ValueError(
-                    f"duplicate normalized entity: {entity.normalized_name}"
-                )
+            # Names are search attributes. Distinct scoped entity IDs may share
+            # a name and must keep their own mentions in the projection.
             entity_ids.add(entity.id)
-            normalized_names.add(entity.normalized_name)
 
         mentions: set[tuple[str, str, str]] = set()
         for mention in projection.mentions:

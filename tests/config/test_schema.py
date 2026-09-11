@@ -1,4 +1,5 @@
 """AppConfig parsing for the engine.memory capability block."""
+
 from config.schema import load_config
 
 
@@ -7,6 +8,11 @@ def test_memory_defaults_off(tmp_path):
     assert cfg.engine.memory.enabled is False
     assert cfg.engine.memory.graph_worker is True
     assert cfg.engine.memory.retain_max_concurrent == 1
+    assert cfg.engine.memory.retain_chunk_concurrency == 4
+    assert cfg.engine.memory.entity_resolution_max_concurrent == 8
+    assert cfg.engine.memory.entity_resolution_timeout_seconds == 60
+    assert cfg.engine.memory.consolidation_llm_timeout_seconds == 300
+    assert cfg.engine.memory.consolidation_lease_seconds == 720
 
 
 def test_memory_block_parses(tmp_path):
@@ -17,7 +23,8 @@ def test_memory_block_parses(tmp_path):
         "  memory:\n"
         "    enabled: true\n"
         "    graph_worker: false\n"
-        "    retain_max_concurrent: 2\n",
+        "    retain_max_concurrent: 2\n"
+        "    retain_chunk_concurrency: 3\n",
         encoding="utf-8",
     )
     cfg = load_config(p)
@@ -25,6 +32,7 @@ def test_memory_block_parses(tmp_path):
     assert cfg.engine.memory.enabled is True
     assert cfg.engine.memory.graph_worker is False
     assert cfg.engine.memory.retain_max_concurrent == 2
+    assert cfg.engine.memory.retain_chunk_concurrency == 3
 
 
 def test_host_axis_rejected():

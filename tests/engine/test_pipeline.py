@@ -153,9 +153,7 @@ class _FakeEmbedder:
 
 def _multi_chunk_text() -> str:
     # chunk_size=500 tokens ≈ 1000 字符，每段 ~1200 字符确保切成多块
-    return "# T\n\n" + "\n\n".join(
-        f"段落 {i} " + "内容文字" * 150 for i in range(8)
-    )
+    return "# T\n\n" + "\n\n".join(f"段落 {i} " + "内容文字" * 150 for i in range(8))
 
 
 async def test_analyze_document_runs_chunks_parallel_and_bounded(monkeypatch):
@@ -401,16 +399,18 @@ class _ThreadRecordingRegistry:
         return "# T\n\n" + "内容文字" * 300
 
 
+@pytest.mark.parametrize("vector_only", [False, True])
 async def test_process_file_indexes_document_with_fakes(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, vector_only
 ):
     from types import SimpleNamespace
+    from unittest.mock import AsyncMock
 
     from src.engine.graphrag import pipeline as pipeline_mod
 
     doc_id = uuid4()
     doc = SimpleNamespace(
-        id=doc_id, content_hash=None, status="pending"
+        id=doc_id, content_hash=None, status="pending", bank_id="default-team", tags=[]
     )
     session = _PipelineSession({doc_id: doc})
     monkeypatch.setattr(pipeline_mod, "async_session_factory", lambda: session)
@@ -421,7 +421,10 @@ async def test_process_file_indexes_document_with_fakes(
     file_path = tmp_path / "t.md"
     file_path.write_text("# T", encoding="utf-8")
 
-    pipe = Pipeline(neo, analyzer=_RecordingAnalyzer())
+    analyzer = _RecordingAnalyzer()
+    analyzer.summarize_document = analyzer.analyze_overview
+    pipe = Pipeline(neo, analyzer=analyzer, vector_only=vector_only)
+    pipe._notify_indexed = AsyncMock()
     await pipe.process_file(doc_id, file_path, "t.md", "markdown")
 
     import threading
@@ -435,6 +438,11 @@ async def test_process_file_indexes_document_with_fakes(
     assert len(neo.doc_nodes) == 1
     assert neo.entity_items is not None  # 批量图谱写入被调用
     assert session.added  # chunk 行已入队
+    retained = pipe._notify_indexed.call_args.kwargs["content"]
+    assert retained.startswith("# T")  # retain resolves the persisted summary by identity
+    assert bool(analyzer.chunk_calls) is not vector_only
+    stored = [stmt.compile().params for stmt in session.statements]
+    assert any(str(params.get("raw_text", "")).startswith("# T") for params in stored)
 
 
 async def test_process_file_doc_semaphore_serializes(monkeypatch, tmp_path):
@@ -463,7 +471,13 @@ async def test_process_file_doc_semaphore_serializes(monkeypatch, tmp_path):
     analyzer.analyze_overview = gated_overview
 
     docs = {
-        doc_id: SimpleNamespace(id=doc_id, content_hash=None, status="pending")
+        doc_id: SimpleNamespace(
+            id=doc_id,
+            content_hash=None,
+            status="pending",
+            bank_id="default-team",
+            tags=[],
+        )
         for doc_id in [uuid4(), uuid4()]
     }
     sessions = []

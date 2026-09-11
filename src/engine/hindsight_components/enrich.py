@@ -1,4 +1,5 @@
 """Enrich DocumentRef/document dicts with memory (Hindsight) state."""
+
 from __future__ import annotations
 
 import logging
@@ -23,6 +24,9 @@ class MemoryStateEnricher:
 
     def __init__(self, reader: DocumentStateReader) -> None:
         self._reader = reader
+
+    def with_scope(self, scope):
+        return MemoryStateEnricher(self._reader.with_scope(scope))
 
     async def enrich_ref(self, ref: DocumentRef) -> None:
         self._apply(ref, await self.safe_state(ref.id), ref.status)

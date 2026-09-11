@@ -43,7 +43,8 @@ def test_build_memory_wiring(monkeypatch):
     built = {}
 
     class FakeRepo:
-        pass
+        def __init__(self, **kwargs):
+            built["repository_options"] = kwargs
 
     def fake_hook(*, max_concurrent, repository):
         built["hook"] = (max_concurrent, repository)
@@ -58,6 +59,8 @@ def test_build_memory_wiring(monkeypatch):
         doc_concurrency,
         llm_retries,
         llm_backoff_base_seconds,
+        vector_only,
+        summary_manager,
     ):
         built["pipeline_hook"] = index_hook
         built["ingest"] = (
@@ -87,6 +90,7 @@ def test_build_memory_wiring(monkeypatch):
     )
     backend_mod.build(cfg)
     assert built["hook"][0] == 2
+    assert built["repository_options"] == {"consolidation_enabled": False}
     assert isinstance(built["hook"][1], FakeRepo)
     assert built["pipeline_hook"] is not None
     # engine.ingest 旋钮（并发 + 重试预算）真实传入 Pipeline

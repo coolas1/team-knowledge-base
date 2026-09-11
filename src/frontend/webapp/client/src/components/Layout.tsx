@@ -6,6 +6,7 @@ import {
   FileUp,
   LoaderCircle,
   MessageSquare,
+  BrainCircuit,
   Network,
   RefreshCw,
   Search,
@@ -120,6 +121,10 @@ export function Layout() {
           <NavLink to="/ask" className={({ isActive }) => `app-nav-link${isActive ? ' is-active' : ''}`}>
             <MessageSquare size={17} aria-hidden="true" />
             <span>提问</span>
+          </NavLink>
+          <NavLink to="/memory" className={({ isActive }) => `app-nav-link${isActive ? ' is-active' : ''}`}>
+            <BrainCircuit size={17} aria-hidden="true" />
+            <span>记忆</span>
           </NavLink>
         </nav>
         <div className="app-header-spacer" />

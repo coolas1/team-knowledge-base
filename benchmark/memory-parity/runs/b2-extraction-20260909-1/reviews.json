@@ -1,0 +1,386 @@
+[
+  {
+    "key": "parity-001:1:upstream",
+    "row_sha256": "addbcb84263829562c790e7485716b1914f00782c8b66e50f8bc0dc6109d2b79",
+    "passed": false,
+    "reason": "Main human attribution correct, but missing the assistant suggestion/recording clause explicitly required by the fixed expected result.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-001:1:tkb",
+    "row_sha256": "eb745fa7e57cf4c273158e2f427c7c8c4829d8bb4a2fdbc20d28aaa5a07a101f",
+    "passed": true,
+    "reason": "User bought blue car; assistant suggestion preserved without asserting insurance purchase.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-002:1:upstream",
+    "row_sha256": "6e2aa2b4c89cf4b128c04502daa070d665eaf547a43c7b0234c2d2cf96daf40d",
+    "passed": true,
+    "reason": "Migration remains planned and explicitly not executed.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-002:1:tkb",
+    "row_sha256": "7d3782a17ddab23785921de84fede092549bf5133041755a7fc6e85b5861e878",
+    "passed": true,
+    "reason": "Migration remains planned and explicitly not executed.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-003:1:upstream",
+    "row_sha256": "71d495d3ed1188f34237d0359b674b9b2a0bdbdbec4de97ba603bf44fde58d32",
+    "passed": false,
+    "reason": "Main human attribution correct, but missing the assistant suggestion/recording clause explicitly required by the fixed expected result.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-003:1:tkb",
+    "row_sha256": "a46228a3b7418faa3f192cfb89ee68b4bbc2a57b187191b72e3429ea2f6a7697",
+    "passed": true,
+    "reason": "Repair attributed to Li Ming, with assistant recording kept separate.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-004:1:upstream",
+    "row_sha256": "55621e4f44636fc1dd017f090ab96227dbf27cc92934e6bdf2f3353e3fa5aee8",
+    "passed": true,
+    "reason": "User email preference is world; assistant notification action is experience.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-004:1:tkb",
+    "row_sha256": "157661ebf1cae3f57b00d977cc5bb23d90561bf2b9f5d9ebfa302742ad424f81",
+    "passed": true,
+    "reason": "User email preference is world; assistant notification action is experience.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-021:1:upstream",
+    "row_sha256": "2bdfdfafdd0c9e538a50755f32a40dade8dc4d8174d303c2a3c3d6d25a96bce8",
+    "passed": true,
+    "reason": "Release resolves to 2026-08-19 in source timezone, not ingestion date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-021:1:tkb",
+    "row_sha256": "b4cc000cda2e4984e23f8683abdf98f962c1cd9d1f9768949ee719e7d8cfe399",
+    "passed": true,
+    "reason": "Release resolves to 2026-08-19 in source timezone, not ingestion date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-022:1:upstream",
+    "row_sha256": "c873cd59b12d11289ba8d9652604206596bc2fd9dc8e6b82533249642a1005ac",
+    "passed": true,
+    "reason": "Meeting resolves to 2026-08-31 in Asia/Shanghai; UTC storage does not change local date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-022:1:tkb",
+    "row_sha256": "938370ed178a5c0c4961c9518dc66f6c0ac2c56f75b83fd0fb87a81cd2470bad",
+    "passed": true,
+    "reason": "Meeting resolves to 2026-08-31 in Asia/Shanghai; UTC storage does not change local date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-023:1:upstream",
+    "row_sha256": "45d2440514cb27fabf3e85ca3350adf4df54e8bb83b246a6d7ced8322905befa",
+    "passed": true,
+    "reason": "General preference has no fabricated event date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-023:1:tkb",
+    "row_sha256": "48f5aaa31724b67511a8732aed4cfe387a08b7b5553edf153d9fa90e92fed0d5",
+    "passed": true,
+    "reason": "General preference has no fabricated event date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-024:1:upstream",
+    "row_sha256": "1c9d1922d3f96d436ee4a8943598e4a4c6148cc2c9267ff41e2e1a89832fde48",
+    "passed": true,
+    "reason": "Text preserves June 2025 and timestamps express a month range, not a claimed exact visit day.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-024:1:tkb",
+    "row_sha256": "ef279bbcbe9e360837924d5c0fc159fc2e6838d25b109be3f51d7ed61bfb551f",
+    "passed": false,
+    "reason": "Month text is correct, but user travel is incorrectly classified as Agent experience, violating B2 world/experience attribution.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-001:2:upstream",
+    "row_sha256": "1b089ac602eac39a870232196640d5086a0b769c40a8bac762daf30026b6ff29",
+    "passed": false,
+    "reason": "Main human attribution correct, but missing the assistant suggestion/recording clause explicitly required by the fixed expected result.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-001:2:tkb",
+    "row_sha256": "425782888a4ebb8228effdf813d16023634dcd04e3d5198f5babd748a0e93d04",
+    "passed": true,
+    "reason": "User bought blue car; assistant suggestion preserved without asserting insurance purchase.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-002:2:upstream",
+    "row_sha256": "80398a1a424d57fc180a6d2308d746c8d6a6c194bc73e6e2b0416ef7571426d5",
+    "passed": true,
+    "reason": "Migration remains planned and explicitly not executed.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-002:2:tkb",
+    "row_sha256": "6957daa617658303a8333581514abfadc4d33b464fe1046481653a42589fad70",
+    "passed": true,
+    "reason": "Migration remains planned and explicitly not executed.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-003:2:upstream",
+    "row_sha256": "c34be85901f032c01a1932654cf6a409a411ba7243864a614bb085b6eeb28707",
+    "passed": false,
+    "reason": "Main human attribution correct, but missing the assistant suggestion/recording clause explicitly required by the fixed expected result.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-003:2:tkb",
+    "row_sha256": "880241d822d9b4c07bd658795ee2b160cd6b4ddaf7c1eb3713fb9a07973eeb8e",
+    "passed": true,
+    "reason": "Repair attributed to Li Ming, with assistant recording kept separate.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-004:2:upstream",
+    "row_sha256": "3e2b1ad455fe6b64cebf8cad0bfdddbd782c35a7a3c5dc1a5dfc41f42082d8f0",
+    "passed": true,
+    "reason": "User email preference is world; assistant notification action is experience.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-004:2:tkb",
+    "row_sha256": "c94d771fd1400e0eefd6580ec96a7104848ffc6e4ef112d6340c924d106a0468",
+    "passed": true,
+    "reason": "User email preference is world; assistant notification action is experience.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-021:2:upstream",
+    "row_sha256": "187ece837dcac6fd74873d8dab2fa3bb8591d69fdfde40667610b75223d5d55b",
+    "passed": true,
+    "reason": "Release resolves to 2026-08-19 in source timezone, not ingestion date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-021:2:tkb",
+    "row_sha256": "a54c39c42f560b5ff08db9b93945c072fa84efa9f8d5fd6bf4ef24aab034d18c",
+    "passed": true,
+    "reason": "Release resolves to 2026-08-19 in source timezone, not ingestion date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-022:2:upstream",
+    "row_sha256": "5ad5915a945ffc9f4c96c4b55bf3b4a0da59a48e5cbeb3c8b7bbaefc4ca6d380",
+    "passed": true,
+    "reason": "Meeting resolves to 2026-08-31 in Asia/Shanghai; UTC storage does not change local date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-022:2:tkb",
+    "row_sha256": "f6b852057e52f16ff417e5d9c57c35b0a5a67d8a89d5901b7e3ea916e62e3fa5",
+    "passed": true,
+    "reason": "Meeting resolves to 2026-08-31 in Asia/Shanghai; UTC storage does not change local date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-023:2:upstream",
+    "row_sha256": "943cd358493a2474e82566702c7c9b6cbf0e705905d4aa59641c310a901c4181",
+    "passed": true,
+    "reason": "General preference has no fabricated event date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-023:2:tkb",
+    "row_sha256": "99fe5e58ab8d40b4cd0b0aff5bd54d6559fb336337f54379392ec9e7ad37e771",
+    "passed": true,
+    "reason": "General preference has no fabricated event date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-024:2:upstream",
+    "row_sha256": "0a4967ea6f08c1880d92b51acaa4fda79befad3d1858e4c098ee3e24301b0a20",
+    "passed": true,
+    "reason": "Text preserves June 2025 and timestamps express a month range, not a claimed exact visit day.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-024:2:tkb",
+    "row_sha256": "538b00aa3765a071c1da4c836478ab40427023a82ed694109e2f2ea8e0aa4d4c",
+    "passed": false,
+    "reason": "Month text is correct, but user travel is incorrectly classified as Agent experience, violating B2 world/experience attribution.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-001:3:upstream",
+    "row_sha256": "3d73525194360c9c47c3dd9b46a193be4cefa2edf8af8ce8c8cf2315fc24b476",
+    "passed": false,
+    "reason": "Main human attribution correct, but missing the assistant suggestion/recording clause explicitly required by the fixed expected result.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-001:3:tkb",
+    "row_sha256": "c30f1fd0dde49b3b80fe9e9aa6c983452929ecba444f9861ec80b56b95eafc30",
+    "passed": true,
+    "reason": "User bought blue car; assistant suggestion preserved without asserting insurance purchase.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-002:3:upstream",
+    "row_sha256": "7e018f6b00254001657601bed20a1dd67a1c985688fbfc698dcbc123c749a8b1",
+    "passed": true,
+    "reason": "Migration remains planned and explicitly not executed.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-002:3:tkb",
+    "row_sha256": "aa5c684f7c8dd0acacafbc9399c3919cace20e73846de5dc0b45dcc6a364bc2a",
+    "passed": true,
+    "reason": "Migration remains planned and explicitly not executed.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-003:3:upstream",
+    "row_sha256": "512cb31ab8831dc02f30cfd7b1b628bc586aea403c68400111f22632c9e4638e",
+    "passed": false,
+    "reason": "Main human attribution correct, but missing the assistant suggestion/recording clause explicitly required by the fixed expected result.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-003:3:tkb",
+    "row_sha256": "456fb077857b614b934887f00151c1c0de9ff084edc493a411bcc74b43157e07",
+    "passed": true,
+    "reason": "Repair attributed to Li Ming, with assistant recording kept separate.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-004:3:upstream",
+    "row_sha256": "8bfcbfcb6db48c18d4429f6ad14ec2f67855c7150cea5a81745550e3c41a234b",
+    "passed": true,
+    "reason": "User email preference is world; assistant notification action is experience.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-004:3:tkb",
+    "row_sha256": "956e179319c84fcc0ff37404ec54f74ecf10cfa55ea6dfe79ee91a6a63fa3e2e",
+    "passed": true,
+    "reason": "User email preference is world; assistant notification action is experience.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-021:3:upstream",
+    "row_sha256": "bb201188d10cce4889f3ef5679896e0bf2e17982c1ab4ed8ec8d4b79954d54ee",
+    "passed": true,
+    "reason": "Release resolves to 2026-08-19 in source timezone, not ingestion date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-021:3:tkb",
+    "row_sha256": "6610cb8206e5469d6b65e6c21722a625e07fd465d8137e7e423cbf685565a81e",
+    "passed": true,
+    "reason": "Release resolves to 2026-08-19 in source timezone, not ingestion date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-022:3:upstream",
+    "row_sha256": "62320b7dfae4be9fc7ff2bfdb772fd78c7bab956713fa7041d679a773eceeef6",
+    "passed": true,
+    "reason": "Meeting resolves to 2026-08-31 in Asia/Shanghai; UTC storage does not change local date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-022:3:tkb",
+    "row_sha256": "758fcc79688ba4bd8f9a68ff3cca10f3cb12bcde02dc2d4f7697734f4ab19042",
+    "passed": true,
+    "reason": "Meeting resolves to 2026-08-31 in Asia/Shanghai; UTC storage does not change local date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-023:3:upstream",
+    "row_sha256": "98691ce5d49c9fee933f111b51b042c91a74f28447f49a63d89fb8940be958e5",
+    "passed": true,
+    "reason": "General preference has no fabricated event date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-023:3:tkb",
+    "row_sha256": "23852827e1367019415d395e0c3d3264485f8b916ac5d7ef46f5202ab97d36e3",
+    "passed": true,
+    "reason": "General preference has no fabricated event date.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-024:3:upstream",
+    "row_sha256": "3c20ee0737a53874fb74528fd52ee0485118148cca173397c28e04c85395cd40",
+    "passed": true,
+    "reason": "Text preserves June 2025 and timestamps express a month range, not a claimed exact visit day.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  },
+  {
+    "key": "parity-024:3:tkb",
+    "row_sha256": "4311cc1ed15ab5af2c75676e10032ccbb341c82d9a0a017f9ac434035ed99b1f",
+    "passed": false,
+    "reason": "Month text is correct, but user travel is incorrectly classified as Agent experience, violating B2 world/experience attribution.",
+    "reviewer": "Codex source-and-output review",
+    "criteria": "All expected clauses, no forbidden assertion, and B2 actor/type invariant; date bounds are ranges rather than exact-day assertions."
+  }
+]

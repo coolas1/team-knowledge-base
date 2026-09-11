@@ -1,5 +1,58 @@
 const BASE = '/api'
 
+export interface MemoryOperation {
+  id: string
+  status: string
+  stages: Record<string, string>
+  kind: 'conversation' | 'document' | 'consolidation' | 'mental_model' | 'operation'
+  subject?: string
+  session_id?: string
+  turn_id?: string
+  document_id?: string
+  model_id?: string
+  attempts: number
+  error?: string
+  duration_ms?: number
+  tokens: number
+  cost_microusd: number
+}
+
+export interface MemoryFact {
+  id: string
+  type: string
+  text: string
+  freshness: string
+  document_id: string
+  document_title: string
+  source_memory_ids: string[]
+  mentioned_at: string
+}
+
+export interface MentalModelRecord {
+  id: string
+  name: string
+  source_query: string
+  description: string
+  summary: string
+  version: number
+  freshness: string
+  error_msg?: string
+  tags: string[]
+  refresh_mode: 'full' | 'delta'
+  refresh_after_consolidation: boolean
+  refresh_interval_seconds?: number
+  source_memory_ids: string[]
+}
+
+export interface MemoryDirective {
+  id: string
+  name: string
+  content: string
+  trigger?: string
+  priority: number
+  is_active: boolean
+  tags: string[]
+}
 /**
  * Client-side deadline for session requests.
  *
@@ -411,6 +464,94 @@ export const api = {
     return request<{ chunks: any[]; related_entities: any[]; related_docs: any[] }>(
       '/search',
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, top_k: topK }) },
+    )
+  },
+
+  listMemoryOperations(params?: { session_id?: string; turn_id?: string }) {
+    const qs = new URLSearchParams()
+    if (params?.session_id) qs.set('session_id', params.session_id)
+    if (params?.turn_id) qs.set('turn_id', params.turn_id)
+    return request<MemoryOperation[]>(`/memory/operations?${qs}`)
+  },
+
+  getMemoryOperation(id: string) {
+    return request<MemoryOperation>(`/memory/operations/${encodeURIComponent(id)}`)
+  },
+
+  retryMemoryOperation(id: string) {
+    return request<{ changed: number }>(
+      `/memory/operations/${encodeURIComponent(id)}/retry`,
+      { method: 'POST' },
+    )
+  },
+
+  cancelMemoryOperation(id: string) {
+    return request<{ changed: number }>(
+      `/memory/operations/${encodeURIComponent(id)}/cancel`,
+      { method: 'POST' },
+    )
+  },
+
+  listMemoryFacts(limit = 500) {
+    return request<MemoryFact[]>(`/memory/facts?limit=${limit}`)
+  },
+
+  getObservation(id: string) {
+    return request<any>(`/memory/observations/${encodeURIComponent(id)}`)
+  },
+
+  listMentalModels() {
+    return request<MentalModelRecord[]>('/memory/models')
+  },
+
+  saveMentalModel(id: string, value: Record<string, unknown>) {
+    return request<MentalModelRecord>(`/memory/models/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(value),
+    })
+  },
+
+  refreshMentalModel(id: string) {
+    return request<{ enqueued: boolean }>(
+      `/memory/models/${encodeURIComponent(id)}/refresh`,
+      { method: 'POST' },
+    )
+  },
+
+  listMemoryDirectives() {
+    return request<MemoryDirective[]>('/memory/directives')
+  },
+
+  saveMemoryDirective(id: string, value: Record<string, unknown>) {
+    return request<MemoryDirective>(`/memory/directives/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(value),
+    })
+  },
+
+  deleteMemoryDirective(id: string) {
+    return request<{ deleted: boolean }>(
+      `/memory/directives/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  getMemoryPolicy() {
+    return request<{ bank_id: string; version: number; policy: Record<string, unknown> }>(
+      '/memory/policy',
+    )
+  },
+
+  updateMemoryPolicy(expectedVersion: number, policy: Record<string, unknown>) {
+    return request<{ bank_id: string; version: number; policy: Record<string, unknown> }>(
+      '/memory/policy',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expected_version: expectedVersion, policy }),
+      },
     )
   },
 

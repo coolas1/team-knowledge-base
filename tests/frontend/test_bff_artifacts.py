@@ -7,6 +7,74 @@ from src.frontend.webapp.server import app as app_mod
 from src.frontend.webapp.server import deps
 
 
+def test_scoped_download_and_pi_proxy(tmp_path, monkeypatch):
+    from hashlib import sha256
+    from config.schema import AppConfig
+    from src.engine.scope import MemoryScope
+    from src.engine.trusted_scope import ScopeBinding
+    from src.agent import artifacts
+
+    async def noop():
+        pass
+
+    monkeypatch.setattr(deps, "startup", noop)
+    monkeypatch.setattr(deps, "shutdown", noop)
+    monkeypatch.setenv("ARTIFACTS_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        artifacts, "_generate_docx", lambda path, *_: path.write_bytes(b"private")
+    )
+    monkeypatch.setattr(
+        deps,
+        "_app_config",
+        AppConfig.model_validate(
+            {"engine": {"memory": {"enabled": True, "features": {"scope": True}}}}
+        ),
+    )
+    monkeypatch.setattr(
+        deps.settings,
+        "memory_scope_bindings",
+        {sha256(b"a").hexdigest(): ScopeBinding(bank_id="A")},
+    )
+    artifact = generate_artifact(
+        format="docx",
+        title="private",
+        content="private",
+        scope=MemoryScope(bank_id="A"),
+    )
+    with TestClient(app_mod.app) as client:
+        assert client.get(artifact.download_url).status_code == 404
+        assert (
+            client.get(
+                artifact.download_url, headers={"x-tkb-scope-token": "a"}
+            ).content
+            == b"private"
+        )
+        import httpx
+        from src.frontend.webapp.server import routes_agent
+
+        def upstream(request):
+            assert request.headers["x-tkb-scope-token"] == "a"
+            return httpx.Response(201, json={"id": "owned"})
+
+        monkeypatch.setattr(
+            routes_agent,
+            "_pi_client",
+            lambda *args: httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
+        )
+        assert (
+            client.post(
+                "/api/agent/sessions", headers={"x-tkb-scope-token": "a"}
+            ).status_code
+            == 201
+        )
+        assert (
+            client.post(
+                "/api/agent/sessions", headers={"x-tkb-scope-token": "forged"}
+            ).status_code
+            == 403
+        )
+
+
 def test_download_generated_artifact_and_slidev_source(tmp_path, monkeypatch):
     async def _noop():
         pass

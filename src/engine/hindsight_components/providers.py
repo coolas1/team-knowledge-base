@@ -11,6 +11,7 @@ import httpx
 
 from config.settings import settings
 from src.engine.components.embedder import embedder
+from src.engine.components.llm_options import bounded_json_options
 
 
 class EmbeddingProvider(Protocol):
@@ -48,11 +49,36 @@ class ProjectHindsightProviders:
             return await self._embedding_provider.embed_batch(texts)
 
     async def json(
-        self, system: str, user: str, *, timeout: float = 600
+        self,
+        system: str,
+        user: str,
+        *,
+        timeout: float = 600,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         return parse_json_object(
-            await self._complete(system, user, json_mode=True, timeout=timeout)
+            await self._complete(
+                system, user, json_mode=True, timeout=timeout, max_tokens=max_tokens
+            )
         )
+
+    async def json_with_usage(
+        self,
+        system: str,
+        user: str,
+        *,
+        timeout: float = 600,
+        max_tokens: int | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return structured output with provider-owned usage telemetry."""
+        if not settings.llm.enabled:
+            raise RuntimeError("Hindsight LLM is disabled (LLM_BASE_URL is empty)")
+        response = await self._openai_response(
+            system, user, json_mode=True, timeout=timeout, max_tokens=max_tokens
+        )
+        content = str(response["choices"][0]["message"]["content"])
+        usage = response.get("usage")
+        return parse_json_object(content), usage if isinstance(usage, dict) else {}
 
     async def text(self, system: str, user: str, *, timeout: float = 600) -> str:
         return (
@@ -66,13 +92,16 @@ class ProjectHindsightProviders:
         *,
         json_mode: bool,
         timeout: float,
+        max_tokens: int | None = None,
     ) -> str:
         if not settings.llm.enabled:
-            raise RuntimeError(
-                "Hindsight LLM is disabled (LLM_BASE_URL is empty)"
-            )
+            raise RuntimeError("Hindsight LLM is disabled (LLM_BASE_URL is empty)")
         return await self._openai(
-            system, user, json_mode=json_mode, timeout=timeout
+            system,
+            user,
+            json_mode=json_mode,
+            timeout=timeout,
+            max_tokens=max_tokens,
         )
 
     @staticmethod
@@ -82,7 +111,26 @@ class ProjectHindsightProviders:
         *,
         json_mode: bool,
         timeout: float,
+        max_tokens: int | None = None,
     ) -> str:
+        response = await ProjectHindsightProviders._openai_response(
+            system,
+            user,
+            json_mode=json_mode,
+            timeout=timeout,
+            max_tokens=max_tokens,
+        )
+        return str(response["choices"][0]["message"]["content"])
+
+    @staticmethod
+    async def _openai_response(
+        system: str,
+        user: str,
+        *,
+        json_mode: bool,
+        timeout: float,
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": settings.llm.require_model(),
             "temperature": 0,
@@ -92,7 +140,14 @@ class ProjectHindsightProviders:
             ],
         }
         if json_mode:
+            # Some compatible endpoints reject JSON mode unless a message
+            # explicitly requests JSON, even when the prompt includes a schema.
+            payload["messages"][0]["content"] += "\nReturn a valid JSON object."
             payload["response_format"] = {"type": "json_object"}
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+            if json_mode:
+                payload.update(bounded_json_options(payload["model"]))
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{settings.llm.base_url.rstrip('/')}/chat/completions",
@@ -100,4 +155,7 @@ class ProjectHindsightProviders:
                 json=payload,
             )
             response.raise_for_status()
-            return str(response.json()["choices"][0]["message"]["content"])
+            value = response.json()
+            if not isinstance(value, dict):
+                raise ValueError("LLM response is not a JSON object")
+            return value

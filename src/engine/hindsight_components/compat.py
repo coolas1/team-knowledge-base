@@ -85,6 +85,18 @@ class HindsightRecallAdapter:
                 mode=mode,
                 top_k=request.top_k,
                 needs_answer=request.needs_answer,
+                memory_types=request.memory_types,
+                source_types=request.source_types,
+                tags=request.tags,
+                tags_match=request.tags_match,
+                reference_time=request.reference_time,
+                min_scores=request.min_scores,
+                prefer_observations=request.prefer_observations,
+                include=request.include,
+                include_stale=request.include_stale,
+                timeout_seconds=request.timeout_seconds,
+                max_tokens=request.max_tokens,
+                max_candidates=request.max_candidates,
             )
         )
 

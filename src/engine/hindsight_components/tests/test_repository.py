@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
+from src.engine.hindsight_components.types import RecallFilter
 from src.engine.hindsight_components.utils import (
     document_lock_key,
     lexical_tokens,
@@ -173,7 +174,12 @@ async def test_indexed_keyword_search_limits_materialized_candidates() -> None:
         keyword_index_enabled=True,
         keyword_candidate_limit=300,
     )
-    assert await repository.keyword_search("TKB 知识库", 50) == []
+    assert (
+        await repository.keyword_search(
+            "TKB 知识库", 50, filters=RecallFilter(include=())
+        )
+        == []
+    )
 
     compiled = session.statement.compile(dialect=postgresql.dialect())
     sql = str(compiled).lower()
@@ -257,7 +263,7 @@ def test_enqueue_graph_event_uses_same_callers_session() -> None:
     session = FakeSession()
     document_id = uuid.uuid4()
 
-    event = PostgresMemoryRepository._enqueue_graph_event(
+    event = PostgresMemoryRepository(session_factory=lambda: None)._enqueue_graph_event(
         session, document_id, "replace"
     )
 
@@ -269,7 +275,7 @@ def test_enqueue_graph_event_uses_same_callers_session() -> None:
 
 def test_enqueue_graph_event_rejects_unknown_operation() -> None:
     with pytest.raises(ValueError, match="unsupported graph operation"):
-        PostgresMemoryRepository._enqueue_graph_event(
+        PostgresMemoryRepository(session_factory=lambda: None)._enqueue_graph_event(
             SimpleNamespace(add=lambda value: None),
             uuid.uuid4(),
             "truncate",
@@ -348,7 +354,9 @@ async def test_dependent_graph_documents_include_observations_and_inbound_links(
             return [link_document, observation_document]
 
     session = FakeSession()
-    result = await PostgresMemoryRepository._dependent_graph_documents(
+    result = await PostgresMemoryRepository(
+        session_factory=lambda: None
+    )._dependent_graph_documents(
         session,
         [uuid.uuid4()],
         exclude_document_id=uuid.uuid4(),
@@ -363,7 +371,9 @@ async def test_dependent_graph_documents_skip_queries_for_empty_memory_set():
         async def scalars(self, statement):
             raise AssertionError("no query expected")
 
-    result = await PostgresMemoryRepository._dependent_graph_documents(
+    result = await PostgresMemoryRepository(
+        session_factory=lambda: None
+    )._dependent_graph_documents(
         FakeSession(),
         [],
         exclude_document_id=uuid.uuid4(),

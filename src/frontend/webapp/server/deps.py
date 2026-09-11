@@ -2,9 +2,12 @@
 
 memory flags come from AppConfig.engine.memory; everything runs in one
 process. No HTTP fallbacks: the engine/plugin containers are gone."""
+
 from __future__ import annotations
 
 import os
+from fastapi import Request, HTTPException
+from src.engine.trusted_scope import bind_service, resolve_binding
 from pathlib import Path
 
 from src.engine.config import build_engine, engine_config_from_app
@@ -19,6 +22,8 @@ _llm = None
 _query: KnowledgeQuery | None = None
 _graph_worker = None
 _conversation_worker = None
+_consolidation_worker = None
+_mental_model_worker = None
 _app_config: AppConfig | None = None
 
 
@@ -30,7 +35,9 @@ def app_config() -> AppConfig:
 
 
 async def startup() -> None:
-    global _kb, _plugin, _llm, _query, _graph_worker, _conversation_worker
+    global _kb, _plugin, _llm, _query
+    global _graph_worker, _conversation_worker, _consolidation_worker
+    global _mental_model_worker
     cfg = app_config()
 
     from src.engine.components.store.postgres import init_db
@@ -68,7 +75,9 @@ async def startup() -> None:
         and cfg.engine.memory.graph_worker
         and settings.hindsight_graph_worker_enabled
     ):
-        from src.engine.hindsight_components.graph_runtime import build_graph_worker_runtime
+        from src.engine.hindsight_components.graph_runtime import (
+            build_graph_worker_runtime,
+        )
 
         _graph_worker = build_graph_worker_runtime(
             poll_seconds=settings.hindsight_graph_worker_poll_seconds,
@@ -79,8 +88,62 @@ async def startup() -> None:
 
     if (
         cfg.engine.memory.enabled
-        and settings.hindsight_conversation_memory_enabled
+        and cfg.engine.memory.features.consolidation
+        and cfg.engine.memory.consolidation_worker
     ):
+        from src.engine.hindsight_components.consolidation_runtime import (
+            build_consolidation_worker_runtime,
+        )
+
+        _consolidation_worker = build_consolidation_worker_runtime(
+            max_concurrent=cfg.engine.memory.consolidation_max_concurrent,
+            batch_size=cfg.engine.memory.consolidation_batch_size,
+            observation_limit=cfg.engine.memory.consolidation_observation_limit,
+            max_iterations=cfg.engine.memory.consolidation_max_iterations,
+            max_tokens=cfg.engine.memory.consolidation_max_tokens,
+            llm_timeout_seconds=(cfg.engine.memory.consolidation_llm_timeout_seconds),
+            lease_seconds=cfg.engine.memory.consolidation_lease_seconds,
+            max_output_tokens=cfg.engine.memory.consolidation_max_output_tokens,
+            max_cost_usd=cfg.engine.memory.consolidation_max_cost_usd,
+            input_cost_usd_per_million=(
+                cfg.engine.memory.consolidation_input_cost_usd_per_million
+            ),
+            output_cost_usd_per_million=(
+                cfg.engine.memory.consolidation_output_cost_usd_per_million
+            ),
+            semantic_dedup_enabled=cfg.engine.memory.consolidation_semantic_dedup,
+            semantic_threshold=cfg.engine.memory.consolidation_semantic_threshold,
+        )
+        await _consolidation_worker.start()
+
+    if (
+        cfg.engine.memory.enabled
+        and cfg.engine.memory.features.mental_models
+        and cfg.engine.memory.mental_model_worker
+    ):
+        from src.engine.hindsight_components.mental_model_runtime import (
+            build_mental_model_worker_runtime,
+        )
+
+        _mental_model_worker = build_mental_model_worker_runtime(
+            poll_seconds=cfg.engine.memory.mental_model_poll_seconds,
+            max_concurrent=cfg.engine.memory.mental_model_max_concurrent,
+            recall_results=cfg.engine.memory.mental_model_recall_results,
+            max_evidence_tokens=cfg.engine.memory.mental_model_max_evidence_tokens,
+            max_output_tokens=cfg.engine.memory.mental_model_max_output_tokens,
+            lease_seconds=cfg.engine.memory.mental_model_lease_seconds,
+            max_attempts=cfg.engine.memory.mental_model_max_attempts,
+            input_cost_usd_per_million=(
+                cfg.engine.memory.mental_model_input_cost_usd_per_million
+            ),
+            output_cost_usd_per_million=(
+                cfg.engine.memory.mental_model_output_cost_usd_per_million
+            ),
+            use_adaptive_reflect=cfg.engine.memory.mental_model_use_adaptive_reflect,
+        )
+        await _mental_model_worker.start()
+
+    if cfg.engine.memory.enabled and settings.hindsight_conversation_memory_enabled:
         from src.engine.hindsight_components.conversation_service import (
             build_conversation_memory_service,
         )
@@ -91,25 +154,21 @@ async def startup() -> None:
         set_conversation_memory_service(
             build_conversation_memory_service(
                 max_recall_results=settings.hindsight_conversation_recall_limit,
+                consolidation_enabled=cfg.engine.memory.features.consolidation,
                 max_turn_chars=settings.hindsight_conversation_max_turn_chars,
             )
         )
         _conversation_worker = build_conversation_worker_runtime(
             poll_seconds=settings.hindsight_conversation_worker_poll_seconds,
-            max_concurrent=(
-                settings.hindsight_conversation_worker_max_concurrent
-            ),
+            max_concurrent=(settings.hindsight_conversation_worker_max_concurrent),
             lease_seconds=settings.hindsight_conversation_worker_lease_seconds,
             max_attempts=settings.hindsight_conversation_worker_max_attempts,
-            retry_delay_seconds=(
-                settings.hindsight_conversation_worker_retry_seconds
-            ),
+            retry_delay_seconds=(settings.hindsight_conversation_worker_retry_seconds),
             max_retry_delay_seconds=(
                 settings.hindsight_conversation_worker_max_retry_seconds
             ),
-            retention_context=(
-                settings.hindsight_conversation_retention_context
-            ),
+            retention_context=(settings.hindsight_conversation_retention_context),
+            consolidation_enabled=cfg.engine.memory.features.consolidation,
         )
         await _conversation_worker.start()
     else:
@@ -117,15 +176,26 @@ async def startup() -> None:
 
 
 async def shutdown() -> None:
-    global _graph_worker, _conversation_worker, _query
+    global _graph_worker, _conversation_worker, _consolidation_worker
+    global _mental_model_worker, _query
     try:
         try:
             if _conversation_worker is not None:
                 await _conversation_worker.stop()
         finally:
             _conversation_worker = None
-            if _graph_worker is not None:
-                await _graph_worker.stop()
+            try:
+                try:
+                    if _mental_model_worker is not None:
+                        await _mental_model_worker.stop()
+                finally:
+                    _mental_model_worker = None
+                    if _consolidation_worker is not None:
+                        await _consolidation_worker.stop()
+            finally:
+                _consolidation_worker = None
+                if _graph_worker is not None:
+                    await _graph_worker.stop()
     finally:
         _graph_worker = None
         from src.agent.tkb.mcp.server import set_conversation_memory_service
@@ -134,9 +204,20 @@ async def shutdown() -> None:
         _query = None
 
 
-def get_kb() -> KnowledgeBase:
+def _binding(request: Request | None):
+    try:
+        return resolve_binding(
+            request.headers if request is not None else {},
+            enabled=app_config().engine.memory.features.scope,
+            bindings=settings.memory_scope_bindings,
+        )
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+
+
+def get_kb(request: Request = None) -> KnowledgeBase:
     assert _kb is not None, "engine not initialized"
-    return _kb
+    return bind_service(_kb, _binding(request), writes=True)
 
 
 def get_plugin() -> LoadedPlugin:
@@ -148,8 +229,8 @@ def get_llm():
     return _llm
 
 
-def get_query() -> KnowledgeQuery | None:
-    return _query
+def get_query(request: Request = None) -> KnowledgeQuery | None:
+    return bind_service(_query, _binding(request))
 
 
 def engine_initialized() -> bool:

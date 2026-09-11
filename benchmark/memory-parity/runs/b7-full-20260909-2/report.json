@@ -1,0 +1,1126 @@
+{
+  "status": "passed",
+  "created_at": "2026-09-09T05:42:34.080974+00:00",
+  "scope": "one fixed 44-case comparison; no repeated full model run",
+  "tkb": {
+    "sha": "cbe07f10841a2bb1c61edab80e20e6842a4caff1",
+    "tracked_patch_sha256": "786383dda3c9caa8553bddf2669a6b5ab00788350a933f04f6f2297b6c9cf088",
+    "untracked_source_sha256": {
+      ".tmp-pytest/b7-full/test_artifact_download_checks_0/3deaf985-6226-473c-902b-499b29f44cef/metadata.json": "3709022d5cb47a59362b029323df8292a2cec4861c39b6b2110c2d30925097ce",
+      ".tmp-pytest/b7-full/test_cli_ingest_batch_prints_t0/a.md": "327f031b25e00b1a7cd9b0c18f05948b60f55d09f9b3d177d21083f83a3cb6df",
+      ".tmp-pytest/b7-full/test_cli_ingest_batch_prints_t0/b.md": "216f4c6ac9ef17add951aa097934202649a6c6ea5f29263b00c59772ea6cff61",
+      ".tmp-pytest/b7-full/test_download_generated_artifa0/171c7b36-a3e1-42ff-8d47-79ebae39bf78/Agent Deck.slides.md": "83575ada5087f3ccab861bb49eb1128dbf56919b107345a43221f797d48fee8f",
+      ".tmp-pytest/b7-full/test_download_generated_artifa0/171c7b36-a3e1-42ff-8d47-79ebae39bf78/metadata.json": "6cc231019f2d56c8ce49430dfa57a16b605d98f89da4b6f638d82626ae5aea99",
+      ".tmp-pytest/b7-full/test_duplicate_case_rejected0/cases.json": "f031cebe248b7bf3026df6debe09ee234670a64cb8c9686ba42c02f2c9645ec8",
+      ".tmp-pytest/b7-full/test_fingerprint_survives_wind0/cases.json": "511a6d059695f2221d1073414b980b7830d563f0c58bae4d5037bdc7edcc8bec",
+      ".tmp-pytest/b7-full/test_generate_document_tool_re0/86a4f104-252f-411e-b0be-2e2a2fcc8e6d/metadata.json": "2f1aaa9aace3c3868feed65e1f18606e9ecccaed8c3002d18e20297c2d4f5419",
+      ".tmp-pytest/b7-full/test_generate_downloadable_off0/7dc58a18-2951-4d63-a509-4e51864aebf4/metadata.json": "cdd754fcb29bb71300f92abd65bd5e2c512eeb2b3ba08b048eddf92af58407bc",
+      ".tmp-pytest/b7-full/test_generate_downloadable_off1/15218bba-5919-4e45-86ec-754e20111cce/metadata.json": "0df0823611f22a2e173eb7d44e62a8c64c3078e681fd167bc7f40c91162dda6b",
+      ".tmp-pytest/b7-full/test_generate_downloadable_off2/2b4711c0-bae5-4983-8f71-6d3ae61bd4e0/metadata.json": "881837758899b3b7ac5cce95a69b15577062f518615b783f9ae5716e3feafd32",
+      ".tmp-pytest/b7-full/test_generate_downloadable_off2/2b4711c0-bae5-4983-8f71-6d3ae61bd4e0/weekly-report.slides.md": "9c9c7ce452550cc7d39eb59e69ec9c72ff1721ad6be37d8178eb2d3ec61ab69a",
+      ".tmp-pytest/b7-full/test_pptx_includes_slidev_sour0/f6b05a6a-52e3-4fe7-9bff-20c92bd0f9d0/metadata.json": "9960361064011a8a339056dd22dd37c262bf21ccc9d7e2784143a04391e0db30",
+      ".tmp-pytest/b7-full/test_process_file_doc_semaphor0/t0.md": "4321893dc18b145ad336300ff5929711a5a3836075522f016a319d8b3793304e",
+      ".tmp-pytest/b7-full/test_process_file_doc_semaphor0/t1.md": "4321893dc18b145ad336300ff5929711a5a3836075522f016a319d8b3793304e",
+      ".tmp-pytest/b7-full/test_process_file_indexes_docu0/t.md": "4321893dc18b145ad336300ff5929711a5a3836075522f016a319d8b3793304e",
+      ".tmp-pytest/b7-full/test_reingest_schedules_the_av0/week.md": "b9ac6218e1c89dbecc9983b76493f09f2943b6a58bf90e788a139b6af085f2ab",
+      ".tmp-pytest/b7-full/test_reingest_schedules_the_av1/week.md": "b9ac6218e1c89dbecc9983b76493f09f2943b6a58bf90e788a139b6af085f2ab",
+      ".tmp-pytest/b7-full/test_scoped_download_and_pi_pr0/173b622f-dbbb-408c-a775-ef0a69f4cc9c/metadata.json": "9a0f0a2f1d266cdcaf7b2d4607034f8728e4520a8dc158ee306fdce5cab62b0b",
+      ".tmp-pytest/pytest-of-Administrator/pytest-0/test_generate_document_tool_re0/f47e4e93-b83d-44e1-9e76-f8391e27827d/metadata.json": "20f10cb88a7eb113e3c53d7d531d3b819058b5bd739af1902c1d08318d9a5e27",
+      "benchmark/memory-parity/build_full_report.py": "6944e367ad10e8d8faf65aa3cf59d2b3d4e7747b6dd9647cd8164449832fa7db",
+      "benchmark/memory-parity/runs/b7-migration-20260909-1/report.json": "615a7b1f829f0ff9a0ace19c55587b55e73b839ad2bbe0bfb8a4916656c19af7",
+      "docs/hindsight-capability-matrix.md": "e62e8054e129789a44c1a67ec3926af31043abfb70dcb7e5f95a9be5183b3366",
+      "openspec/changes/align-hindsight-memory-capabilities/b7-acceptance.md": "58c58827c2ebebcd56403c2f8e5b3dcfe88aa2050c13b2beb1c7eefd2ade6bf6",
+      "src/engine/hindsight_components/memory_admin.py": "1386c69bd1bd7dcad970c571e3f64f9c474af66c6325e43a17848e811d2a3c96",
+      "src/frontend/webapp/client/src/pages/MemoryPage.tsx": "4b2dc723c9af96fdee187c26132a04179cee2968f92d297633bd3998def527bc",
+      "src/frontend/webapp/server/routes_memory.py": "08b7222dc41faa77d07ec4e8fd3480cb1f6cc51a1fa224c224e7b429259f834b",
+      "tests/frontend/test_bff_memory.py": "9a2f5ebfc15c138b3d63e52675710881cfd44d214240890166830bfce1aab1ab"
+    }
+  },
+  "upstream": {
+    "sha": "9676fc1699c199175809285ea0e1095ab71115d0",
+    "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "untracked_source_sha256": {}
+  },
+  "corpus_sha256": "511a6d059695f2221d1073414b980b7830d563f0c58bae4d5037bdc7edcc8bec",
+  "coverage": {
+    "cases": 44,
+    "engine_rows": 88,
+    "actual_same_model_rows": 46,
+    "tkb_deterministic_service_rows": 21,
+    "upstream_reference_contract_rows": 21
+  },
+  "semantic_scores": {
+    "append": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    },
+    "attribution": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    },
+    "change": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    },
+    "cross_turn": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    },
+    "delete": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    },
+    "duplicate": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    },
+    "failure": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    },
+    "isolation": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    },
+    "model": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    },
+    "reasoning": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    },
+    "time": {
+      "upstream": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      },
+      "tkb": {
+        "passed": 4,
+        "total": 4,
+        "accuracy": 1.0
+      }
+    }
+  },
+  "category_gates": {
+    "append": true,
+    "attribution": true,
+    "change": true,
+    "cross_turn": true,
+    "delete": true,
+    "duplicate": true,
+    "failure": true,
+    "isolation": true,
+    "model": true,
+    "reasoning": true,
+    "time": true
+  },
+  "execution": {
+    "upstream": {
+      "direct_model_cases": 23,
+      "p50_seconds": 9.0,
+      "p95_seconds": 34.812,
+      "tokens": 41357,
+      "failures": 0,
+      "failure_rate": 0
+    },
+    "tkb": {
+      "direct_model_cases": 23,
+      "p50_seconds": 14.891,
+      "p95_seconds": 52.3254,
+      "tokens": 60569,
+      "failures": 0,
+      "failure_rate": 0
+    }
+  },
+  "deterministic_gates": {
+    "historical_delivery_replay": true,
+    "append_and_request_idempotency": true,
+    "resumable_backfill_and_counts": true,
+    "fresh_and_legacy_migration": true,
+    "observation_history_and_tombstones": true,
+    "mental_model_source_deletion_fence": true,
+    "directive_scope_separation": true,
+    "operation_scope_and_lease_fencing": true,
+    "compatible_preceding_writer": true,
+    "rollback_flags_preserve_scoped_data": true
+  },
+  "failure_rate": {
+    "tkb": 0,
+    "upstream_direct_model": 0
+  },
+  "evidence_fingerprints": {
+    "b2_acceptance": "bed45f5e23a197d0bad6830eb72610a1f67a8e6ddc5729f806a8a9f31b8424e6",
+    "b3_report": "31a0b0591604219614f178f981e3ece36b0ed4b4cbfc9cea48afbed4c752c354",
+    "b6_report": "80d3cb93b85b973a45fa6f7d04dae43ea093415c20c77ed99557f68a39fdedf1",
+    "migration_report": "615a7b1f829f0ff9a0ace19c55587b55e73b839ad2bbe0bfb8a4916656c19af7"
+  },
+  "limitations": [
+    "Direct model latency and usage cover the 23 extraction/consolidation semantic cases only.",
+    "Isolation, append, deletion, failure, model, and reasoning cases use deterministic service gates; the pinned upstream side is a source-contract comparison and has no invented runtime metrics.",
+    "SDK wire compatibility, third-party integrations, and optional search backends are outside this change."
+  ],
+  "results": [
+    {
+      "id": "parity-001",
+      "engine": "upstream",
+      "categories": [
+        "attribution"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-001",
+      "engine": "tkb",
+      "categories": [
+        "attribution"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-002",
+      "engine": "upstream",
+      "categories": [
+        "attribution"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-002",
+      "engine": "tkb",
+      "categories": [
+        "attribution"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-003",
+      "engine": "upstream",
+      "categories": [
+        "attribution"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-003",
+      "engine": "tkb",
+      "categories": [
+        "attribution"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-004",
+      "engine": "upstream",
+      "categories": [
+        "attribution"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-004",
+      "engine": "tkb",
+      "categories": [
+        "attribution"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-005",
+      "engine": "upstream",
+      "categories": [
+        "cross_turn"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-005",
+      "engine": "tkb",
+      "categories": [
+        "cross_turn"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-006",
+      "engine": "upstream",
+      "categories": [
+        "cross_turn"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-006",
+      "engine": "tkb",
+      "categories": [
+        "cross_turn"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-007",
+      "engine": "upstream",
+      "categories": [
+        "cross_turn"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-007",
+      "engine": "tkb",
+      "categories": [
+        "cross_turn"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-008",
+      "engine": "upstream",
+      "categories": [
+        "cross_turn"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-008",
+      "engine": "tkb",
+      "categories": [
+        "cross_turn"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-009",
+      "engine": "upstream",
+      "categories": [
+        "duplicate"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-009",
+      "engine": "tkb",
+      "categories": [
+        "duplicate"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-010",
+      "engine": "upstream",
+      "categories": [
+        "duplicate"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-010",
+      "engine": "tkb",
+      "categories": [
+        "duplicate"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-011",
+      "engine": "upstream",
+      "categories": [
+        "duplicate"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-011",
+      "engine": "tkb",
+      "categories": [
+        "duplicate"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-012",
+      "engine": "upstream",
+      "categories": [
+        "duplicate"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-012",
+      "engine": "tkb",
+      "categories": [
+        "duplicate"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-013",
+      "engine": "upstream",
+      "categories": [
+        "change"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-013",
+      "engine": "tkb",
+      "categories": [
+        "change"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-014",
+      "engine": "upstream",
+      "categories": [
+        "change"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-014",
+      "engine": "tkb",
+      "categories": [
+        "change"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-015",
+      "engine": "upstream",
+      "categories": [
+        "change"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-015",
+      "engine": "tkb",
+      "categories": [
+        "change"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-016",
+      "engine": "upstream",
+      "categories": [
+        "change"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-016",
+      "engine": "tkb",
+      "categories": [
+        "change"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-017",
+      "engine": "upstream",
+      "categories": [
+        "isolation"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-017",
+      "engine": "tkb",
+      "categories": [
+        "isolation"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-018",
+      "engine": "upstream",
+      "categories": [
+        "isolation"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-018",
+      "engine": "tkb",
+      "categories": [
+        "isolation"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-019",
+      "engine": "upstream",
+      "categories": [
+        "isolation"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-019",
+      "engine": "tkb",
+      "categories": [
+        "isolation"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-020",
+      "engine": "upstream",
+      "categories": [
+        "isolation"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-020",
+      "engine": "tkb",
+      "categories": [
+        "isolation"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-021",
+      "engine": "upstream",
+      "categories": [
+        "time"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-021",
+      "engine": "tkb",
+      "categories": [
+        "time"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-022",
+      "engine": "upstream",
+      "categories": [
+        "time"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-022",
+      "engine": "tkb",
+      "categories": [
+        "time"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-023",
+      "engine": "upstream",
+      "categories": [
+        "time"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-023",
+      "engine": "tkb",
+      "categories": [
+        "time"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-024",
+      "engine": "upstream",
+      "categories": [
+        "time"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-024",
+      "engine": "tkb",
+      "categories": [
+        "time"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-025",
+      "engine": "upstream",
+      "categories": [
+        "append"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-025",
+      "engine": "tkb",
+      "categories": [
+        "append"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-026",
+      "engine": "upstream",
+      "categories": [
+        "append"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-026",
+      "engine": "tkb",
+      "categories": [
+        "append"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-027",
+      "engine": "upstream",
+      "categories": [
+        "append"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-027",
+      "engine": "tkb",
+      "categories": [
+        "append"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-028",
+      "engine": "upstream",
+      "categories": [
+        "append"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-028",
+      "engine": "tkb",
+      "categories": [
+        "append"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-029",
+      "engine": "upstream",
+      "categories": [
+        "delete"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-029",
+      "engine": "tkb",
+      "categories": [
+        "delete"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-030",
+      "engine": "upstream",
+      "categories": [
+        "delete"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-030",
+      "engine": "tkb",
+      "categories": [
+        "delete"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-031",
+      "engine": "upstream",
+      "categories": [
+        "delete"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-031",
+      "engine": "tkb",
+      "categories": [
+        "delete"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-032",
+      "engine": "upstream",
+      "categories": [
+        "delete"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-032",
+      "engine": "tkb",
+      "categories": [
+        "delete"
+      ],
+      "passed": true,
+      "comparison": "actual_same_model_one_pass",
+      "evidence": "B2 extraction or B3 consolidation immutable model output"
+    },
+    {
+      "id": "parity-033",
+      "engine": "upstream",
+      "categories": [
+        "failure"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-033",
+      "engine": "tkb",
+      "categories": [
+        "failure"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-034",
+      "engine": "upstream",
+      "categories": [
+        "failure"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-034",
+      "engine": "tkb",
+      "categories": [
+        "failure"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-035",
+      "engine": "upstream",
+      "categories": [
+        "failure"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-035",
+      "engine": "tkb",
+      "categories": [
+        "failure"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-036",
+      "engine": "upstream",
+      "categories": [
+        "failure"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-036",
+      "engine": "tkb",
+      "categories": [
+        "failure"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-037",
+      "engine": "upstream",
+      "categories": [
+        "model"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-037",
+      "engine": "tkb",
+      "categories": [
+        "model"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-038",
+      "engine": "upstream",
+      "categories": [
+        "model"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-038",
+      "engine": "tkb",
+      "categories": [
+        "model"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-039",
+      "engine": "upstream",
+      "categories": [
+        "model"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-039",
+      "engine": "tkb",
+      "categories": [
+        "model"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-040",
+      "engine": "upstream",
+      "categories": [
+        "model"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-040",
+      "engine": "tkb",
+      "categories": [
+        "model"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-041",
+      "engine": "upstream",
+      "categories": [
+        "reasoning"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-041",
+      "engine": "tkb",
+      "categories": [
+        "reasoning"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-042",
+      "engine": "upstream",
+      "categories": [
+        "reasoning"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-042",
+      "engine": "tkb",
+      "categories": [
+        "reasoning"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-043",
+      "engine": "upstream",
+      "categories": [
+        "reasoning"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-043",
+      "engine": "tkb",
+      "categories": [
+        "reasoning"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    },
+    {
+      "id": "parity-044",
+      "engine": "upstream",
+      "categories": [
+        "reasoning"
+      ],
+      "passed": true,
+      "comparison": "upstream_reference_contract",
+      "evidence": "pinned upstream capability/source contract; no synthetic latency or token use"
+    },
+    {
+      "id": "parity-044",
+      "engine": "tkb",
+      "categories": [
+        "reasoning"
+      ],
+      "passed": true,
+      "comparison": "actual_deterministic_service_gate",
+      "evidence": "real PostgreSQL/process or production-contract acceptance gate"
+    }
+  ]
+}

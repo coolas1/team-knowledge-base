@@ -175,6 +175,72 @@ def test_agent_session_proxy(client, monkeypatch):
     assert response.json()["id"] == "session-1"
 
 
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("GET", "/sessions"),
+        ("GET", "/sessions/s1"),
+        ("DELETE", "/sessions/s1"),
+        ("DELETE", "/sessions/s1/memory"),
+        ("POST", "/sessions/s1/cancel"),
+        ("POST", "/sessions/s1/messages"),
+    ],
+)
+def test_agent_scope_headers_cover_lifecycle(client, monkeypatch, method, path):
+    from hashlib import sha256
+    from config.schema import AppConfig
+    from src.engine.trusted_scope import ScopeBinding
+
+    monkeypatch.setattr(
+        deps,
+        "_app_config",
+        AppConfig.model_validate(
+            {
+                "engine": {"memory": {"enabled": True, "features": {"scope": True}}},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        deps.settings,
+        "memory_scope_bindings",
+        {
+            sha256(b"trusted").hexdigest(): ScopeBinding(bank_id="A"),
+        },
+    )
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.headers["x-tkb-scope-token"] == "trusted"
+        assert "x-tkb-bank-id" not in request.headers
+        if path.endswith("messages"):
+            return httpx.Response(
+                200, stream=httpx.ByteStream(b"event: done\ndata: {}\n\n")
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    _mock_pi(monkeypatch, handler)
+    assert (
+        client.request(
+            method,
+            f"/api/agent{path}",
+            headers={"x-tkb-scope-token": "trusted", "x-tkb-bank-id": "forged"},
+            json={"message": "hello"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.request(
+            method,
+            f"/api/agent{path}",
+            headers={"x-tkb-scope-token": "forged"},
+            json={"message": "hello"},
+        ).status_code
+        == 403
+    )
+    assert len(calls) == 1
+
+
 def test_agent_session_memory_forget_proxy(client, monkeypatch):
     def handler(request):
         assert request.method == "DELETE"
@@ -425,10 +491,13 @@ def test_config_put_validates(client, tmp_path, monkeypatch):
     monkeypatch.setattr(
         "src.frontend.webapp.server.routes_config.CONFIG_PATH", tmp_path / "app.yaml"
     )
-    res = client.put("/api/config", json={
-        "engine": {"impl": "graphrag", "config": "config/engine/graphrag"},
-        "plugin": {"impl": "tkb"},
-    })
+    res = client.put(
+        "/api/config",
+        json={
+            "engine": {"impl": "graphrag", "config": "config/engine/graphrag"},
+            "plugin": {"impl": "tkb"},
+        },
+    )
 
     assert res.status_code == 200
     assert res.json()["plugin"]["impl"] == "tkb"
@@ -438,11 +507,14 @@ def test_config_put_rejects_dropped_axes(client, tmp_path, monkeypatch):
     monkeypatch.setattr(
         "src.frontend.webapp.server.routes_config.CONFIG_PATH", tmp_path / "app.yaml"
     )
-    res = client.put("/api/config", json={
-        "engine": {"impl": "graphrag", "config": "config/engine/graphrag"},
-        "plugin": {"impl": "tkb"},
-        "host": {"impl": "webapp"},
-    })
+    res = client.put(
+        "/api/config",
+        json={
+            "engine": {"impl": "graphrag", "config": "config/engine/graphrag"},
+            "plugin": {"impl": "tkb"},
+            "host": {"impl": "webapp"},
+        },
+    )
     assert res.status_code == 422
 
 

@@ -19,6 +19,21 @@ export interface ChatMessage {
   activities?: ActivityRecord[]
 }
 
+interface ConversationDeletionApi {
+  forgetAgentSessionMemory(sessionId: string): Promise<unknown>
+  deleteAgentSession(sessionId: string): Promise<{ deleted: boolean }>
+}
+
+export async function deleteConversationWithMemory(
+  client: ConversationDeletionApi,
+  sessionId: string,
+) {
+  const forgotten = await client.forgetAgentSessionMemory(sessionId)
+  const deleted = await client.deleteAgentSession(sessionId)
+  if (!deleted.deleted) throw new Error('对话记录删除失败')
+  return { forgotten, deleted }
+}
+
 export function messagesFromDetail(detail: AgentSessionDetail): ChatMessage[] {
   return (detail.messages || []).map((message, index) => ({
     id: message.id || `legacy-${index}-${message.role}`,

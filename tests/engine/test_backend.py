@@ -210,6 +210,8 @@ async def test_edit_content_creates_new_version_and_schedules_reindex(monkeypatc
         error_msg="old error",
         raw_text="old text",
         content_hash="old-hash",
+        bank_id="default-team",
+        tags=[],
         version_group=document_id,
         version_number=1,
         version_of=None,
@@ -260,6 +262,8 @@ async def test_edit_content_creates_new_version_and_schedules_reindex(monkeypatc
     # 新版本行已创建并挂链
     assert len(added) == 1
     new_doc = added[0]
+    assert new_doc.bank_id == document.bank_id
+    assert new_doc.tags == document.tags
     assert new_doc.version_number == 2
     assert new_doc.version_of == document_id
     assert new_doc.version_group == document_id
@@ -330,9 +334,7 @@ async def test_reingest_schedules_the_available_retry_path(
     if has_raw_text:
         assert calls == [("reindex", document_id, "indexed content")]
     else:
-        assert calls == [
-            ("extract", document_id, source_path, "week.md", "markdown")
-        ]
+        assert calls == [("extract", document_id, source_path, "week.md", "markdown")]
 
 
 def test_upload_dir_follows_uploads_dir_setting(monkeypatch, tmp_path):
@@ -344,9 +346,7 @@ def test_upload_dir_follows_uploads_dir_setting(monkeypatch, tmp_path):
     import config.settings as settings_mod
 
     monkeypatch.delenv("UPLOADS_DIR", raising=False)
-    assert backend_mod.UPLOAD_DIR == Path(
-        InfraSettings(_env_file=None).uploads_dir
-    )
+    assert backend_mod.UPLOAD_DIR == Path(InfraSettings(_env_file=None).uploads_dir)
     assert backend_mod.UPLOAD_DIR == Path("uploads")
 
     monkeypatch.setenv("UPLOADS_DIR", str(tmp_path / "uploads"))
@@ -639,10 +639,14 @@ async def test_public_vector_search_excludes_conversation_documents(monkeypatch)
     assert "documents.is_current" in sql  # PR #6 的当前版本过滤保持
 
 
-async def test_background_task_failure_marks_document_failed_and_logs(monkeypatch, caplog):
+async def test_background_task_failure_marks_document_failed_and_logs(
+    monkeypatch, caplog
+):
     statements: list = []
     monkeypatch.setattr(
-        backend_mod, "async_session_factory", lambda: _UpdateRecordingSession(statements)
+        backend_mod,
+        "async_session_factory",
+        lambda: _UpdateRecordingSession(statements),
     )
     document_id = uuid.uuid4()
 
@@ -670,7 +674,9 @@ async def test_background_task_failure_marks_document_failed_and_logs(monkeypatc
 async def test_background_task_registry_discards_completed_task(monkeypatch):
     statements: list = []
     monkeypatch.setattr(
-        backend_mod, "async_session_factory", lambda: _UpdateRecordingSession(statements)
+        backend_mod,
+        "async_session_factory",
+        lambda: _UpdateRecordingSession(statements),
     )
 
     async def finishing():
@@ -686,10 +692,14 @@ async def test_background_task_registry_discards_completed_task(monkeypatch):
     assert _failed_write_params(statements) == []
 
 
-async def test_cancelled_background_task_is_not_reported_as_failure(monkeypatch, caplog):
+async def test_cancelled_background_task_is_not_reported_as_failure(
+    monkeypatch, caplog
+):
     statements: list = []
     monkeypatch.setattr(
-        backend_mod, "async_session_factory", lambda: _UpdateRecordingSession(statements)
+        backend_mod,
+        "async_session_factory",
+        lambda: _UpdateRecordingSession(statements),
     )
 
     started = asyncio.Event()
@@ -727,6 +737,8 @@ async def test_versioned_edit_reindex_failure_marks_new_version_failed_and_reing
         error_msg=None,
         raw_text="old text",
         content_hash="old-hash",
+        bank_id="default-team",
+        tags=[],
         version_group=document_id,
         version_number=1,
         version_of=None,
@@ -875,3 +887,39 @@ async def test_remove_deletes_the_document_upload_directory(monkeypatch, tmp_pat
     assert calls == [document_id]
     assert not doc_dir.exists()
     assert upload_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "operation,args",
+    [
+        ("edit_document", ("changed",)),
+        ("propose_edit", ("change title",)),
+        ("list_versions", ()),
+        ("diff_versions", (1, 2)),
+    ],
+)
+async def test_version_operations_reject_foreign_bank(monkeypatch, operation, args):
+    from src.engine.scope import MemoryScope
+    from src.engine.components.store.models import Document
+
+    document_id = uuid.uuid4()
+    document = Document(
+        id=document_id, bank_id="foreign", tags=[], title="private", file_type="pdf"
+    )
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def get(self, *_):
+            return document
+
+    monkeypatch.setattr(backend_mod, "async_session_factory", Session)
+    backend = GraphRAGBackend(
+        SimpleNamespace(), SimpleNamespace(), scope=MemoryScope(bank_id="local")
+    )
+    with pytest.raises(ValueError):
+        await getattr(backend, operation)(str(document_id), *args)

@@ -5,6 +5,8 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 
 from src.engine.components.store.models import Base, Document, EMBEDDING_DIM
 from src.engine.hindsight_components.models import (
+    ConsolidationFactEvent,
+    ConsolidationJob,
     ConversationMemorySource,
     HindsightDocumentState,
     HindsightGraphOutbox,
@@ -14,6 +16,10 @@ from src.engine.hindsight_components.models import (
     MemoryUnit,
     MemoryUnitEntity,
     MentalModel,
+    ObservationEvidence,
+    ObservationHistory,
+    ObservationRecord,
+    FactTombstone,
 )
 
 
@@ -28,6 +34,12 @@ def test_hindsight_tables_share_existing_metadata_and_document_fk() -> None:
         "hindsight_document_state",
         "hindsight_graph_outbox",
         "conversation_memory_sources",
+        "observation_records",
+        "observation_history",
+        "observation_evidence",
+        "memory_fact_tombstones",
+        "consolidation_fact_events",
+        "consolidation_jobs",
     }
 
     assert expected <= set(Base.metadata.tables)
@@ -68,6 +80,15 @@ def test_memory_schema_compiles_for_postgresql_with_expected_vector_dimension() 
         "using gin"
         in str(CreateIndex(lexical_index).compile(dialect=postgresql.dialect())).lower()
     )
+    observation_index = next(
+        index
+        for index in ObservationRecord.__table__.indexes
+        if index.name == "idx_observation_exact"
+    )
+    observation_ddl = str(
+        CreateIndex(observation_index).compile(dialect=postgresql.dialect())
+    ).lower()
+    assert "(bank_id, md5(normalized_text))" in observation_ddl
 
 
 def test_all_hindsight_model_tables_are_distinct() -> None:
@@ -81,6 +102,12 @@ def test_all_hindsight_model_tables_are_distinct() -> None:
         HindsightDocumentState,
         HindsightGraphOutbox,
         ConversationMemorySource,
+        ObservationRecord,
+        ObservationHistory,
+        ObservationEvidence,
+        FactTombstone,
+        ConsolidationFactEvent,
+        ConsolidationJob,
     ]
 
     assert len({model.__tablename__ for model in models}) == len(models)
@@ -108,7 +135,7 @@ def test_conversation_memory_source_schema_has_queue_constraints() -> None:
 
     assert "foreign key(document_id) references documents" in ddl
     assert "on delete cascade" in ddl
-    assert "unique (session_id, turn_id)" in ddl
+    assert "unique (bank_id, session_id, turn_id)" in ddl
     for status in ("pending", "processing", "completed", "failed", "cancelled"):
         assert status in ddl
     assert {index.name for index in ConversationMemorySource.__table__.indexes} == {

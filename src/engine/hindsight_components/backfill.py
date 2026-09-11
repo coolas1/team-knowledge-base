@@ -20,12 +20,14 @@ import httpx
 from sqlalchemy import or_, select
 
 from src.engine.components.store.models import Document
+from src.engine.components.store.scope import scope_predicate
+from src.engine.scope import MemoryScope
 
 from src.engine.hindsight_components.models import HindsightDocumentState
 from src.engine.hindsight_components.providers import ProjectHindsightProviders
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
 from src.engine.hindsight_components.service import HindsightService
-from src.engine.hindsight_components.types import RetainResult
+from src.engine.hindsight_components.types import RetainResult, RetentionRevisionConflict
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +37,7 @@ class BackfillCandidate:
     content: str
     file_type: str
     hindsight_status: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,12 +85,15 @@ class RetainService(Protocol):
 class PostgresCandidateSource:
     """Select eligible primary documents without changing GraphRAG state."""
 
-    def __init__(self, session_factory=None) -> None:
+    def __init__(
+        self, session_factory=None, *, scope: MemoryScope | None = None
+    ) -> None:
         if session_factory is None:
             from src.engine.components.store.postgres import async_session_factory
 
             session_factory = async_session_factory
         self._session_factory = session_factory
+        self.scope = scope or MemoryScope()
 
     async def list_candidates(
         self,
@@ -101,7 +107,11 @@ class PostgresCandidateSource:
                 HindsightDocumentState,
                 HindsightDocumentState.document_id == Document.id,
             )
-            .where(Document.status == "indexed", Document.raw_text != "")
+            .where(
+                Document.status == "indexed",
+                Document.raw_text != "",
+                scope_predicate(Document.bank_id, Document.tags, self.scope),
+            )
             .order_by(Document.created_at, Document.id)
         )
         if document_id is not None:
@@ -123,6 +133,7 @@ class PostgresCandidateSource:
                 content=document.raw_text,
                 file_type=document.file_type,
                 hindsight_status=hindsight_status,
+                tags=tuple(getattr(document, "tags", None) or []),
             )
             for document, hindsight_status in rows
         ]
@@ -196,18 +207,23 @@ async def run_backfill(
                     content=candidate.content,
                     file_type=candidate.file_type,
                     source_type="historical-backfill",
+                    **({"tags": candidate.tags} if candidate.tags else {}),
                 )
                 item = BackfillItem(
                     document_id=candidate.document_id,
                     title=candidate.title,
-                    status="indexed",
+                    status=result.status
+                    if result.status in {"degraded", "failed"}
+                    else "indexed",
                     memories=result.memories,
                     links=result.links,
+                    error=result.error_code,
                 )
             except Exception as error:
-                await state_store.set_document_state(
-                    candidate.document_id, "failed", error_msg=str(error)
-                )
+                if not isinstance(error, RetentionRevisionConflict):
+                    await state_store.set_document_state(
+                        candidate.document_id, "failed", error_msg=str(error)
+                    )
                 item = BackfillItem(
                     document_id=candidate.document_id,
                     title=candidate.title,
@@ -223,7 +239,7 @@ async def run_backfill(
         dry_run=False,
         selected=len(items),
         succeeded=sum(item.status == "indexed" for item in items),
-        failed=sum(item.status == "failed" for item in items),
+        failed=sum(item.status in {"failed", "degraded"} for item in items),
         items=items,
     )
 

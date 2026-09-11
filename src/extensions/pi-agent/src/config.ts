@@ -1,6 +1,11 @@
 import path from "node:path";
 
 export interface TkbAdapterConfig {
+  /** Trusted HTTP credential, never included in tool arguments or prompts. */
+  scopeToken?: string;
+  /** Stable server binding identity for durable delivery, never caller input. */
+  scopeKey?: string;
+  conversationMemoryReliableDelivery?: boolean;
   mcpUrl: string;
   connectTimeoutMs: number;
   defaultToolTimeoutMs: number;
@@ -13,6 +18,9 @@ export interface TkbAdapterConfig {
   conversationMemoryRecallTimeoutMs: number;
   conversationMemoryRecallLimit: number;
   conversationMemoryContextBudgetChars: number;
+  conversationMemoryTypes: string[];
+  conversationMemoryShowType: boolean;
+  conversationMemoryShowSourceTime: boolean;
   conversationMemoryRetentionContext: string;
 }
 
@@ -102,6 +110,9 @@ function enumValue<T extends string>(
 export function loadTkbAdapterConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): TkbAdapterConfig {
+  if (enabled(env.TKB_CONVERSATION_MEMORY_RELIABLE_DELIVERY) && !enabled(env.TKB_CONVERSATION_MEMORY_ENABLED)) {
+    throw new Error("reliable delivery requires conversation memory");
+  }
   return {
     mcpUrl: env.TKB_MCP_URL?.trim() || "http://localhost:8000/mcp/",
     connectTimeoutMs: positiveInteger(env.TKB_CONNECT_TIMEOUT_MS, 10_000),
@@ -112,6 +123,7 @@ export function loadTkbAdapterConfig(
     enableWriteTools: enabled(env.TKB_ENABLE_WRITE_TOOLS),
     enableFullGraph: enabled(env.TKB_ENABLE_FULL_GRAPH),
     conversationMemoryEnabled: enabled(env.TKB_CONVERSATION_MEMORY_ENABLED),
+    conversationMemoryReliableDelivery: enabled(env.TKB_CONVERSATION_MEMORY_RELIABLE_DELIVERY),
     conversationMemoryRecallTimeoutMs: requiredPositiveInteger(
       env.TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS,
       5_000,
@@ -127,6 +139,14 @@ export function loadTkbAdapterConfig(
       env.TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS,
       6_000,
       "TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS",
+    ),
+    conversationMemoryTypes: (env.TKB_CONVERSATION_MEMORY_TYPES ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+    conversationMemoryShowType: enabled(env.TKB_CONVERSATION_MEMORY_SHOW_TYPE),
+    conversationMemoryShowSourceTime: enabled(
+      env.TKB_CONVERSATION_MEMORY_SHOW_SOURCE_TIME,
     ),
     conversationMemoryRetentionContext:
       env.TKB_CONVERSATION_MEMORY_RETENTION_CONTEXT?.trim() ||

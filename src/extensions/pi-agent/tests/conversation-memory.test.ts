@@ -79,6 +79,23 @@ describe("conversation memory prompt integration", () => {
     expect(block).toContain("&lt;/untrusted_conversation_memory&gt;");
   });
 
+  it("optionally labels memory type and source time", () => {
+    const block = formatConversationMemoryBlock(
+      {
+        memories: [{
+          memory_id: "m1", text: "Current preference", memory_type: "observation",
+          document_id: "d1", session_id: "derived", turn_id: "m1", score: 1,
+          mentioned_at: "2026-09-09T00:00:00Z", metadata: {},
+        }],
+        trace: {},
+      },
+      500,
+      { showType: true, showSourceTime: true },
+    );
+    expect(block).toContain("type=observation");
+    expect(block).toContain("time=2026-09-09T00:00:00Z");
+  });
+
   it("fails open on empty, disabled, and recall errors", async () => {
     const disabled = loadTkbAdapterConfig({});
     expect(await recallMemoryForPrompt(client(), "question", disabled)).toBe("");
@@ -117,6 +134,23 @@ describe("conversation memory prompt integration", () => {
     expect(result.systemPrompt).toContain("User prefers concise answers.");
     expect(result.systemPrompt).toContain("<untrusted_conversation_memory>");
     expect(rawClient.recallConversationMemory).toHaveBeenCalledOnce();
+  });
+
+  it("passes configured types and time request without changing visible history", async () => {
+    const rawClient = client();
+    const config = loadTkbAdapterConfig({
+      TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_TYPES: "world, observation",
+      TKB_CONVERSATION_MEMORY_SHOW_SOURCE_TIME: "true",
+    });
+    await recallMemoryForPrompt(rawClient, "question", config);
+    expect(rawClient.recallConversationMemory).toHaveBeenCalledWith(
+      "question",
+      expect.objectContaining({
+        memoryTypes: ["world", "observation"],
+        includeSourceTime: true,
+      }),
+    );
   });
 
   it("keeps delimiters when a memory line exceeds the context budget", () => {

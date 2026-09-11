@@ -1,0 +1,14 @@
+{
+  "status": "not_run",
+  "tkb_sha": "f33759a24a198e5245588d86c918024b82270918",
+  "upstream_sha": "9676fc1699c199175809285ea0e1095ab71115d0",
+  "llm_model": "deepseek-v4-flash-vision-exp",
+  "embedding_model": "nomic-embed-text",
+  "upstream_effective_models": "not_resolved_not_run",
+  "corpus_sha256": "e4534bd86bada0c28f1a1061823ff47772ac4e955a46eb291b027522530178e3",
+  "config_sha256": {
+    "config/app.yaml": "5a7ceff49da9031a01b12b7a2966f10eebfbca8dda361627598efb565b3d3647",
+    "config/settings.py": "0ab461239ac8f3851c3e3699d14a1dfa13e852293698dd924a05e9f460a5d6aa"
+  },
+  "notes": "TKB configured model names only; actual provider/model versions must be resolved before comparison. Existing docker-compose.yml change is outside this implementation."
+}

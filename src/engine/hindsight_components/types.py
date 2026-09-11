@@ -6,6 +6,57 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from src.engine.scope import MemoryScope as MemoryScope
+from src.engine.scope import TagExpression as TagExpression
+
+RECALL_INCLUDES = frozenset({"chunks", "documents", "source_facts", "entities"})
+RECALL_SCORE_NAMES = frozenset(
+    {"final", "semantic", "keyword", "graph", "temporal", "reranker"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RecallFilter:
+    memory_types: tuple[str, ...] = ()
+    source_types: tuple[str, ...] = ()
+    tags: TagExpression | None = None
+    reference_time: datetime | None = None
+    min_scores: dict[str, float] = field(default_factory=dict)
+    prefer_observations: bool = False
+    include: tuple[str, ...] = ("chunks", "entities")
+    include_stale: bool = False
+    timeout_seconds: float | None = None
+    max_tokens: int | None = None
+    max_candidates: int | None = None
+
+    def __post_init__(self) -> None:
+        memory_types = tuple(dict.fromkeys(self.memory_types))
+        source_types = tuple(dict.fromkeys(self.source_types))
+        include = tuple(dict.fromkeys(self.include))
+        if any(not item.strip() for item in memory_types + source_types):
+            raise ValueError("recall type filters must be nonempty strings")
+        unknown_includes = set(include) - RECALL_INCLUDES
+        if unknown_includes:
+            raise ValueError(f"unsupported recall include: {sorted(unknown_includes)}")
+        unknown_scores = set(self.min_scores) - RECALL_SCORE_NAMES
+        if unknown_scores:
+            raise ValueError(f"unsupported minimum score: {sorted(unknown_scores)}")
+        if any(not 0 <= float(value) <= 1 for value in self.min_scores.values()):
+            raise ValueError("minimum scores must be between zero and one")
+        if self.reference_time is not None and self.reference_time.tzinfo is None:
+            raise ValueError("reference_time must include a timezone")
+        for name, value in (
+            ("timeout_seconds", self.timeout_seconds),
+            ("max_tokens", self.max_tokens),
+            ("max_candidates", self.max_candidates),
+        ):
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive")
+        object.__setattr__(self, "memory_types", memory_types)
+        object.__setattr__(self, "source_types", source_types)
+        object.__setattr__(self, "include", include)
+        object.__setattr__(self, "min_scores", dict(self.min_scores))
+
 
 @dataclass(frozen=True, slots=True)
 class DocumentMemoryState:
@@ -26,6 +77,12 @@ class ConversationMemoryJob:
     content: str
     attempts: int
     status: str
+    bank_id: str = "default-team"
+    tags: tuple[str, ...] = ()
+    operation_id: str | None = None
+    lease_token: str | None = None
+    lease_expires_at: datetime | None = None
+    source_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +123,40 @@ class RetainInput:
     context: str | None = None
     tags: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    agent_name: str | None = None
+    speakers: dict[str, str | None] = field(default_factory=dict)
+    source_timestamp: datetime | None = None
+    reference_timezone: str = "UTC"
+    policy_version: int = 1
+    expected_revision: int | None = None
+    request_id: str | None = None
+    force_extraction: bool = False
+    update_mode: str = "replace"
+
+    def __post_init__(self):
+        from zoneinfo import ZoneInfo
+
+        ZoneInfo(self.reference_timezone)
+        if self.update_mode not in {"append", "replace"}:
+            raise ValueError("update_mode must be append or replace")
+        if self.update_mode == "append" and not self.request_id:
+            raise ValueError("append requires a request_id")
+        if self.source_timestamp is not None and self.source_timestamp.tzinfo is None:
+            raise ValueError("source_timestamp must include a timezone")
+        if self.policy_version < 1:
+            raise ValueError("policy_version must be positive")
+        if self.request_id is not None and (
+            not isinstance(self.request_id, str)
+            or not self.request_id.strip()
+            or len(self.request_id) > 200
+        ):
+            raise ValueError("request_id must contain 1–200 characters")
+        if self.expected_revision is not None and (
+            type(self.expected_revision) is not int or self.expected_revision < 0
+        ):
+            raise ValueError("expected_revision must be a nonnegative integer")
+        if set(self.speakers) - {"user", "assistant", "unknown"}:
+            raise ValueError("unsupported speaker role")
 
 
 @dataclass(slots=True)
@@ -78,6 +169,9 @@ class ExtractedFact:
     location: str | None = None
     caused_by: list[int] = field(default_factory=list)
     confidence: float = 1.0
+    speaker_role: str = "unknown"
+    modality: str = "unknown"
+    entity_aliases: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -118,6 +212,16 @@ class RetainPlan:
     source_type: str
     memories: list[MemoryDraft]
     links: list[MemoryLinkDraft]
+    extraction_status: str = "success"
+    stage_results: dict[str, str] = field(default_factory=dict)
+    source_context: dict[str, Any] = field(default_factory=dict)
+    expected_revision: int | None = None
+    revision: int | None = None
+    request_id: str | None = None
+    request_hash: str | None = None
+    result_payload: dict[str, Any] = field(default_factory=dict)
+    extraction_cache: dict[str, Any] = field(default_factory=dict)
+    content_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +232,18 @@ class RetainResult:
     observations: int
     memories: int
     links: int
+    status: str = "success"
+    stage_results: dict[str, str] = field(default_factory=dict)
+    error_code: str | None = None
+    revision: int | None = None
+
+
+class RetentionRevisionConflict(ValueError):
+    """Retention was planned against a revision that is no longer current."""
+
+
+class RetentionRequestConflict(ValueError):
+    """An accepted request key cannot be reused with different input."""
 
 
 @dataclass(slots=True)
@@ -145,6 +261,10 @@ class RecallCandidate:
     context: str = ""
     occurred_start: str | None = None
     occurred_end: str | None = None
+    mentioned_at: str | None = None
+    updated_at: str | None = None
+    freshness: str = "active"
+    stale_reason: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     source_memory_ids: list[str] = field(default_factory=list)
     embedding: list[float] | None = None
@@ -170,6 +290,10 @@ class RecallCandidate:
             "metadata": {**self.metadata, "title": self.title},
             "occurred_start": self.occurred_start,
             "occurred_end": self.occurred_end,
+            "mentioned_at": self.mentioned_at,
+            "updated_at": self.updated_at,
+            "freshness": self.freshness,
+            "stale_reason": self.stale_reason,
             "source_memory_ids": list(self.source_memory_ids),
             "scores": {
                 "final": self.final_score,
@@ -188,9 +312,20 @@ class RecallResult:
     chunks: dict[str, dict[str, Any]]
     entities: dict[str, Any]
     trace: dict[str, Any]
+    documents: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def evidence(self) -> list[dict[str, Any]]:
         return [item.as_evidence() for item in self.results]
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryExpansion:
+    memory: dict[str, Any]
+    chunk: dict[str, Any] | None = None
+    document: dict[str, Any] | None = None
+    source_facts: tuple[dict[str, Any], ...] = ()
+    token_count: int = 0
+    truncated: bool = False
 
 
 @dataclass(slots=True)
@@ -203,6 +338,11 @@ class MentalModel:
     trigger: str | None = None
     embedding: list[float] | None = None
     source_memory_ids: list[str] = field(default_factory=list)
+    source_query: str = ""
+    version: int = 0
+    freshness: str = "empty"
+    last_success_at: datetime | None = None
+    source_versions: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -224,3 +364,8 @@ class ReflectResult:
     text: str
     based_on: dict[str, list[dict[str, Any]]]
     tool_trace: list[dict[str, Any]]
+    actual_citations: list[dict[str, str]] = field(default_factory=list)
+
+
+class RetentionLeaseLost(RuntimeError):
+    """The worker no longer owns the right to publish this retention result."""

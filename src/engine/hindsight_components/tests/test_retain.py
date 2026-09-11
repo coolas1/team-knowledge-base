@@ -1,10 +1,70 @@
 from __future__ import annotations
 
+import asyncio
+
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.retain import RetainEngine
 from src.engine.hindsight_components.types import RetainInput
 
 from src.engine.hindsight_components.tests.fakes import FakeProviders, FakeRepository
+
+
+async def test_fact_extraction_uses_bounded_chunk_concurrency() -> None:
+    class TrackingProviders(FakeProviders):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active = 0
+            self.peak = 0
+
+        async def json(self, system: str, user: str, *, timeout: float = 600):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0.01)
+            try:
+                return await super().json(system, user, timeout=timeout)
+            finally:
+                self.active -= 1
+
+    providers = TrackingProviders()
+    engine = RetainEngine(
+        FakeRepository(),
+        providers,
+        HindsightOptions(
+            chunk_tokens=2, chunk_overlap_tokens=0, retain_chunk_concurrency=2
+        ),
+    )
+
+    await engine.retain(
+        RetainInput(
+            document_id="parallel-doc",
+            title="parallel.txt",
+            content="aa\n\nbb\n\ncc\n\ndd\n\nee\n\nff",
+            file_type="text",
+        )
+    )
+
+    assert providers.peak == 2
+
+
+async def test_repeated_extraction_has_stable_fact_and_chunk_references():
+    repository = FakeRepository()
+    engine = RetainEngine(repository, FakeProviders(), HindsightOptions())
+    value = RetainInput(
+        document_id="stable-doc",
+        title="source",
+        content="Alice ran a survey",
+        file_type="text",
+    )
+    await engine.retain(value)
+    first = {
+        m.text: (m.id, m.metadata.get("chunk_id")) for m in repository.plan.memories
+    }
+    await engine.retain(value)
+    second = {
+        m.text: (m.id, m.metadata.get("chunk_id")) for m in repository.plan.memories
+    }
+    assert first == second
+    assert all(chunk_id for _, chunk_id in first.values() if chunk_id is not None)
 
 
 async def test_retain_builds_atomic_memories_observation_and_links() -> None:
@@ -34,6 +94,28 @@ async def test_retain_builds_atomic_memories_observation_and_links() -> None:
     assert all(
         memory.document_id == "document-1" for memory in repository.plan.memories
     )
+
+
+async def test_background_consolidation_disables_legacy_same_retain_observation():
+    repository = FakeRepository()
+    providers = FakeProviders()
+    engine = RetainEngine(
+        repository, providers, HindsightOptions(consolidation_enabled=True)
+    )
+    result = await engine.retain(
+        RetainInput(
+            document_id="document-1",
+            title="week.md",
+            content="Alice ran a survey and produced a report.",
+            file_type="markdown",
+        )
+    )
+    assert result.observations == 0
+    assert result.stage_results["consolidate"] == "queued"
+    assert all(
+        memory.memory_type != "observation" for memory in repository.plan.memories
+    )
+    assert len(providers.json_calls) == 1
 
 
 async def test_retain_skips_empty_content_without_raising() -> None:

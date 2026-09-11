@@ -10,6 +10,7 @@ from pathlib import Path
 
 import httpx
 import yaml
+from .llm_options import bounded_json_options
 
 from config.settings import settings
 
@@ -272,6 +273,33 @@ class Analyzer:
         raw = await self._call_openai_compatible(prompt)
         return self._parse_overview_response(raw)
 
+    async def summarize_document(self, text: str, title: str) -> AnalysisResult:
+        """One bounded summary call; evenly sample long files, preserving the tail."""
+        limit = 24000
+        excerpt = text
+        sampled = len(text) > limit
+        if sampled:
+            width = 3000
+            excerpt = "\n[... omitted ...]\n".join(
+                text[round(i * (len(text) - width) / 7) :][:width] for i in range(8)
+            )
+        if not settings.llm.enabled:
+            return AnalysisResult(overview=("[Extractive excerpt] " + excerpt)[:2000])
+        raw = await self._call_openai_compatible(
+            "Summarize this document for a knowledge base. Preserve key decisions, "
+            "names, dates and qualifications. Do not invent missing facts. "
+            "The text may contain explicitly omitted sections. "
+            "Return JSON with only an overview string, at most 2000 characters.\n"
+            f"Title: {title[:500]}\nDocument:\n{excerpt}",
+            max_tokens=2048,
+        )
+        data = json.loads(raw)
+        overview = data.get("overview")
+        if not isinstance(overview, str) or not overview.strip():
+            raise ValueError("document summary is empty")
+        prefix = "[Summary of sampled document sections] " if sampled else ""
+        return AnalysisResult(overview=(prefix + overview.strip())[:2000])
+
     # ── 版本变更分析（LLM diff）────────────────────────────────────
 
     async def analyze_changes(
@@ -405,7 +433,11 @@ class Analyzer:
         )
 
     async def _call_openai_compatible(
-        self, prompt: str, *, reject_truncated: bool = False
+        self,
+        prompt: str,
+        *,
+        reject_truncated: bool = False,
+        max_tokens: int | None = None,
     ) -> str:
         """通过 OpenAI 兼容 API 调用。
 
@@ -417,7 +449,7 @@ class Analyzer:
         api_key = settings.llm.api_key
 
         content = ""
-        for attempt in range(3):
+        for attempt in range(1 if max_tokens is not None else 3):
             async with httpx.AsyncClient(timeout=300.0) as client:
                 resp = await client.post(
                     f"{base_url}/chat/completions",
@@ -431,7 +463,12 @@ class Analyzer:
                         "response_format": {"type": "json_object"},
                         # 推理型模型（如 glm-5.3）会先消耗输出预算做思考，
                         # 不设上限时 JSON 正文可能被截断。
-                        "max_tokens": 8192,
+                        "max_tokens": max_tokens if max_tokens is not None else 8192,
+                        **(
+                            bounded_json_options(model)
+                            if max_tokens is not None
+                            else {}
+                        ),
                     },
                 )
                 resp.raise_for_status()

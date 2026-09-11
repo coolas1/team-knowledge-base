@@ -48,6 +48,7 @@ from src.engine.interface import (
 )
 from src.engine.hindsight_components.enrich import MemoryStateEnricher
 from src.engine.hindsight_components.hook import build_retain_hook
+from src.engine.scope import MemoryScope, TagFilter
 
 # Uploaded document originals; settings-driven (UPLOADS_DIR) so the compose
 # deployment can point at its named volume while the default stays relative.
@@ -168,15 +169,31 @@ class GraphRAGBackend:
         neo4j: Neo4jClient,
         pipeline: Pipeline,
         state_enricher: MemoryStateEnricher | None = None,
+        *,
+        scope: MemoryScope | None = None,
+        write_tags: tuple[str, ...] = (),
     ) -> None:
         self._neo4j = neo4j
         self._pipeline = pipeline
         self._enricher = state_enricher
+        self.scope = scope or MemoryScope()
+        self._write_tags = TagFilter(write_tags).tags
+        if hasattr(neo4j, "with_scope"):
+            self._neo4j = neo4j.with_scope(self.scope)
 
     async def _enrich(self, ref: DocumentRef) -> DocumentRef:
         if self._enricher is not None:
             await self._enricher.enrich_ref(ref)
         return ref
+
+    def with_scope(self, scope: MemoryScope, *, write_tags: tuple[str, ...] = ()):
+        return GraphRAGBackend(
+            self._neo4j,
+            self._pipeline,
+            self._enricher.with_scope(scope) if self._enricher is not None else None,
+            scope=scope,
+            write_tags=write_tags,
+        )
 
     # ── ingest / reingest / remove ───────────────────────────────
 
@@ -208,6 +225,8 @@ class GraphRAGBackend:
     async def _ingest_one(
         self, source: IngestSource
     ) -> tuple[DocumentRef, asyncio.Task]:
+        if not self.scope.permits(self.scope.bank_id, self._write_tags):
+            raise ValueError("document write tags are outside the trusted scope")
         data = source.data
         if source.path is not None and not data:
             data = source.path.read_bytes()
@@ -232,6 +251,8 @@ class GraphRAGBackend:
                 await session.execute(
                     select(Document)
                     .where(
+                        public_document_filter(self.scope),
+                        Document.tags == list(self._write_tags),
                         Document.title == source.name,
                         Document.is_current.is_(True),
                     )
@@ -253,6 +274,8 @@ class GraphRAGBackend:
                             select(Document.id, Document.title, Document.raw_text)
                             .where(
                                 Document.is_current.is_(True),
+                                public_document_filter(self.scope),
+                                Document.tags == list(self._write_tags),
                                 Document.status == "indexed",
                                 Document.file_type == file_type,
                                 func.length(Document.raw_text)
@@ -299,6 +322,8 @@ class GraphRAGBackend:
                     .values(is_current=False)
                 )
                 doc = Document(
+                    bank_id=self.scope.bank_id,
+                    tags=list(self._write_tags),
                     id=doc_id,
                     title=source.name,
                     file_type=file_type,
@@ -310,6 +335,8 @@ class GraphRAGBackend:
                 )
             else:
                 doc = Document(
+                    bank_id=self.scope.bank_id,
+                    tags=list(self._write_tags),
                     id=doc_id,
                     title=source.name,
                     file_type=file_type,
@@ -366,7 +393,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc or not is_public_document(doc):
+            if not doc or not is_public_document(doc, self.scope):
                 raise ValueError(f"文档不存在: {doc_id}")
         return await self.edit_document(doc_id, content)
 
@@ -379,7 +406,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc, self.scope):
                 raise ValueError(f"文档不存在: {doc_id}")
             if not doc.is_current:
                 raise ValueError("只能编辑文档的当前版本")
@@ -396,6 +423,8 @@ class GraphRAGBackend:
             new_id = uuid.uuid4()
             file_path = UPLOAD_DIR / str(new_id) / _safe_filename(title)
             new_doc = Document(
+                bank_id=doc.bank_id,
+                tags=list(doc.tags or []),
                 id=new_id,
                 title=title,
                 file_type=file_type,
@@ -442,7 +471,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc or not is_public_document(doc):
+            if not doc or not is_public_document(doc, self.scope):
                 raise ValueError(f"文档不存在: {doc_id}")
             new_text = doc.raw_text or ""
             file_path = Path(doc.file_path) if doc.file_path else None
@@ -479,7 +508,9 @@ class GraphRAGBackend:
         doc_existed = False
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if doc is not None and is_public_document(doc):
+            if doc is not None and not is_public_document(doc, self.scope):
+                return
+            if doc is not None:
                 doc_existed = True
                 await self._pipeline.before_remove(doc_id)
                 _remove_upload_directory(uid)
@@ -508,7 +539,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc, self.scope):
                 raise ValueError(f"文档不存在: {doc_id}")
             title = doc.title
             raw_text = doc.raw_text or ""
@@ -575,14 +606,17 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc, self.scope):
                 raise ValueError(f"文档不存在: {doc_id}")
 
             rows = (
                 (
                     await session.execute(
                         select(Document)
-                        .where(Document.version_group == doc.version_group)
+                        .where(
+                            Document.version_group == doc.version_group,
+                            public_document_filter(self.scope),
+                        )
                         .order_by(Document.version_number.asc())
                     )
                 )
@@ -623,7 +657,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc:
+            if not doc or not is_public_document(doc, self.scope):
                 raise ValueError(f"文档不存在: {doc_id}")
 
             row = (
@@ -665,6 +699,12 @@ class GraphRAGBackend:
                 raise ValueError(
                     f"文档不存在: {doc_id if doc is None else parent_doc_id}"
                 )
+            if not is_public_document(doc, self.scope) or not is_public_document(
+                parent, self.scope
+            ):
+                raise ValueError("document not found")
+            if (doc.bank_id, doc.tags) != (parent.bank_id, parent.tags):
+                raise ValueError("version chain must share bank and tags")
             if doc.version_group == parent.version_group:
                 return {
                     "doc_id": doc_id,
@@ -753,7 +793,11 @@ class GraphRAGBackend:
 
         async with async_session_factory() as session:
             result = await full_search(
-                session, self._neo4j, request.query, top_k=request.top_k
+                session,
+                self._neo4j,
+                request.query,
+                top_k=request.top_k,
+                scope=self.scope,
             )
         chunks = [
             RecallChunk(
@@ -857,7 +901,7 @@ class GraphRAGBackend:
         async with async_session_factory() as session:
             stmt = (
                 select(Document)
-                .where(public_document_filter())
+                .where(public_document_filter(self.scope))
                 .order_by(Document.created_at.desc())
             )
             if file_type:
@@ -865,7 +909,9 @@ class GraphRAGBackend:
             if status:
                 stmt = stmt.where(Document.status == status)
 
-            count_stmt = select(func.count(Document.id)).where(public_document_filter())
+            count_stmt = select(func.count(Document.id)).where(
+                public_document_filter(self.scope)
+            )
             if file_type:
                 count_stmt = count_stmt.where(Document.file_type == file_type)
             if status:
@@ -900,7 +946,7 @@ class GraphRAGBackend:
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
-            if not doc or not is_public_document(doc):
+            if not doc or not is_public_document(doc, self.scope):
                 return None
             count_stmt = select(func.count(Chunk.id)).where(Chunk.doc_id == uid)
             chunk_count = (await session.execute(count_stmt)).scalar() or 0
@@ -926,24 +972,32 @@ class GraphRAGBackend:
 def build(config: EngineConfig) -> GraphRAGBackend:
     """Factory used by src.engine.config.build_engine."""
 
-    neo4j = Neo4jClient()
+    from src.engine.components.store.source_graph import SourceNeo4jClient
+
+    neo4j = SourceNeo4jClient()
     analyzer = Analyzer(schema_path=config.config_dir / "entity_schema.yaml")
     index_hook = config.index_hook
     enricher: MemoryStateEnricher | None = None
     if config.memory is not None:
         from src.engine.hindsight_components.repository import PostgresMemoryRepository
 
-        repository = PostgresMemoryRepository()
+        repository = PostgresMemoryRepository(
+            consolidation_enabled=config.memory.consolidation_enabled
+        )
         enricher = MemoryStateEnricher(repository)
         if index_hook is None:
             index_hook = build_retain_hook(
                 max_concurrent=config.memory.retain_max_concurrent,
                 repository=repository,
             )
+    from src.engine.components.file_summary import FileSummaryManager
+
     pipeline = Pipeline(
         neo4j,
         analyzer=analyzer,
         index_hook=index_hook,
+        vector_only=config.ingest.vector_only,
+        summary_manager=FileSummaryManager(async_session_factory, analyzer=analyzer),
         chunk_concurrency=config.ingest.chunk_concurrency,
         doc_concurrency=config.ingest.doc_concurrency,
         llm_retries=config.ingest.llm_retries,

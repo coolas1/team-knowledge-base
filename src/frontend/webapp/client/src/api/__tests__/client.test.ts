@@ -36,6 +36,44 @@ describe('api client', () => {
     expect(init?.body).toBe(JSON.stringify({ query: 'acme', top_k: 7 }))
   })
 
+  it('loads scoped memory diagnostics and retries an operation', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: async () => [] })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ changed: 1 }) })
+
+    await api.listMemoryOperations({ session_id: 'session/1', turn_id: 'turn 1' })
+    await api.retryMemoryOperation('operation/1')
+
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/memory/operations?session_id=session%2F1&turn_id=turn+1',
+      undefined,
+    )
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/memory/operations/operation%2F1/retry',
+      { method: 'POST' },
+    )
+  })
+
+  it('publishes policy with an expected version', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ bank_id: 'default-team', version: 3, policy: {} }),
+    })
+
+    await api.updateMemoryPolicy(2, { max_tokens: 1024 })
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/memory/policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_version: 2,
+        policy: { max_tokens: 1024 },
+      }),
+    })
+  })
+
   it('edits document content with PUT', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -244,6 +282,14 @@ describe('api client', () => {
       '/api/agent/sessions/session%2F1/memory',
       expect.objectContaining({ method: 'DELETE' }),
     )
+  })
+
+  it('loads the expanded memory fact window', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('[]', { status: 200 }))
+
+    await api.listMemoryFacts()
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/memory/facts?limit=500', undefined)
   })
 
   it('bounds every session request with a client deadline above the BFF read timeout', () => {

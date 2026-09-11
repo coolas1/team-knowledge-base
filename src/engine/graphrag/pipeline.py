@@ -30,6 +30,7 @@ from src.engine.components.extractors.registry import registry
 from src.engine.components.retry import retry_transient
 from src.engine.graphrag.progress import clear_progress, set_progress
 from src.engine.interface import DocumentIndexHook
+from src.engine.scope import MemoryScope, TagFilter
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +68,13 @@ class Pipeline:
         index_hook: DocumentIndexHook | None = None,
         chunk_concurrency: int = 4,
         doc_concurrency: int = 2,
+        vector_only: bool = False,
+        summary_manager=None,
         llm_retries: int = 3,
         llm_backoff_base_seconds: float = 2.0,
     ) -> None:
+        self._summary_manager = summary_manager
+        self._vector_only = vector_only
         self._neo4j = neo4j
         self._analyzer = analyzer or Analyzer()
         self._index_hook = index_hook
@@ -123,20 +128,24 @@ class Pipeline:
 
         async with asyncio.TaskGroup() as tg:
             overview_task = tg.create_task(
-                self._with_retry(
+                self._summary_overview(raw_text, title, doc_id)
+                if self._vector_only
+                else self._with_retry(
                     lambda: self._analyzer.analyze_overview(raw_text, title),
-                    description="文档 overview 分析",
+                    description="document overview",
                 )
             )
             embed_task = tg.create_task(
                 self._with_retry(
-                    lambda: embedder.embed_batch([c.text for c in chunks])
-                    if chunks
-                    else _no_embeddings(),
+                    lambda: (
+                        embedder.embed_batch([c.text for c in chunks])
+                        if chunks
+                        else _no_embeddings()
+                    ),
                     description="embedding 批量生成",
                 )
             )
-            for i, chunk in enumerate(chunks):
+            for i, chunk in enumerate(chunks if not self._vector_only else []):
                 tg.create_task(analyze_one(i, chunk.text))
 
         return (
@@ -145,6 +154,12 @@ class Pipeline:
             [ca for ca in results if ca is not None],
             embed_task.result(),
         )
+
+    async def _summary_overview(self, raw_text, title, doc_id):
+        if self._summary_manager is None:
+            return await self._analyzer.summarize_document(raw_text, title)
+        summary = await self._summary_manager.prepare(str(doc_id), raw_text, title)
+        return AnalysisResult(overview=summary.text)
 
     async def process_file(
         self,
@@ -264,6 +279,9 @@ class Pipeline:
     ) -> None:
         """chunk 行写入 + 文档状态更新为 indexed（两条入库路径共用）。"""
         set_progress(str(doc_id), "writing_postgres", "写入数据库")
+        owner = await session.get(Document, doc_id)
+        if owner is None:
+            raise ValueError(f"文档不存在: {doc_id}")
         await session.execute(
             Chunk.__table__.delete().where(Chunk.doc_id == doc_id)  # type: ignore[union-attr]
         )
@@ -272,6 +290,8 @@ class Pipeline:
         for chunk, embedding in zip(chunks, embeddings):
             session.add(
                 Chunk(
+                    bank_id=owner.bank_id,
+                    tags=list(owner.tags or []),
                     doc_id=doc_id,
                     chunk_index=chunk.index,
                     chunk_text=chunk.text,
@@ -503,7 +523,8 @@ class Pipeline:
         if self._index_hook is None:
             return
         try:
-            await self._index_hook.after_indexed(
+            hook = await self._document_hook(document_id)
+            await hook.after_indexed(
                 document_id=document_id,
                 title=title,
                 content=content,
@@ -517,10 +538,25 @@ class Pipeline:
         if self._index_hook is None:
             return
         try:
-            await self._index_hook.before_remove(document_id)
+            hook = await self._document_hook(document_id)
+            await hook.before_remove(document_id)
         except Exception:
             # Document FK cascade remains the final cleanup guarantee.
             logger.exception("文档 %s 的附加索引清理钩子失败", document_id)
+
+    async def _document_hook(self, document_id: str):
+        hook = self._index_hook
+        if not hasattr(hook, "with_scope"):
+            return hook
+        async with async_session_factory() as session:
+            owner = await session.get(Document, UUID(document_id))
+            if owner is None:
+                raise ValueError("document does not exist")
+            tags = tuple(owner.tags or [])
+            return hook.with_scope(
+                MemoryScope(bank_id=owner.bank_id, visibility=TagFilter(tags, "exact")),
+                write_tags=tags,
+            )
 
     async def _write_chunk_graph(
         self,
@@ -565,6 +601,9 @@ class Pipeline:
         self, doc_id: str, file_relations: list, session
     ) -> None:
         """解析 file_relations 并写入 Document↔Document 边。"""
+        owner = await session.get(Document, UUID(doc_id))
+        if owner is None:
+            raise ValueError("document does not exist")
         for fr in file_relations:
             target_title = fr.related_doc_title
             if not target_title:
@@ -572,7 +611,16 @@ class Pipeline:
 
             # 通过 Postgres 按 title 查找目标文档
             result = await session.execute(
-                select(Document.id).where(Document.title == target_title).limit(1)
+                select(Document.id)
+                .where(
+                    Document.title == target_title,
+                    Document.bank_id == owner.bank_id,
+                    Document.tags.contains(owner.tags or []),
+                    Document.tags.contained_by(owner.tags or []),
+                    Document.id != UUID(doc_id),
+                )
+                .order_by(Document.id)
+                .limit(1)
             )
             target_doc = result.scalar_one_or_none()
 

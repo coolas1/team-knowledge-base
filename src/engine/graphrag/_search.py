@@ -11,8 +11,11 @@ from src.engine.components.reranker import get_reranker
 from src.engine.components.store.models import (
     Chunk,
     Document,
+    public_document_filter,
     INTERNAL_DOCUMENT_FILE_TYPES,
 )
+from src.engine.components.store.scope import scope_predicate
+from src.engine.scope import MemoryScope
 from src.engine.components.store.neo4j import Neo4jClient, GraphQueryResult
 from src.engine.components.embedder import embedder
 
@@ -51,6 +54,8 @@ async def vector_search(
     query: str,
     top_k: int = DEFAULT_TOP_K,
     current_only: bool = True,
+    *,
+    scope: MemoryScope | None = None,
 ) -> list[dict]:
     """第一层：向量粗筛。
 
@@ -74,6 +79,11 @@ async def vector_search(
             (1 - Chunk.embedding.cosine_distance(query_embedding)).label("score"),
         )
         .join(Document, Document.id == Chunk.doc_id)
+        .where(
+            public_document_filter(scope),
+            scope_predicate(Chunk.bank_id, Chunk.tags, scope or MemoryScope()),
+            Chunk.embedding.is_not(None),
+        )
         .order_by(Chunk.embedding.cosine_distance(query_embedding))
         .limit(top_k)
     )
@@ -177,6 +187,8 @@ async def full_search(
     top_k: int = DEFAULT_TOP_K,
     threshold: float = RERANKER_THRESHOLD,
     top_n: int = RERANKER_TOP_N,
+    *,
+    scope: MemoryScope | None = None,
 ) -> SearchResult:
     """完整检索流程：向量粗筛 → Reranker 守门 → 图谱增强 + 关联文档。
 
@@ -184,7 +196,9 @@ async def full_search(
         SearchResult(chunks, related_entities, related_docs) — 无 answer，由 Agent 合成。
     """
     # 第一层：向量粗筛
-    candidates = await vector_search(session, query, top_k)
+    candidates = await vector_search(session, query, top_k, scope=scope)
+    if hasattr(neo4j, "with_scope"):
+        neo4j = neo4j.with_scope(scope or MemoryScope())
 
     # 第二层：Reranker 守门
     survivors = reranker_filter(query, candidates, threshold, top_n)

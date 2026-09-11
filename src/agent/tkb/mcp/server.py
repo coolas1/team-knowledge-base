@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
+from src.engine.trusted_scope import bind_service, resolve_binding
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -23,6 +25,8 @@ from src.engine.interface import (
     KnowledgeBase,
     KnowledgeQuery,
     KnowledgeQueryRequest,
+    MemoryExpansionRequest,
+    MentalModelDefinition,
 )
 from src.agent.policy import HookPolicy, NeedsApproval
 
@@ -86,25 +90,43 @@ def set_conversation_memory_service(
 def _get_kb() -> KnowledgeBase:
     if _kb is None:
         raise RuntimeError("KnowledgeBase 未初始化")
-    return _kb
+    return bind_service(_kb, _request_binding(), writes=True)
 
 
 def _get_query_service() -> KnowledgeQuery:
     if _query_service is None:
         raise RuntimeError("Hindsight 查询服务未初始化")
-    return _query_service
+    return bind_service(_query_service, _request_binding())
 
 
 def _get_conversation_memory_service() -> ConversationMemory:
     if _conversation_memory_service is None:
         raise RuntimeError("Conversation memory is disabled")
-    return _conversation_memory_service
+    return bind_service(_conversation_memory_service, _request_binding(), writes=True)
+
+
+def _request_binding():
+    import os
+    from config.schema import load_config
+    from config.settings import settings
+
+    try:
+        request = mcp.get_context().request_context.request
+    except ValueError:
+        request = None  # stdio/direct in-process calls use the default scope.
+    return resolve_binding(
+        request.headers if request is not None else {},
+        enabled=load_config(
+            os.getenv("APP_CONFIG", "config/app.yaml")
+        ).engine.memory.features.scope,
+        bindings=settings.memory_scope_bindings,
+    )
 
 
 def _conversation_operation_failed(operation: str, error: Exception) -> RuntimeError:
     # 类型在前地带出底层错误：调用方需要区分"服务不可用"与"这次调用
     # 为什么失败"，无消息异常也能标识原因（design D9）。
-    message = str(error)
+    message = str(error) if operation != "retry" else ""
     detail = f"{type(error).__name__}: {message}" if message else type(error).__name__
     return RuntimeError(f"Conversation memory {operation} failed: {detail}")
 
@@ -113,6 +135,8 @@ async def recall_conversation_memory(
     query: str,
     top_k: int = 5,
     mode: Literal["fast", "deep"] = "fast",
+    memory_types: list[str] | None = None,
+    include_source_time: bool = False,
 ) -> dict[str, Any]:
     """Internal runtime operation; not intended for model-selected tools."""
     if not query.strip():
@@ -123,7 +147,13 @@ async def recall_conversation_memory(
         raise ValueError(f"unsupported retrieval mode: {mode}")
     try:
         result = await _get_conversation_memory_service().recall_conversation_memory(
-            ConversationMemoryRecallRequest(query=query, top_k=top_k, mode=mode)
+            ConversationMemoryRecallRequest(
+                query=query,
+                top_k=top_k,
+                mode=mode,
+                memory_types=tuple(memory_types or ()),
+                include_source_time=include_source_time,
+            )
         )
     except (ValueError, RuntimeError) as error:
         if isinstance(error, ValueError) or _conversation_memory_service is None:
@@ -139,12 +169,23 @@ async def enqueue_conversation_turn(
     turn_id: str,
     user_text: str,
     assistant_text: str,
+    require_durable_acceptance: bool = False,
+    source_timestamp: str | None = None,
+    reference_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """Internal runtime operation; not intended for model-selected tools."""
     if not session_id.strip() or not turn_id.strip():
         raise ValueError("session_id and turn_id must not be empty")
     if not user_text.strip() or not assistant_text.strip():
         raise ValueError("user_text and assistant_text must not be empty")
+    if require_durable_acceptance:
+        import os
+        from config.schema import load_config
+
+        if not load_config(
+            os.getenv("APP_CONFIG", "config/app.yaml")
+        ).engine.memory.features.reliable_retention:
+            raise ValueError("reliable delivery is disabled")
     try:
         result = await _get_conversation_memory_service().enqueue_conversation_turn(
             ConversationTurn(
@@ -152,6 +193,8 @@ async def enqueue_conversation_turn(
                 turn_id=turn_id,
                 user_text=user_text,
                 assistant_text=assistant_text,
+                source_timestamp=source_timestamp,
+                reference_timezone=reference_timezone,
             )
         )
     except (ValueError, RuntimeError) as error:
@@ -160,7 +203,24 @@ async def enqueue_conversation_turn(
         raise _conversation_operation_failed("enqueue", error) from error
     except Exception as error:
         raise _conversation_operation_failed("enqueue", error) from error
-    return asdict(result)
+    response = asdict(result)
+    operation_id = response.pop("operation_id", None)
+    if require_durable_acceptance:
+        import hashlib
+        import json
+
+        response.update(
+            durable_acceptance=True,
+            operation_id=operation_id or result.document_id,
+            content_hash=hashlib.sha256(
+                json.dumps(
+                    [user_text, assistant_text],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest(),
+        )
+    return response
 
 
 async def forget_conversation_memory(session_id: str) -> dict[str, Any]:
@@ -178,6 +238,22 @@ async def forget_conversation_memory(session_id: str) -> dict[str, Any]:
     except Exception as error:
         raise _conversation_operation_failed("forget", error) from error
     return asdict(result)
+
+
+async def retry_memory_extraction(document_id: str) -> dict[str, Any]:
+    """Retry a failed conversation extraction in the caller's trusted scope."""
+    import uuid
+
+    try:
+        document_id = str(uuid.UUID(document_id))
+    except ValueError:
+        raise ValueError("invalid document_id") from None
+    service = _get_conversation_memory_service()
+    try:
+        scheduled = await service.retry_extraction(document_id)
+    except Exception as error:
+        raise _conversation_operation_failed("retry", error) from error
+    return {"document_id": document_id, "scheduled": scheduled}
 
 
 async def get_conversation_memory_status() -> dict[str, Any]:
@@ -233,6 +309,18 @@ async def query_knowledge(
     top_k: int = 10,
     needs_answer: bool = True,
     correlation_id: str | None = None,
+    memory_types: list[str] | None = None,
+    source_types: list[str] | None = None,
+    tags: list[str] | None = None,
+    tags_match: str = "any",
+    reference_time: str | None = None,
+    min_scores: dict[str, float] | None = None,
+    prefer_observations: bool = False,
+    include: list[str] | None = None,
+    include_stale: bool = False,
+    timeout_seconds: float | None = None,
+    max_tokens: int | None = None,
+    max_candidates: int | None = None,
 ) -> dict[str, Any]:
     """通过 Hindsight 统一入口执行 recall 或 reflect。"""
     result = await _get_query_service().query(
@@ -243,9 +331,123 @@ async def query_knowledge(
             top_k=top_k,
             needs_answer=needs_answer,
             correlation_id=correlation_id,
+            memory_types=tuple(memory_types or ()),
+            source_types=tuple(source_types or ()),
+            tags=tuple(tags or ()),
+            tags_match=tags_match,
+            reference_time=(
+                datetime.fromisoformat(reference_time.replace("Z", "+00:00"))
+                if reference_time
+                else None
+            ),
+            min_scores=dict(min_scores or {}),
+            prefer_observations=prefer_observations,
+            include=tuple(include) if include is not None else ("chunks", "entities"),
+            include_stale=include_stale,
+            timeout_seconds=timeout_seconds,
+            max_tokens=max_tokens,
+            max_candidates=max_candidates,
         )
     )
     return asdict(result)
+
+
+async def expand_memory(
+    memory_id: str,
+    include: list[str] | None = None,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    """Expand a visible memory into bounded current source evidence."""
+    result = await _get_query_service().expand_memory(
+        MemoryExpansionRequest(
+            memory_id=memory_id,
+            include=tuple(include)
+            if include is not None
+            else ("chunk", "document", "source_facts"),
+            max_tokens=max_tokens,
+        )
+    )
+    return asdict(result) if result is not None else {"error": "memory not found"}
+
+
+async def list_mental_models() -> list[dict[str, Any]]:
+    """List visible long-lived synthesized models and refresh state."""
+    return [asdict(item) for item in await _get_query_service().list_mental_models()]
+
+
+async def get_mental_model(model_id: str) -> dict[str, Any]:
+    """Read one visible mental model including evidence version metadata."""
+    result = await _get_query_service().get_mental_model(model_id)
+    return asdict(result) if result is not None else {"error": "model not found"}
+
+
+async def save_mental_model(
+    model_id: str,
+    name: str,
+    source_query: str,
+    description: str = "",
+    tags: list[str] | None = None,
+    refresh_mode: Literal["full", "delta"] = "full",
+    refresh_after_consolidation: bool = False,
+    refresh_interval_seconds: int | None = None,
+    update: bool = False,
+) -> dict[str, Any]:
+    """Create or update an explicit, scoped mental-model definition."""
+    definition = MentalModelDefinition(
+        id=model_id,
+        name=name,
+        source_query=source_query,
+        description=description,
+        tags=tuple(tags or ()),
+        refresh_mode=refresh_mode,
+        refresh_after_consolidation=refresh_after_consolidation,
+        refresh_interval_seconds=refresh_interval_seconds,
+    )
+    service = _get_query_service()
+    result = (
+        await service.update_mental_model(model_id, definition)
+        if update
+        else await service.create_mental_model(definition)
+    )
+    return asdict(result)
+
+
+async def delete_mental_model(model_id: str) -> dict[str, bool]:
+    """Delete a visible mental-model definition and its retained versions."""
+    return {"deleted": await _get_query_service().delete_mental_model(model_id)}
+
+
+async def refresh_mental_model(model_id: str) -> dict[str, bool]:
+    """Coalesce a durable manual refresh request for a visible model."""
+    return {"enqueued": await _get_query_service().refresh_mental_model(model_id)}
+
+
+async def list_memory_operations(
+    session_id: str | None = None,
+    turn_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """List scoped memory pipeline status without returning source text."""
+    rows = await _get_query_service().list_memory_operations(
+        session_id=session_id, turn_id=turn_id, limit=limit
+    )
+    return [asdict(row) for row in rows]
+
+
+async def get_memory_operation(operation_id: str) -> dict[str, Any]:
+    """Read one scoped operation and its stage diagnostics."""
+    row = await _get_query_service().get_memory_operation(operation_id)
+    return asdict(row) if row is not None else {"error": "operation not found"}
+
+
+async def retry_memory_operation(operation_id: str) -> dict[str, int]:
+    """Retry recoverable stages of one scoped memory operation."""
+    return {"changed": await _get_query_service().retry_memory_operation(operation_id)}
+
+
+async def cancel_memory_operation(operation_id: str) -> dict[str, int]:
+    """Fence active workers and cancel recoverable stages of one scoped operation."""
+    return {"changed": await _get_query_service().cancel_memory_operation(operation_id)}
 
 
 async def search_knowledge_fast(
@@ -470,12 +672,15 @@ async def generate_document(
     # 单进程部署下直接在事件循环里跑会阻塞所有请求，放到线程池执行。
     from src.agent.artifacts import generate_artifact
 
+    binding = _request_binding()
     artifact = await asyncio.to_thread(
         generate_artifact,
         format=format,
         title=title,
         content=content,
         file_name=file_name,
+        scope=binding.scope(),
+        write_tags=binding.write_tags,
     )
     return asdict(artifact)
 
@@ -486,6 +691,16 @@ _MEMORY_TOOL_NAMES = (
     "query_knowledge",
     "search_knowledge_fast",
     "search_knowledge_deep",
+    "expand_memory",
+    "list_mental_models",
+    "get_mental_model",
+    "save_mental_model",
+    "delete_mental_model",
+    "refresh_mental_model",
+    "list_memory_operations",
+    "get_memory_operation",
+    "retry_memory_operation",
+    "cancel_memory_operation",
 )
 
 _memory_tools_registered = False
@@ -499,6 +714,16 @@ def _register_memory_tools() -> None:
     mcp.tool()(query_knowledge)
     mcp.tool()(search_knowledge_fast)
     mcp.tool()(search_knowledge_deep)
+    mcp.tool()(expand_memory)
+    mcp.tool()(list_mental_models)
+    mcp.tool()(get_mental_model)
+    mcp.tool()(save_mental_model)
+    mcp.tool()(delete_mental_model)
+    mcp.tool()(refresh_mental_model)
+    mcp.tool()(list_memory_operations)
+    mcp.tool()(get_memory_operation)
+    mcp.tool()(retry_memory_operation)
+    mcp.tool()(cancel_memory_operation)
     _memory_tools_registered = True
 
 
@@ -532,6 +757,7 @@ mcp.tool()(recall_conversation_memory)
 mcp.tool()(enqueue_conversation_turn)
 mcp.tool()(forget_conversation_memory)
 mcp.tool()(get_conversation_memory_status)
+mcp.tool()(retry_memory_extraction)
 
 
 def build_app():

@@ -11,6 +11,7 @@ import type {
 export function formatConversationMemoryBlock(
   result: ConversationMemoryRecallResult,
   budgetChars: number,
+  labels: { showType?: boolean; showSourceTime?: boolean } = {},
 ): string {
   if (budgetChars < 1) return "";
   const opening = "<untrusted_conversation_memory>";
@@ -23,7 +24,11 @@ export function formatConversationMemoryBlock(
   const lines: string[] = [];
   for (const memory of result.memories) {
     const safeText = memory.text.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-    const line = `[${memory.session_id}/${memory.turn_id}] ${safeText}`;
+    const type = labels.showType ? ` type=${memory.memory_type}` : "";
+    const sourceTime = labels.showSourceTime && memory.mentioned_at
+      ? ` time=${memory.mentioned_at}`
+      : "";
+    const line = `[${memory.session_id}/${memory.turn_id}${type}${sourceTime}] ${safeText}`;
     const candidate = [...fixed, ...lines, line, closing].join("\n");
     if (candidate.length > budgetChars) break;
     lines.push(line);
@@ -55,10 +60,16 @@ export async function recallMemoryForPrompt(
       mode: "fast",
       signal,
       timeoutMs: config.conversationMemoryRecallTimeoutMs,
+      memoryTypes: config.conversationMemoryTypes,
+      includeSourceTime: config.conversationMemoryShowSourceTime,
     });
     return formatConversationMemoryBlock(
       result,
       config.conversationMemoryContextBudgetChars,
+      {
+        showType: config.conversationMemoryShowType,
+        showSourceTime: config.conversationMemoryShowSourceTime,
+      },
     );
   } catch (error) {
     // Fail open, but never silently: recall 故障与"没有相关记忆"必须可区分。

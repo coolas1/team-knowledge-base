@@ -26,6 +26,7 @@ import { appendActivity } from './tool-activity'
 import {
   applyAcceptance,
   applyCompletion,
+  deleteConversationWithMemory,
   applyFailure,
   messagesFromDetail,
   optimisticMessages,
@@ -408,11 +409,11 @@ export function AskPage() {
 
   const deleteConversation = async (sessionId: string) => {
     if (loading) return
-    if (!window.confirm('确定删除这个会话吗？此操作无法撤销。')) return
+    if (!window.confirm('确定删除这个会话及其长期记忆吗？此操作无法撤销。')) return
     setSessionOperation(startSessionOperation('delete', sessionId))
     setError('')
     try {
-      await api.deleteAgentSession(sessionId)
+      await deleteConversationWithMemory(api, sessionId)
       setSessions((current) => current.filter((session) => session.id !== sessionId))
       if (sessionRef.current === sessionId) {
         clearThread()

@@ -126,6 +126,34 @@ async def test_explicit_strategy_overrides_answer_purpose() -> None:
     assert [call[0] for call in core.calls] == ["recall", "reflect"]
 
 
+async def test_extended_recall_request_builds_bounded_filter() -> None:
+    class Core(FakeCore):
+        filter = None
+
+        async def recall(self, query, *, mode="deep", top_k=None, filters=None):
+            self.filter = filters
+            return await super().recall(query, mode=mode, top_k=top_k)
+
+    core = Core()
+    await HindsightQueryService(core).query(
+        KnowledgeQueryRequest(
+            query="current preferences",
+            strategy="recall",
+            memory_types=("observation",),
+            tags=("user:1",),
+            tags_match="all_strict",
+            min_scores={"semantic": 0.6},
+            max_tokens=100,
+        )
+    )
+
+    assert core.filter.memory_types == ("observation",)
+    assert core.filter.tags.matches(("user:1",))
+    assert not core.filter.tags.matches(())
+    assert core.filter.min_scores == {"semantic": 0.6}
+    assert core.filter.max_tokens == 100
+
+
 async def test_query_validates_input() -> None:
     service = HindsightQueryService(FakeCore())
 
@@ -133,6 +161,18 @@ async def test_query_validates_input() -> None:
         await service.query(KnowledgeQueryRequest(query=" "))
     with pytest.raises(ValueError, match="top_k"):
         await service.query(KnowledgeQueryRequest(query="q", top_k=0))
+
+
+def test_adaptive_reflection_exposes_only_actual_citations() -> None:
+    item = candidate("retrieved", "retrieved but unused")
+    reflected = ReflectResult(
+        text="insufficient",
+        based_on={"world": [item.as_evidence()], "actual_citations": []},
+        tool_trace=[],
+        actual_citations=[],
+    )
+
+    assert HindsightQueryService._sources_from_reflection(reflected) == []
 
 
 async def test_build_query_service_accepts_repository(monkeypatch):

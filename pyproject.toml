@@ -26,6 +26,7 @@ dependencies = [
     "reportlab>=4.4.4",
     "ruff>=0.15.19",
     "sqlalchemy[asyncio]>=2.0.51",
+    "tzdata>=2026.3",
     "uvicorn[standard]>=0.49.0",
 ]
 

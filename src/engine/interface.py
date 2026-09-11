@@ -8,8 +8,14 @@ against these types, never against a concrete backend.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Protocol
+
+from src.engine.scope import MemoryScope as MemoryScope
+from src.engine.scope import TagExpression as TagExpression
+from src.engine.scope import TagFilter as TagFilter
+from src.engine.scope import TagGroup as TagGroup
 
 
 class NotSupported(Exception):
@@ -68,6 +74,18 @@ class RecallRequest:
     top_k: int = 20
     mode: Literal["auto", "fast", "deep"] = "auto"
     needs_answer: bool = False
+    memory_types: tuple[str, ...] = ()
+    source_types: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    tags_match: str = "any"
+    reference_time: datetime | None = None
+    min_scores: dict[str, float] = field(default_factory=dict)
+    prefer_observations: bool = False
+    include: tuple[str, ...] = ("chunks", "entities")
+    include_stale: bool = False
+    timeout_seconds: float | None = None
+    max_tokens: int | None = None
+    max_candidates: int | None = None
 
 
 @dataclass
@@ -104,6 +122,18 @@ class KnowledgeQueryRequest:
     top_k: int = 10
     needs_answer: bool = True
     correlation_id: str | None = None
+    memory_types: tuple[str, ...] = ()
+    source_types: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    tags_match: str = "any"
+    reference_time: datetime | None = None
+    min_scores: dict[str, float] = field(default_factory=dict)
+    prefer_observations: bool = False
+    include: tuple[str, ...] = ("chunks", "entities")
+    include_stale: bool = False
+    timeout_seconds: float | None = None
+    max_tokens: int | None = None
+    max_candidates: int | None = None
 
 
 @dataclass
@@ -128,10 +158,84 @@ class KnowledgeQueryResult:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryExpansionRequest:
+    memory_id: str
+    include: tuple[str, ...] = ("chunk", "document", "source_facts")
+    max_tokens: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryExpansionResult:
+    memory: dict
+    chunk: dict | None = None
+    document: dict | None = None
+    source_facts: tuple[dict, ...] = ()
+    token_count: int = 0
+    truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class MentalModelDefinition:
+    id: str
+    name: str
+    source_query: str
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    refresh_mode: Literal["full", "delta"] = "full"
+    refresh_after_consolidation: bool = False
+    refresh_interval_seconds: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MentalModelRecord:
+    id: str
+    name: str
+    description: str
+    source_query: str
+    tags: tuple[str, ...]
+    summary: str
+    version: int
+    refresh_mode: str
+    refresh_after_consolidation: bool
+    refresh_interval_seconds: int | None
+    next_refresh_at: datetime | None
+    last_success_at: datetime | None
+    freshness: str
+    error_msg: str | None
+    evidence_watermark: int
+    source_memory_ids: tuple[str, ...]
+    source_versions: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class DirectiveDefinition:
+    id: str
+    name: str
+    content: str
+    trigger: str | None = None
+    priority: int = 0
+    is_active: bool = True
+    tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DirectiveRecord:
+    id: str
+    name: str
+    content: str
+    trigger: str | None
+    priority: int
+    is_active: bool
+    tags: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ConversationMemoryRecallRequest:
     query: str
     top_k: int = 5
     mode: Literal["fast", "deep"] = "fast"
+    memory_types: tuple[str, ...] = ()
+    include_source_time: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +248,9 @@ class ConversationMemoryItem:
     turn_id: str
     score: float = 0.0
     metadata: dict = field(default_factory=dict)
+    mentioned_at: str | None = None
+    occurred_start: str | None = None
+    occurred_end: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,12 +265,15 @@ class ConversationTurn:
     turn_id: str
     user_text: str
     assistant_text: str
+    source_timestamp: str | None = None
+    reference_timezone: str = "UTC"
 
 
 @dataclass(frozen=True, slots=True)
 class ConversationEnqueueResult:
     document_id: str
     status: str
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +376,69 @@ class KnowledgeQuery(Protocol):
     """Optional high-level recall/reflect query capability."""
 
     async def query(self, request: KnowledgeQueryRequest) -> KnowledgeQueryResult: ...
+
+    async def expand_memory(
+        self, request: MemoryExpansionRequest
+    ) -> MemoryExpansionResult | None: ...
+
+    async def create_mental_model(
+        self, definition: MentalModelDefinition
+    ) -> MentalModelRecord: ...
+
+    async def get_mental_model(self, model_id: str) -> MentalModelRecord | None: ...
+
+    async def list_mental_models(self) -> list[MentalModelRecord]: ...
+
+    async def update_mental_model(
+        self, model_id: str, definition: MentalModelDefinition
+    ) -> MentalModelRecord: ...
+
+    async def delete_mental_model(self, model_id: str) -> bool: ...
+
+    async def refresh_mental_model(self, model_id: str) -> bool: ...
+
+    async def create_directive(
+        self, definition: DirectiveDefinition
+    ) -> DirectiveRecord: ...
+
+    async def list_directives(self) -> list[DirectiveRecord]: ...
+
+    async def update_directive(
+        self, directive_id: str, definition: DirectiveDefinition
+    ) -> DirectiveRecord: ...
+
+    async def delete_directive(self, directive_id: str) -> bool: ...
+
+    async def list_memory_operations(
+        self,
+        *,
+        session_id: str | None = None,
+        turn_id: str | None = None,
+        limit: int = 100,
+    ) -> list: ...
+
+    async def get_memory_operation(self, operation_id: str): ...
+
+    async def retry_memory_operation(self, operation_id: str) -> int: ...
+
+    async def cancel_memory_operation(self, operation_id: str) -> int: ...
+
+    async def list_memory_facts(self, *, limit: int = 100) -> list[dict]: ...
+
+    async def get_observation_detail(self, observation_id: str) -> dict | None: ...
+
+    async def correct_memory_entity(
+        self,
+        source_entity_id: str,
+        memory_ids: list[str],
+        *,
+        target_entity_id: str | None = None,
+        reason: str,
+    ): ...
+
+    async def get_memory_policy(self): ...
+
+    async def update_memory_policy(self, policy, *, expected_version: int): ...
 
 
 class ConversationMemory(Protocol):

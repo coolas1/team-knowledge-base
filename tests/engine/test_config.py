@@ -13,6 +13,7 @@ def test_appconfig_defaults():
     assert cfg.plugin.impl == "tkb"
     assert cfg.engine.memory.enabled is False
     assert cfg.engine.memory.retain_max_concurrent == 1
+    assert cfg.engine.memory.retain_chunk_concurrency == 4
 
 
 def test_load_config_reads_app_yaml(tmp_path: Path):
@@ -101,13 +102,9 @@ def test_appconfig_ingest_defaults():
 
 def test_ingest_concurrency_must_be_positive():
     with pytest.raises(ValueError):
-        AppConfig.model_validate(
-            {"engine": {"ingest": {"chunk_concurrency": 0}}}
-        )
+        AppConfig.model_validate({"engine": {"ingest": {"chunk_concurrency": 0}}})
     with pytest.raises(ValueError):
-        AppConfig.model_validate(
-            {"engine": {"ingest": {"doc_concurrency": 0}}}
-        )
+        AppConfig.model_validate({"engine": {"ingest": {"doc_concurrency": 0}}})
 
 
 def test_engine_config_maps_ingest_concurrency():

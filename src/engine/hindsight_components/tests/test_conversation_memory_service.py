@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from src.engine.scope import MemoryScope
+
 from src.engine.hindsight_components.conversation_service import (
     ConversationMemoryService,
 )
@@ -66,9 +69,54 @@ class FakeRecall:
 class FakeRepository:
     def __init__(self) -> None:
         self.deleted = []
+        self.purged_orphaned_observations = 0
 
     async def delete_document(self, document_id):
         self.deleted.append(document_id)
+
+    async def purge_orphaned_observations(self):
+        self.purged_orphaned_observations += 1
+        return 1
+
+
+async def test_enqueue_uses_trusted_identity_and_preserves_original_source_time():
+    queue = FakeQueue()
+    queue.scope = MemoryScope(subject_id="alice", agent_name="helper", policy_version=7)
+    service = ConversationMemoryService(queue, FakeRecall(None), FakeRepository())
+    await service.enqueue_conversation_turn(
+        ConversationTurn(
+            session_id="s",
+            turn_id="t",
+            user_text="I finished yesterday",
+            assistant_text="I suggest a review",
+            source_timestamp="2024-01-01T18:00:00Z",
+            reference_timezone="Asia/Shanghai",
+        )
+    )
+    assert queue.enqueued["source_context"] == {
+        "source_timestamp": "2024-01-01T18:00:00+00:00",
+        "reference_timezone": "Asia/Shanghai",
+        "policy_version": 7,
+        "agent_name": "helper",
+        "speakers": {"user": "alice", "assistant": "helper"},
+    }
+
+
+@pytest.mark.parametrize("timestamp", ["", "yesterday", "2024-01-01T12:00:00"])
+async def test_invalid_source_time_never_reaches_queue(timestamp):
+    queue = FakeQueue()
+    service = ConversationMemoryService(queue, FakeRecall(None), FakeRepository())
+    with pytest.raises(ValueError):
+        await service.enqueue_conversation_turn(
+            ConversationTurn(
+                session_id="s",
+                turn_id="t",
+                user_text="hello",
+                assistant_text="hello",
+                source_timestamp=timestamp,
+            )
+        )
+    assert queue.enqueued is None
 
 
 async def test_service_recalls_only_conversation_memories_with_provenance():
@@ -147,6 +195,7 @@ async def test_service_forgets_only_requested_session_and_reports_diagnostics():
     diagnostics = await service.conversation_memory_diagnostics()
 
     assert repository.deleted == ["document-1"]
+    assert repository.purged_orphaned_observations == 1
     assert queue.cancelled == ["session-1"]
     assert queue.deleted == ["document-1"]
     assert forgotten.cancelled_jobs == 1
