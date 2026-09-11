@@ -17,7 +17,7 @@ from src.engine.hindsight_components.file_rebuild_runner import (
 @pytest.mark.parametrize("active_evidence", [0, 1])
 async def test_retired_tombstones_do_not_repeat_synthesis(monkeypatch, active_evidence):
     fact, document = str(uuid.uuid4()), str(uuid.uuid4())
-    counts = iter([0, active_evidence])
+    counts = iter([0, 0, active_evidence])
 
     class Session:
         async def __aenter__(self):
@@ -30,7 +30,11 @@ async def test_retired_tombstones_do_not_repeat_synthesis(monkeypatch, active_ev
             return next(counts)
 
     async def original(*_):
-        return ConsolidationReadSet({}, {}, {}, {}, (fact,))
+        # The ordinary read set includes existing observation evidence even
+        # when the claimed events contain only deletions.
+        return ConsolidationReadSet(
+            {}, {"existing-evidence": object()}, {}, {}, (fact,)
+        )
 
     monkeypatch.setattr(PostgresConsolidationRepository, "read_set", original)
     repository = RebuildConsolidationRepository(

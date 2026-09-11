@@ -155,9 +155,20 @@ class RebuildConsolidationRepository(PostgresConsolidationRepository):
                 raise ValueError(
                     "unrelated pending consolidation must drain before migration"
                 )
+            upserts = await session.scalar(
+                select(func.count())
+                .select_from(ConsolidationFactEvent)
+                .where(
+                    ConsolidationFactEvent.bank_id == claim.bank_id,
+                    ConsolidationFactEvent.scope_key == claim.scope_key,
+                    ConsolidationFactEvent.id > claim.processed_through,
+                    ConsolidationFactEvent.id <= claim.claimed_through,
+                    ConsolidationFactEvent.operation == "upsert",
+                )
+            )
         original = await super().read_set(claim, options)
         old_ids = {i for t in self.manifest["targets"] for i in t["fact_versions"]}
-        if not original.fact_rows and set(original.deleted_fact_ids).issubset(old_ids):
+        if not upserts and set(original.deleted_fact_ids).issubset(old_ids):
             # Retirement already invalidated the complete legacy evidence
             # closure. Consuming these tombstones needs no model synthesis.
             async with self._session_factory() as session:
