@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react'
 import { ApiError, api } from '../api/client'
+import { VersionFooter } from './VersionFooter'
 import './Layout.css'
 
 interface UploadFailure {
@@ -192,6 +193,8 @@ export function Layout() {
       <div className="app-content">
         <Outlet />
       </div>
+
+      <VersionFooter />
     </div>
   )
 }

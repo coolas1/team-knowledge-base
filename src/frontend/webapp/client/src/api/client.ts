@@ -161,6 +161,21 @@ export type PiAgentEvent =
   | { type: 'message.completed'; sessionId: string; answer: string; toolCalls: number; turnId?: string; messageId?: string; clientMessageId?: string; searchDegraded?: boolean; searchFallback?: boolean }
   | { type: 'message.failed'; error: string; code?: string; sessionId?: string; turnId?: string; messageId?: string; clientMessageId?: string; status?: 'failed' | 'cancelled' | 'interrupted' }
 
+export interface VersionInfo {
+  version: string
+  commit: string | null
+}
+
+/**
+ * Fetch the running instance's version. Lives outside `/api` (the BFF serves
+ * it at `/version` next to `/health`), so it cannot go through `request`.
+ */
+export async function fetchVersion(): Promise<VersionInfo> {
+  const res = await fetch('/version')
+  if (!res.ok) throw new ApiError(res.statusText, res.status)
+  return res.json()
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
