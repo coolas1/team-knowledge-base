@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from typing import Any, TypeVar
 
 from .config import HindsightOptions
+from .fact_cache import cache_key
 from .deadlines import DeadlineBudget, PhaseStatus
 from .errors import DeepSearchTimeoutError, DeepSearchUnavailableError
 from .protocols import HindsightProviders, MemoryRepository
@@ -34,10 +35,13 @@ class RecallEngine:
         repository: MemoryRepository,
         providers: HindsightProviders,
         options: HindsightOptions,
+        *,
+        fact_cache=None,
     ) -> None:
         self._repository = repository
         self._providers = providers
         self._options = options
+        self._fact_cache = fact_cache
 
     async def recall(
         self,
@@ -224,6 +228,17 @@ class RecallEngine:
                         item.metadata["source_facts"] = list(
                             detail.get("source_facts", [])
                         )
+
+            if self._fact_cache is not None:
+                scope = getattr(self._repository, "scope", id(self._repository))
+                self._fact_cache.remember(
+                    cache_key(scope, filters),
+                    [
+                        item.as_evidence()
+                        for item in selected
+                        if item.freshness in {"active", "current"}
+                    ],
+                )
 
             if "entities" in filters.include:
                 entity_phase = await self._run_phase(

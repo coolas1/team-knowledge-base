@@ -51,3 +51,12 @@
 - 文件入口矩阵：10 passed，覆盖三种 source_type × replay，已迁移策略保持、对话/显式旧模式、摘要失败不发布。
 - 独立 PostgreSQL 升级+manager 复用/变化/失败恢复：1 passed。
 - 暂存按功能拆分共享 config/service/query 文件，缓存部分留给第三批。
+
+第二批提交：`51294d7`；暂存快照独立验收 512 passed / 33 skipped（不包含第三批未暂存缓存测试），ruff passed。
+
+## 批次三验收
+
+- 规范化 bank/scope/filter key，timeout 与结果预算不作为缓存身份，当前请求预算单独限制；有效使用续期、LRU、TTL、容量 0、源块排除、命中/过期/驱逐计数。
+- 使用 load_cached_facts 批量读取当前权限、类型、标签、时间过滤及 memory_version；两个 worker 修改/删事实和修改文档可见标签后旧内容失效。
+- 固定 follow-up fixture：冷请求 1 次 recall，热请求新增 0 次 recall、cache hits=1，答案及引用不变。这是工具调用测试，不是实际 DeepSeek 账单节省率。
+- 全库及内部记忆测试：519 passed / 34 skipped，ruff passed。独立 PostgreSQL 多 worker 失效测试：1 passed。

@@ -12,15 +12,15 @@
 - [x] 2.2 接通摘要复用、输入输出预算、抽样覆盖标记和生成失败处理；验收：未变化文件和失败后续跑不重复成功摘要调用，长文尾部 fixture 进入采样，错误占位不成为 fact。
 - [x] 2.3 将 backfill、retry/reprocess 与可靠 retain 重放统一到摘要策略；验收：各入口参数化测试证明旧全文 snapshot/抽取缓存不能重新生成全文事实。
 - [x] 2.4 回归对话 retain 与显式旧图谱模式；验收：对话事实输入无变化，图谱模式兼容测试通过，迁移策略不会被普通重试静默覆盖。
-- [ ] 2.5 执行专项与全库 lint/pytest，提交 `feat(engine): retain files from summaries`；验收：完整入口矩阵通过，记录本批 SHA，前批 SHA 纳入执行日志提交。
+- [x] 2.5 执行专项与全库 lint/pytest，提交 `feat(engine): retain files from summaries`；验收：完整入口矩阵通过，记录本批 SHA，前批 SHA 纳入执行日志提交。
 
 ## 3. 批次三：Fact cache 与按需证据展开
 
-- [ ] 3.1 审查并补齐 cache 准入、容量、每条大小、闲置 TTL 与 LRU；验收：虚拟时钟测试覆盖最近使用续期、过期、超限驱逐及容量 0，驱逐不删除存储 fact。
-- [ ] 3.2 接入跨请求 service 生命周期及规范化 scope/filter key；验收：同 scope 后续请求复用，跨 bank/权限/结果过滤不串用，timeout 变化不错误切分内容缓存。
-- [ ] 3.3 完成删除、版本变更、权限变化、迁移与多 worker 的当前状态校验；验收：上述变更之后旧文本不得进入提示，校验失败正常回退检索。
-- [ ] 3.4 完成 observation 按问题选择来源 facts、数量/token 限制和截断补查；验收：大量来源 fixture 仅返回预算内相关子集，完整审阅接口可用，模型收到缓存文本与出处而不只是 ID。
-- [ ] 3.5 增加命中/失效/驱逐及证据 token 观测，运行固定重复查询对照；验收：有效缓存减少重复工具调用或输入 token，冷查询/未命中仍正确，报告不包含秘密。
+- [x] 3.1 审查并补齐 cache 准入、容量、每条大小、闲置 TTL 与 LRU；验收：虚拟时钟测试覆盖最近使用续期、过期、超限驱逐及容量 0，驱逐不删除存储 fact。
+- [x] 3.2 接入跨请求 service 生命周期及规范化 scope/filter key；验收：同 scope 后续请求复用，跨 bank/权限/结果过滤不串用，timeout 变化不错误切分内容缓存。
+- [x] 3.3 完成删除、版本变更、权限变化、迁移与多 worker 的当前状态校验；验收：上述变更之后旧文本不得进入提示，校验失败正常回退检索。
+- [x] 3.4 完成 observation 按问题选择来源 facts、数量/token 限制和截断补查；验收：大量来源 fixture 仅返回预算内相关子集，完整审阅接口可用，模型收到缓存文本与出处而不只是 ID。
+- [x] 3.5 增加命中/失效/驱逐及证据 token 观测，运行固定重复查询对照；验收：有效缓存减少重复工具调用或输入 token，冷查询/未命中仍正确，报告不包含秘密。
 - [ ] 3.6 执行 `uv run pytest tests src/engine/hindsight_components/tests` 与全库 ruff，提交 `feat(engine): cache recent relevant facts`；验收：全部适用测试通过并记录本批 SHA。
 
 ## 4. 批次四：旧文件 observation 清理器

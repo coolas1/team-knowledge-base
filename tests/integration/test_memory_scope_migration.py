@@ -2853,9 +2853,7 @@ async def test_scoped_memory_operations_and_observation_history(scope_database):
     retried = await admin.get_operation(str(operation_id))
     assert retried.status == "pending" and retried.error is None
     async with sessions() as session:
-        retried_job = await session.get(
-            ConsolidationJob, ('["project:a"]', "bank-a")
-        )
+        retried_job = await session.get(ConsolidationJob, ('["project:a"]', "bank-a"))
         assert retried_job.iterations == 0
         assert retried_job.tokens_used == 0
         assert retried_job.cost_microusd == 0
@@ -2871,3 +2869,80 @@ async def test_scoped_memory_operations_and_observation_history(scope_database):
         fact = await session.get(MemoryUnit, fact_id)
         fact.state = "deleted"
     assert (await admin.observation_detail(str(observation_id)))["sources"] == []
+
+
+async def test_cached_fact_validation_across_workers_and_mutations(scope_database):
+    from sqlalchemy import update
+    from src.engine.hindsight_components.fact_cache import (
+        FactCache,
+        cache_key,
+        same_fact,
+    )
+    from src.engine.hindsight_components.types import RecallFilter
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    doc_id, fact_id = uuid.uuid4(), uuid.uuid4()
+    async with sessions() as session, session.begin():
+        session.add(
+            Document(
+                id=doc_id,
+                bank_id="cache-test",
+                tags=["visible"],
+                title="file",
+                file_type="markdown",
+                raw_text="budget",
+                overview="",
+                status="indexed",
+            )
+        )
+        await session.flush()
+        session.add(
+            MemoryUnit(
+                id=fact_id,
+                document_id=doc_id,
+                bank_id="cache-test",
+                scope_tags=["visible"],
+                tags=["finance"],
+                chunk_index=0,
+                memory_index=0,
+                text="budget 100",
+                source_text="budget 100",
+            )
+        )
+    scope = MemoryScope(
+        bank_id="cache-test", visibility=TagFilter(("visible",), "exact")
+    )
+    worker_a = PostgresMemoryRepository(sessions, scope=scope)
+    worker_b = PostgresMemoryRepository(sessions, scope=scope)
+    current = await worker_a.load_cached_facts([str(fact_id)])
+    cached = current[str(fact_id)]
+    cache = FactCache()
+    cache.remember(cache_key(scope), [cached])
+    assert (
+        await worker_b.load_cached_facts(
+            [str(fact_id)], filters=RecallFilter(tags=TagFilter(("other",), "all"))
+        )
+        == {}
+    )
+    async with sessions() as session, session.begin():
+        await session.execute(
+            update(MemoryUnit)
+            .where(MemoryUnit.id == fact_id)
+            .values(text="budget 200", memory_version=2)
+        )
+    latest = (await worker_b.load_cached_facts([str(fact_id)]))[str(fact_id)]
+    assert not same_fact(cached, latest)
+    async with sessions() as session, session.begin():
+        await session.execute(
+            update(Document).where(Document.id == doc_id).values(tags=["private"])
+        )
+    assert await worker_a.load_cached_facts([str(fact_id)]) == {}
+    async with sessions() as session, session.begin():
+        await session.execute(
+            update(Document).where(Document.id == doc_id).values(tags=["visible"])
+        )
+        await session.execute(
+            update(MemoryUnit).where(MemoryUnit.id == fact_id).values(state="deleted")
+        )
+    assert await worker_b.load_cached_facts([str(fact_id)]) == {}

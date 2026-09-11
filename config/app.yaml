@@ -7,6 +7,10 @@ engine:
     doc_concurrency: 2
   memory:
     enabled: true
+    fact_cache_capacity: 256
+    fact_cache_ttl_seconds: 1800
+    fact_context_limit: 8
+    fact_context_max_tokens: 1200
     retain_chunk_concurrency: 4
     entity_resolution_max_concurrent: 8
     entity_resolution_timeout_seconds: 60

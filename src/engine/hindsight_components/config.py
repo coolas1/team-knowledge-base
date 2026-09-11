@@ -15,6 +15,10 @@ class HindsightOptions:
     chunk_tokens: int = 500
     chunk_overlap_tokens: int = 50
     retain_chunk_concurrency: int = 4
+    fact_cache_capacity: int = 256
+    fact_cache_ttl_seconds: float = 1800
+    fact_context_limit: int = 8
+    fact_context_max_tokens: int = 1200
     recall_limit: int = 20
     recall_max_results: int = 100
     recall_max_candidates: int = 300
@@ -51,7 +55,12 @@ class HindsightOptions:
     def __post_init__(self) -> None:
         if self.entity_candidate_limit > 100:
             raise ValueError("entity_candidate_limit cannot exceed 100")
+        if self.fact_cache_capacity < 0:
+            raise ValueError("fact_cache_capacity cannot be negative")
         positive = {
+            "fact_cache_ttl_seconds": self.fact_cache_ttl_seconds,
+            "fact_context_limit": self.fact_context_limit,
+            "fact_context_max_tokens": self.fact_context_max_tokens,
             "entity_candidate_limit": self.entity_candidate_limit,
             "entity_resolution_timeout_seconds": self.entity_resolution_timeout_seconds,
             "entity_resolution_max_concurrent": self.entity_resolution_max_concurrent,

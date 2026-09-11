@@ -1850,6 +1850,8 @@ class PostgresMemoryRepository:
                             "id": str(fact.id),
                             "text": fact.text,
                             "type": fact.memory_type,
+                            "metadata": {"memory_version": fact.memory_version},
+                            "updated_at": fact.mentioned_at.isoformat(),
                             "document_id": str(fact.document_id),
                             "mentioned_at": fact.mentioned_at.isoformat(),
                             "occurred_start": fact.occurred_start.isoformat()
@@ -1868,6 +1870,31 @@ class PostgresMemoryRepository:
                 "source_facts": facts_by_observation[str(record.memory_id)],
             }
             for record, _ in records
+        }
+
+    async def load_cached_facts(self, memory_ids: list[str], *, filters=None):
+        """Bulk authoritative validation, including current request filters."""
+        if not memory_ids:
+            return {}
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(MemoryUnit, Document)
+                    .join(Document, Document.id == MemoryUnit.document_id)
+                    .where(
+                        MemoryUnit.id.in_([uuid.UUID(i) for i in memory_ids]),
+                        self._memory_scope(),
+                        Document.status == "indexed",
+                        MemoryUnit.state == "active",
+                        MemoryUnit.is_source_chunk.is_(False),
+                        MemoryUnit.memory_type.in_(("world", "experience")),
+                        *self._recall_source_conditions(None, filters),
+                    )
+                )
+            ).all()
+        return {
+            str(unit.id): self._candidate(unit, document).as_evidence()
+            for unit, document in rows
         }
 
     async def expand_memory_record(self, memory_id: str) -> dict[str, Any] | None:
@@ -1974,6 +2001,7 @@ class PostgresMemoryRepository:
     ) -> RecallCandidate:
         metadata = dict(unit.metadata_json or {})
         metadata["memory_version"] = getattr(unit, "memory_version", 1)
+        metadata["is_source_chunk"] = bool(getattr(unit, "is_source_chunk", False))
         mentioned_at = getattr(unit, "mentioned_at", None)
         return RecallCandidate(
             id=str(unit.id),

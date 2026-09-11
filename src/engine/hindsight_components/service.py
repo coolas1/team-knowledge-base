@@ -30,6 +30,7 @@ class HindsightService:
         directives=None,
         admin=None,
         policies=None,
+        fact_cache=None,
     ) -> None:
         if options is None:
             import os
@@ -45,6 +46,10 @@ class HindsightService:
                 entity_resolution_enabled=features.entity_resolution,
                 consolidation_enabled=features.consolidation,
                 adaptive_reflect_enabled=features.adaptive_reflect,
+                fact_cache_capacity=memory_config.fact_cache_capacity,
+                fact_cache_ttl_seconds=memory_config.fact_cache_ttl_seconds,
+                fact_context_limit=memory_config.fact_context_limit,
+                fact_context_max_tokens=memory_config.fact_context_max_tokens,
                 retain_chunk_concurrency=memory_config.retain_chunk_concurrency,
                 entity_resolution_timeout_seconds=(
                     memory_config.entity_resolution_timeout_seconds
@@ -53,11 +58,20 @@ class HindsightService:
                     memory_config.entity_resolution_max_concurrent
                 ),
             )
+        from .fact_cache import FactCache
+
+        self._fact_cache = (
+            fact_cache
+            if fact_cache is not None
+            else FactCache(options.fact_cache_capacity, options.fact_cache_ttl_seconds)
+        )
         self.options = options
         self._repository = repository
         self._providers = providers
         self._retain = RetainEngine(repository, providers, self.options)
-        self._recall = RecallEngine(repository, providers, self.options)
+        self._recall = RecallEngine(
+            repository, providers, self.options, fact_cache=self._fact_cache
+        )
         if mental_models is None:
             from .mental_models import PostgresMentalModelRepository
 
@@ -91,7 +105,12 @@ class HindsightService:
             )
         self._policies = policies
         self._reflect = ReflectEngine(
-            self._recall, repository, providers, self.options, directives
+            self._recall,
+            repository,
+            providers,
+            self.options,
+            directives,
+            fact_cache=self._fact_cache,
         )
 
     def with_scope(self, scope):
@@ -103,6 +122,7 @@ class HindsightService:
             directives=self._directives.with_scope(scope),
             admin=self._admin.with_scope(scope),
             policies=self._policies.with_scope(scope),
+            fact_cache=self._fact_cache,
         )
 
     def with_lease(self, document_id: str, lease_token: str):
@@ -114,6 +134,7 @@ class HindsightService:
             directives=self._directives,
             admin=self._admin,
             policies=self._policies,
+            fact_cache=self._fact_cache,
         )
 
     async def create_mental_model(self, definition):
