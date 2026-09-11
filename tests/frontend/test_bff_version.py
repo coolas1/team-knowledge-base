@@ -7,6 +7,10 @@ from src.frontend.webapp.server import app as app_mod
 from src.frontend.webapp.server import deps
 from src.frontend.webapp.server.version import load_commit, load_version
 
+# The app reads the repo-root VERSION file; the tests expect exactly what it
+# says, so a release bump changes both together instead of redding the gate.
+_REPO_VERSION = load_version(Path(__file__).resolve().parents[2])
+
 
 def test_load_version_reads_the_version_file(tmp_path: Path):
     (tmp_path / "VERSION").write_text("1.2.3\n", encoding="utf-8")
@@ -50,18 +54,18 @@ def client(monkeypatch):
 
 def test_app_reports_the_version_file_contents(client):
     # The FastAPI app version comes from VERSION, not a hardcoded literal.
-    assert app_mod.app.version == "0.2.0"
+    assert app_mod.app.version == _REPO_VERSION
 
 
 def test_version_endpoint_reports_version_and_commit(client, monkeypatch):
     monkeypatch.setenv("GIT_COMMIT", "abc1234")
     res = client.get("/version")
     assert res.status_code == 200
-    assert res.json() == {"version": "0.2.0", "commit": "abc1234"}
+    assert res.json() == {"version": _REPO_VERSION, "commit": "abc1234"}
 
 
 def test_version_endpoint_reports_null_commit_when_unset(client, monkeypatch):
     monkeypatch.delenv("GIT_COMMIT", raising=False)
     res = client.get("/version")
     assert res.status_code == 200
-    assert res.json() == {"version": "0.2.0", "commit": None}
+    assert res.json() == {"version": _REPO_VERSION, "commit": None}
