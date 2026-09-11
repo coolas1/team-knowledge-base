@@ -56,6 +56,10 @@ async def init_db() -> None:
 
     await migrate_entities(engine)
 
+    from src.engine.components.store.file_summary_migration import migrate_file_summaries
+
+    await migrate_file_summaries(engine)
+
     # Existing deployments need an online expansion because create_all does not
     # add columns or indexes to an already-present table.
     async with engine.connect() as conn:

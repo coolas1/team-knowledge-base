@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "bank_id": "rebuild-fixture",
+  "documents": [
+    {"id": "short-file", "source_type": "upload", "text": "项目甲预算为100万元。", "tags": ["team-a"]},
+    {"id": "long-file", "source_type": "upload", "prefix": "项目乙资料。", "repeat_text": "该段为已公开的合成背景材料。\n\n", "repeat_count": 2000, "suffix": "尾部唯一事实：项目乙验收日为2027年3月15日。", "tags": ["team-a"]},
+    {"id": "conversation", "source_type": "conversation", "text": "用户要求项目甲采用月度汇报。", "tags": ["team-a"]},
+    {"id": "other-file", "source_type": "upload", "text": "项目丙负责人为陈工。", "tags": ["team-a"]},
+    {"id": "private-conversation", "source_type": "conversation", "text": "用户喜欢简短回复。", "tags": ["team-b"]}
+  ],
+  "facts": [
+    {"id": "f-short", "document_id": "short-file", "text": "项目甲预算100万元"},
+    {"id": "f-long", "document_id": "long-file", "text": "项目乙验收日为2027年3月15日"},
+    {"id": "f-chat", "document_id": "conversation", "text": "项目甲采用月度汇报"},
+    {"id": "f-other", "document_id": "other-file", "text": "项目丙负责人为陈工"},
+    {"id": "f-private", "document_id": "private-conversation", "text": "用户喜欢简短回复"}
+  ],
+  "observations": [
+    {"id": "o-file", "document_id": "short-file", "fact_ids": ["f-short"]},
+    {"id": "o-files", "document_id": "other-file", "fact_ids": ["f-short", "f-other"]},
+    {"id": "o-mixed", "document_id": "conversation", "fact_ids": ["f-short", "f-chat"]},
+    {"id": "o-chat", "document_id": "conversation", "fact_ids": ["f-chat"]},
+    {"id": "o-private", "document_id": "private-conversation", "fact_ids": ["f-private"]}
+  ],
+  "target_documents": ["short-file", "long-file"],
+  "expected_affected_observations": ["o-file", "o-files", "o-mixed"],
+  "expected_preserved_facts": ["f-chat", "f-other", "f-private"]
+}
