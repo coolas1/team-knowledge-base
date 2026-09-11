@@ -19,7 +19,7 @@ Observation 搜索不再自动加载全部来源 fact。展开按当前问题筛
 
 ## 生效范围
 
-本修改不自动批量重建已有文件或删除已有 facts / observations，也不启动线上任务。新上传、编辑重新索引的文件使用摘要记忆；历史 backfill 命令仍保留原有行为。缓存主要降低后续 adaptive reflect 的重复检索和证据上下文成本，文件摘要降低新增文件的抽取与 consolidation 输入量。实际节省依赖文档长度和查询复用率，尚未以线上 DeepSeek 账单量化。
+上传、编辑、backfill、retry/reprocess 统一使用持久化摘要；相同原文、模板、模型和预算身份复用成功摘要。对话保持原有抽取。历史数据通过下面的显式迁移运行清理和重建，普通服务启动不会自动删除旧记忆。实际费用需要 provider usage 和账单核验，测试中的调用减少不能当成线上节省率。
 
 ## 历史文件迁移工具（分批执行）
 
@@ -37,3 +37,19 @@ uv run python -m src.engine.hindsight_components.file_rebuild restore --bank BAN
 `retire` 清理当前 observation 内容、旧事实有效性及抽取快照，保存审计历史，关联 mental models 失效并排队 graph replace。图投影只写 active memories 和 active 链接目标。重复 retire 幂等。
 
 `restore` 仅用于清理后、尚无后续写入的运行；校验恢复文件 checksum、运行身份、当前行指纹与原文 hash，发生后续写入时拒绝恢复。清理成功并不代表重建完成，须继续摘要 retain / consolidation 并核验图队列终态。
+
+
+## 摘要重建、预算和续跑
+
+完成 `preview` 和 `plan` 并保存恢复文件后，推荐直接执行 `resume`：它先准备成功摘要，再退休旧内容，每次默认串行 retain 一个文件。每次返回后使用相同 run ID 继续，直到 `verified`。不要把 `retaining` 或 `awaiting_projection_or_consolidation` 当成完成。
+
+```powershell
+uv run python -m src.engine.hindsight_components.file_rebuild_runner resume --bank BANK --run-id RUN_ID --batch-size 1 --max-tokens 100000
+uv run python -m src.engine.hindsight_components.file_rebuild_runner verify --bank BANK --run-id RUN_ID
+```
+
+`--max-tokens` 是整个 run 的累计额度，不是每次续跑重新分配。`--max-cost-usd` 配合 `--input-price`、`--output-price`（美元/百万 token）限制生成调用费用。预算覆盖摘要、fact 抽取和 consolidation；向量 embedding 调用未纳入该生成模型预算。每次调用前预留保守上限，实际 usage 到达后结算；没有 usage 或调用中断时保留预留，不宣称是实际账单。`budget_paused` 可通过提高同一个 run 的预算后续跑，成功摘要不会重复生成。
+
+运行拒绝源内容/revision/摘要策略变化。已有新写入时采用前向修复，禁止把旧备份覆盖回去。`awaiting_unrelated_consolidation` 要求当前范围的其他来源队列先完成；迁移不会吞掉那些事件。不同 scope 的任务不由本次迁移领取。
+
+迁移前确认所有读写 worker 使用相同的新版本；旧容器不会因为当前分支有提交而自动更新。按仓库部署流程升级后，重新生成并核对 manifest 和备份，再运行迁移。目标备份、原文和凭据保存在 `output/` 等非提交位置。

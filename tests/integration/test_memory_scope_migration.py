@@ -17,6 +17,7 @@ from src.engine.hindsight_components.models import MemoryEntity, MemoryUnit
 from src.engine.scope import TagFilter, TagGroup
 from src.engine.scope import MemoryScope
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
+from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.types import MemoryDraft, RetainPlan
 
 pytestmark = pytest.mark.integration
@@ -282,7 +283,7 @@ async def test_legacy_append_recovers_original_source_and_random_ids(scope_datab
             return [vector for _ in texts]
 
     provider = Provider()
-    service = HindsightService(repo, provider)
+    service = HindsightService(repo, provider, HindsightOptions())
     value = RetainInput(
         document_id=str(doc_id),
         title="Legacy",
@@ -401,7 +402,7 @@ async def test_append_replay_preserves_chunk_provenance_and_reprocess(scope_data
 
     provider = Provider()
     repo = PostgresMemoryRepository(sessions)
-    service = HindsightService(repo, provider)
+    service = HindsightService(repo, provider, HindsightOptions())
     first = RetainInput(
         document_id=str(doc_id),
         title="Append",
@@ -634,7 +635,7 @@ async def test_extraction_cache_reuses_content_and_invalidates_policy(scope_data
 
     provider = Provider()
     repo = PostgresMemoryRepository(sessions)
-    service = HindsightService(repo, provider)
+    service = HindsightService(repo, provider, HindsightOptions())
     value = RetainInput(
         document_id=str(doc_id), title="cached", content="Source text", file_type="text"
     )
@@ -702,7 +703,7 @@ async def test_retention_request_replay_conflict_and_concurrent_commit(scope_dat
 
     provider = Provider()
     repo = PostgresMemoryRepository(sessions)
-    service = HindsightService(repo, provider)
+    service = HindsightService(repo, provider, HindsightOptions())
     value = RetainInput(
         document_id=str(doc_id),
         title="idempotent",
@@ -1082,7 +1083,7 @@ async def test_file_extraction_replay_preserves_time_and_checks_scope(scope_data
 
             return [[1.0] + [0.0] * (EMBEDDING_DIM - 1) for _ in texts]
 
-    service = HindsightService(repo, DatabaseProviders())
+    service = HindsightService(repo, DatabaseProviders(), HindsightOptions())
     result = await service.retain(
         RetainInput(
             document_id=str(doc_id),
@@ -1814,7 +1815,9 @@ async def test_document_access_and_background_chunk_ownership(
             }
 
     repo = PostgresMemoryRepository(session_factory=sessions)
-    hook = HindsightRetainHook(HindsightService(repo, Providers()), repo)
+    hook = HindsightRetainHook(
+        HindsightService(repo, Providers(), HindsightOptions()), repo
+    )
     pipeline = Pipeline(SimpleNamespace(), analyzer=SimpleNamespace(), index_hook=hook)
     monkeypatch.setattr(pipeline_module, "async_session_factory", sessions)
     await pipeline._notify_indexed(
@@ -2094,13 +2097,19 @@ async def test_consolidation_cross_retain_dedup_history_delete_and_fencing(
             == 0
         )
 
-    # A new fact fences a worker that planned against the previous watermark.
+    # New facts preserve the active lease and remain pending beyond its watermark.
     await repository.replace_document(plan(0))
     stale_claim = await consolidation_repository.claim(options)
     assert stale_claim is not None
     assert await consolidation_repository.claim(options) is None
     stale_read = await consolidation_repository.read_set(stale_claim, options)
     await repository.replace_document(plan(1))
+    async with sessions() as session, session.begin():
+        job = await session.get(ConsolidationJob, ("[]", bank))
+        assert str(job.lease_token) == stale_claim.lease_token
+        assert job.pending_through > stale_claim.claimed_through
+        # Simulate a worker crash and lease expiry without consuming its facts.
+        job.lease_expires_at = func.now() - text("interval '1 second'")
     with pytest.raises(RuntimeError, match="lease lost"):
         await consolidation_repository.publish(
             stale_claim,
@@ -2948,8 +2957,11 @@ async def test_cached_fact_validation_across_workers_and_mutations(scope_databas
     assert await worker_b.load_cached_facts([str(fact_id)]) == {}
 
 
+@pytest.mark.parametrize(
+    "runner_fault", [None, "summary_ready", "retired", "retain_committed"]
+)
 async def test_file_rebuild_precise_retirement_and_guarded_restore(
-    scope_database, tmp_path, scope_graph
+    scope_database, tmp_path, scope_graph, monkeypatch, runner_fault
 ):
     import json
     from pathlib import Path
@@ -3090,8 +3102,146 @@ async def test_file_rebuild_precise_retirement_and_guarded_restore(
     await rebuild.export_backup(run_id, tmp_path / "backup.json")
     backup = json.loads((tmp_path / "backup.json").read_text(encoding="utf-8"))
     assert backup.pop("checksum") == digest(backup)
+    if runner_fault:
+        from config.settings import settings
+        from src.engine.hindsight_components.file_rebuild_runner import (
+            FileRebuildRunner,
+        )
+
+        monkeypatch.setattr(settings.llm, "base_url", "http://fixture.invalid")
+        monkeypatch.setattr(settings.llm, "model", "fixture-model")
+
+        class Providers:
+            def __init__(self):
+                self.summaries = 0
+                self.extractions = 0
+
+            async def embed(self, texts, **kwargs):
+                return [[0.1] * 768 for _ in texts]
+
+            async def json_with_usage(self, system, user, **kwargs):
+                if system == "Summarize only supplied file content.":
+                    self.summaries += 1
+                    payload = {"overview": f"摘要事实 {self.summaries}"}
+                elif system.startswith("You extract exhaustive"):
+                    self.extractions += 1
+                    payload = {
+                        "facts": [
+                            {
+                                "text": f"摘要事实 {self.extractions}",
+                                "type": "world",
+                                "entities": [],
+                            }
+                        ]
+                    }
+                else:
+                    data, _ = json.JSONDecoder().raw_decode(user)
+                    payload = {
+                        "actions": [
+                            {
+                                "action": "create",
+                                "text": "新摘要与保留来源的综合结论",
+                                "source_fact_ids": [f["id"] for f in data["new_facts"]],
+                                "change": "synthesis",
+                            }
+                        ]
+                    }
+                return payload, {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                }
+
+        providers = Providers()
+        from src.engine.hindsight_components.models import ConsolidationJob
+
+        async with sessions() as session, session.begin():
+            session.add(
+                ConsolidationJob(
+                    bank_id=bank,
+                    scope_key='["other"]',
+                    write_scope=["other"],
+                    status="pending",
+                    available_at=func.now(),
+                )
+            )
+        runner = FileRebuildRunner(rebuild, providers, worker, budget_tokens=1)
+        async with engine.connect() as connection:
+            await connection.execute(
+                text("SELECT pg_advisory_lock(hashtextextended(:key, 0))"),
+                {"key": f"tkb-file-rebuild:{run_id}"},
+            )
+            assert (await runner.resume(run_id))["status"] == "busy"
+            await connection.execute(
+                text("SELECT pg_advisory_unlock(hashtextextended(:key, 0))"),
+                {"key": f"tkb-file-rebuild:{run_id}"},
+            )
+        assert (await runner.resume(run_id))["status"] == "budget_paused"
+        cost_runner = FileRebuildRunner(
+            rebuild,
+            providers,
+            worker,
+            budget_cost_usd=0.000000001,
+            input_price=1,
+            output_price=1,
+        )
+        assert (await cost_runner.resume(run_id))["status"] == "budget_paused"
+        assert providers.summaries == 0
+        assert (await rebuild.get_run(run_id)).status == "planned"
+        triggered = False
+
+        async def fault(stage, document_id):
+            nonlocal triggered
+            if stage == runner_fault and not triggered:
+                triggered = True
+                raise RuntimeError("injected process interruption")
+
+        runner = FileRebuildRunner(rebuild, providers, worker, fault=fault)
+        for _ in range(10):
+            result = await runner.resume(run_id)
+            if result["status"] == "verified":
+                break
+        assert result["status"] == "verified", (
+            result,
+            (await rebuild.get_run(run_id)).progress,
+        )
+        assert triggered and providers.summaries == 2 and providers.extractions == 2
+        assert (await runner.resume(run_id))["status"] == "verified"
+        async with sessions() as session:
+            assert (
+                await session.get(ConsolidationJob, ('["other"]', bank))
+            ).status == "pending"
+            assert (await session.get(MemoryUnit, ids["o-chat"])).text == "o-chat"
+            new_observations = list(
+                await session.scalars(
+                    select(MemoryUnit).where(
+                        MemoryUnit.memory_type == "observation",
+                        MemoryUnit.state == "active",
+                        MemoryUnit.id.not_in(list(ids.values())),
+                    )
+                )
+            )
+            assert new_observations
+            assert any(ids["f-chat"] in o.source_memory_ids for o in new_observations)
+        return
     await rebuild.retire(run_id)
     await rebuild.retire(run_id)
+    from src.engine.hindsight_components.retain import RetainEngine
+    from src.engine.hindsight_components.types import (
+        RetainInput,
+        RetentionRevisionConflict,
+    )
+
+    with pytest.raises(RetentionRevisionConflict):
+        await RetainEngine(rebuild.repository, None, HindsightOptions()).retain(
+            RetainInput(
+                document_id=str(ids["short-file"]),
+                title="short-file",
+                content=docs["short-file"]["text"],
+                file_type="markdown",
+                expected_revision=1,
+            )
+        )
     async with sessions() as session:
         for obs in fixture["expected_affected_observations"]:
             row = await session.get(MemoryUnit, ids[obs])
@@ -3137,3 +3287,27 @@ async def test_file_rebuild_precise_retirement_and_guarded_restore(
         )
     with pytest.raises(ValueError, match="intervening"):
         await rebuild.restore_retired(new_run)
+    from src.engine.hindsight_components.file_rebuild_runner import FileRebuildRunner
+
+    target = next(
+        t
+        for t in (await rebuild.get_run(new_run)).manifest["targets"]
+        if t["document_id"] == str(ids["short-file"])
+    )
+    with pytest.raises(ValueError, match="intervening"):
+        await FileRebuildRunner(rebuild, None, worker)._check_retired(
+            target,
+            RetainInput(
+                document_id=target["document_id"],
+                title="short-file",
+                content=docs["short-file"]["text"],
+                file_type="markdown",
+                request_id="concurrent-fact-write",
+            ),
+        )
+    result = await FileRebuildRunner(rebuild, None, worker).resume(
+        new_run, batch_size=2
+    )
+    assert result["status"] == "failed"
+    async with sessions() as session:
+        assert (await session.get(MemoryUnit, ids["f-short"])).memory_version == 99

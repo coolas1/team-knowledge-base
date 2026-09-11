@@ -330,6 +330,7 @@ class PostgresMentalModelRepository:
                     model_id=model_id,
                     requested_watermark=requested,
                     status="pending",
+                    available_at=func.now(),
                 )
                 statement = statement.on_conflict_do_update(
                     index_elements=["bank_id", "model_id"],

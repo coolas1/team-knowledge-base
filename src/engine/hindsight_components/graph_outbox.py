@@ -66,12 +66,16 @@ class GraphProjectionSource(Protocol):
 
 
 class PostgresGraphOutbox:
-    def __init__(self, session_factory=None) -> None:
+    def __init__(
+        self, session_factory=None, *, bank_id=None, document_ids=None
+    ) -> None:
         if session_factory is None:
             from src.engine.components.store.postgres import async_session_factory
 
             session_factory = async_session_factory
         self._session_factory = session_factory
+        self.bank_id = bank_id
+        self.document_ids = document_ids
 
     async def claim(
         self,
@@ -86,7 +90,18 @@ class PostgresGraphOutbox:
         async with self._session_factory() as session:
             async with session.begin():
                 row = await session.scalar(
-                    self._claim_statement(now, stale_before, max_attempts)
+                    self._claim_statement(now, stale_before, max_attempts).where(
+                        *(
+                            [HindsightGraphOutbox.bank_id == self.bank_id]
+                            if self.bank_id
+                            else []
+                        ),
+                        *(
+                            [HindsightGraphOutbox.document_id.in_(self.document_ids)]
+                            if self.document_ids is not None
+                            else []
+                        ),
+                    )
                 )
                 if row is None:
                     return None

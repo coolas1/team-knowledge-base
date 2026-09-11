@@ -138,12 +138,14 @@ def retry_batch_size(batch_size: int, attempts: int) -> int:
 
 
 class PostgresConsolidationRepository:
-    def __init__(self, session_factory=None) -> None:
+    def __init__(self, session_factory=None, *, bank_id=None, scope_keys=None) -> None:
         if session_factory is None:
             from src.engine.components.store.postgres import async_session_factory
 
             session_factory = async_session_factory
         self._session_factory = session_factory
+        self.bank_id = bank_id
+        self.scope_keys = scope_keys
 
     async def claim(self, options: ConsolidationOptions) -> ConsolidationClaim | None:
         now = _now()
@@ -152,6 +154,16 @@ class PostgresConsolidationRepository:
                 job = await session.scalar(
                     select(ConsolidationJob)
                     .where(
+                        *(
+                            [ConsolidationJob.bank_id == self.bank_id]
+                            if self.bank_id
+                            else []
+                        ),
+                        *(
+                            [ConsolidationJob.scope_key.in_(self.scope_keys)]
+                            if self.scope_keys is not None
+                            else []
+                        ),
                         ConsolidationJob.attempts < options.max_attempts,
                         ConsolidationJob.available_at <= func.clock_timestamp(),
                         or_(

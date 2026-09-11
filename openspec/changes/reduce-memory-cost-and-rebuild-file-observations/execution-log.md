@@ -70,3 +70,16 @@
 - PostgreSQL + 独立 Neo4j 演练发现原 graph_projection 未过滤 inactive 行，已修复为只投影 active memories / 链接目标；真实图清理和既有图契约 2 passed。
 - 从实际导出文件恢复、拒绝后续写入后的恢复：1 passed；fixture 验证纯文件/跨文件/混合来源和派生 mental model。
 - 全库及内部记忆测试：519 passed / 35 skipped；ruff passed。未在目标 TKB 运行清理。
+
+第四批提交：`565de81`。
+
+## 批次五验收
+
+- FileRebuildRunner 串行分批：持久化摘要成功、旧内容退休、retain 提交、consolidation、图投影和 verified/empty 阶段；同一 run 用 PostgreSQL session advisory lock 互斥。
+- 每次生成调用前持久化保守 token/cost 预留，成功按 provider usage 结算，中断/失败保留预留；缺失 usage 明确记录估算。预算耗尽不发布空抽取结果。摘要模型/策略变化要求重规划。
+- 摘要成功后、清理后、retain 已提交但未记录进度时分别故障注入并续跑：各完成两文件；摘要调用两次、抽取调用两次，重放不重复调用。混合来源的新 observation 引用保留的对话事实；非目标 observation 指纹一致。
+- 旧 revision 的 worker 被拒绝；后续 fact version 写入不能被恢复覆盖；不同 scope 的 consolidation job 保持 pending、不被迁移领取。存在同 scope 非目标待处理事件时在清理前等待。
+- 完整 PostgreSQL/Neo4j 集成回归 `tests/integration/test_memory_scope_migration.py`：31 passed；最终迁移专项 4 passed。独立测试容器采用 tmpfs，随机 schema/bank，与目标实例隔离。
+- 回归适配：旧全文 append/cache/权限契约测试显式设置旧模式；队列测试按既有“保留有效 lease、新水位随后消费”契约模拟租约过期；mental model enqueue 使用数据库时间，避免 Windows 与 Docker 时钟差异导致新任务暂不可领取。
+- 全库 ruff passed；`pytest tests src/engine/hindsight_components/tests`：519 passed / 38 skipped。跳过项由集成环境开关控制，适用真实数据库用例已单独执行。
+- 本批提交 SHA 待提交后记录。第六批目标预览已经核对，但未对目标运行清理或生成模型调用。

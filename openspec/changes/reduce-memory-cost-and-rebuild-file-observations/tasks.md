@@ -30,16 +30,16 @@
 - [x] 4.3 实现纯文件 observation 当前内容清理及旧全文 facts 失效；验收：活跃 observation、旧 facts 和有效 edges 按 manifest 归零，原文/向量未删除。
 - [x] 4.4 实现混合来源 observation 清理与重算排队；验收：旧正文不再有效，对话与非目标文件原始 facts 保留，不能仅删 edge 却保留旧正文。
 - [x] 4.5 联动 mental model 失效、graph outbox 清理和 cache 版本失效；验收：检索、模型上下文、图和缓存均无法返回旧文件派生内容，审计历史不参与再生成。
-- [ ] 4.6 在隔离真实数据库运行删除范围和恢复集成测试，执行全库检查，提交 `feat(engine): retire legacy file observations`；验收：非目标校验和一致且记录集成环境标识与本批 SHA。本批不对目标实例运行清理。
+- [x] 4.6 在隔离真实数据库运行删除范围和恢复集成测试，执行全库检查，提交 `feat(engine): retire legacy file observations`；验收：非目标校验和一致且记录集成环境标识与本批 SHA。本批不对目标实例运行清理。
 
 ## 5. 批次五：摘要重处理与可靠续跑
 
-- [ ] 5.1 实现持久化迁移阶段与幂等键，先准备摘要再切换有效来源；验收：重复执行不生成重复活跃 facts，成功摘要不重复计费，empty 有明确终态。
-- [ ] 5.2 实现 revision/generation fencing、目标 scope 任务隔离与冲突重规划；验收：暂停旧 worker 后恢复提交被拒绝，并发编辑不被覆盖，其他 scope 不受阻。
-- [ ] 5.3 接入新摘要 retain → consolidation → 投影清理/重建的终态等待；验收：每个新 observation 可追溯至新摘要或保留的有效事实，retain 成功但下游未完成时不报告完成。
-- [ ] 5.4 实现批大小、串行默认、token/cost 预算暂停和 resume；验收：达到上限不启动额外模型调用，重启从检查点续跑。
-- [ ] 5.5 在摘要成功后、旧内容清理后、新 retain 后分别注入失败并恢复，验证版本保护恢复/前向修复；验收：无旧内容复活、无新写入丢失、无重复摘要调用。
-- [ ] 5.6 完成端到端隔离数据库演练及全库检查，提交 `feat(engine): resume file memory rebuilds`；验收：纯文件和混合来源 fixture 均迁移完毕，记录本批 SHA、阶段报告及恢复证据。
+- [x] 5.1 实现持久化迁移阶段与幂等键，先准备摘要再切换有效来源；验收：重复执行不生成重复活跃 facts，成功摘要不重复计费，empty 有明确终态。
+- [x] 5.2 实现 revision/generation fencing、目标 scope 任务隔离与冲突重规划；验收：暂停旧 worker 后恢复提交被拒绝，并发编辑不被覆盖，其他 scope 不受阻。
+- [x] 5.3 接入新摘要 retain → consolidation → 投影清理/重建的终态等待；验收：每个新 observation 可追溯至新摘要或保留的有效事实，retain 成功但下游未完成时不报告完成。
+- [x] 5.4 实现批大小、串行默认、token/cost 预算暂停和 resume；验收：达到上限不启动额外模型调用，重启从检查点续跑。
+- [x] 5.5 在摘要成功后、旧内容清理后、新 retain 后分别注入失败并恢复，验证版本保护恢复/前向修复；验收：无旧内容复活、无新写入丢失、无重复摘要调用。
+- [x] 5.6 完成端到端隔离数据库演练及全库检查，提交 `feat(engine): resume file memory rebuilds`；验收：纯文件和混合来源 fixture 均迁移完毕，记录本批 SHA、阶段报告及恢复证据。
 
 ## 6. 批次六：目标历史数据分批清理、重处理和验收
 

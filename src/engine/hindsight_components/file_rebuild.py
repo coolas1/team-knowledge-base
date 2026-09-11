@@ -165,6 +165,26 @@ class FileMemoryRebuild:
                     "retained_fact_ids": sorted(str(i) for i in sources - fact_ids),
                 }
             )
+        graph_documents = {t["document_id"] for t in targets} | {
+            o["document_id"] for o in observations
+        }
+        for observation in observations:
+            graph_documents.update(
+                str(visible_units[uuid.UUID(i)].document_id)
+                for i in observation["retained_fact_ids"]
+                if uuid.UUID(i) in visible_units
+            )
+        protected_ids = [
+            u.id for u in units if u.id not in fact_ids and u.id not in affected
+        ]
+        protected_rows = list(
+            await session.scalars(
+                select(func.to_jsonb(MemoryUnit.__table__.table_valued())).where(
+                    MemoryUnit.id.in_(protected_ids)
+                )
+            )
+        )
+        protected_rows = sorted(protected_rows, key=lambda row: row["id"])
         environment = dict(
             (
                 await session.execute(
@@ -177,11 +197,19 @@ class FileMemoryRebuild:
             .one()
         )
         return {
+            "protected_memory_ids": sorted(str(i) for i in protected_ids),
+            "protected_memory_fingerprint": digest(protected_rows),
+            "graph_document_ids": sorted(graph_documents),
             "environment": environment,
             "version": 1,
             "bank_id": self.scope.bank_id,
             "targets": targets,
             "observations": observations,
+            "protected_observation_ids": sorted(
+                str(u.id)
+                for u in units
+                if u.memory_type == "observation" and u.id not in affected
+            ),
             "ambiguous_documents": ambiguous,
         }
 
@@ -286,6 +314,7 @@ class FileMemoryRebuild:
         document_ids = {t["document_id"] for t in run.manifest["targets"]} | {
             o["document_id"] for o in run.manifest["observations"]
         }
+        document_ids.update(run.manifest.get("graph_document_ids", ()))
         visible = set(
             str(i)
             for i in await session.scalars(
@@ -403,7 +432,14 @@ class FileMemoryRebuild:
             await session.flush()
             run.status = "retired"
             run.progress = {
-                t["document_id"]: {"stage": "retired"} for t in run.manifest["targets"]
+                **run.progress,
+                **{
+                    t["document_id"]: {
+                        **run.progress.get(t["document_id"], {}),
+                        "stage": "retired",
+                    }
+                    for t in run.manifest["targets"]
+                },
             }
             run.retired_fingerprint = digest(
                 await self._snapshot(session, run.manifest)
