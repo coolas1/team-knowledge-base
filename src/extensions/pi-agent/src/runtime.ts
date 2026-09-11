@@ -56,6 +56,14 @@ const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent
 - 需要 Hindsight recall/reflect 时使用 tkb_query_knowledge。
 - 命中关键文档后可用 tkb_get_document 核对全文；不要获取完整图谱。
 - 证据不足时可以换一种查询方式，但不要重复相同查询。
+
+版本规则（文档可能有多版本，检索默认只覆盖当前版）：
+- 问版本历史、迭代过程、改了几版时用 tkb_list_versions。
+- 问两个版本的区别、某版本之前是什么、何时变更时用 tkb_diff_versions，
+  from_version 在前、to_version 在后。
+- 用户要求修改文档时先用 tkb_propose_edit 生成提议，确认后再
+  edit_document_content 落库（保存即新版本）。
+- 回答内容类问题时默认依据当前版；涉及历史状态先查版本链。
 - 知识库回答必须列出依据的文档标题和 doc_id；没有充分证据时明确说明“知识库中未找到充分依据”。
 - 达到调用限制时，停止探索并依据已经获得的证据作答；工具错误必须如实处理。
 - 深度检索返回 degraded 或 fallback 标记时，继续使用现有证据作答，并在答案中说明检索发生了降级或快速兜底。
@@ -153,6 +161,7 @@ export interface RuntimeHealth {
     completed: number;
     failed: number;
     cancelled: number;
+    unavailable?: boolean;
   };
 }
 
@@ -369,14 +378,20 @@ export class PiAgentRuntime implements AgentRuntimeApi {
         this.conversationMemoryStatus = await this.mcpClient.getConversationMemoryStatus({
           timeoutMs: this.adapterConfig.defaultToolTimeoutMs,
         });
-      } catch {
+      } catch (error) {
+        // 状态查询失败 ≠ 队列里有失败任务：如实报告 unavailable，
+        // 不伪造 failed: 1（design D9）。
+        console.warn(
+          `conversation_memory_status_unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
         this.conversationMemoryStatus = {
           enabled: true,
           pending: 0,
           processing: 0,
           completed: 0,
-          failed: 1,
+          failed: 0,
           cancelled: 0,
+          unavailable: true,
         };
       }
     } else {
@@ -722,8 +737,12 @@ export class PiAgentRuntime implements AgentRuntimeApi {
         },
         { timeoutMs: this.adapterConfig.defaultToolTimeoutMs },
       );
-    } catch {
-      // Retention is failure-isolated from the completed answer.
+    } catch (error) {
+      // Retention is failure-isolated from the completed answer, but a
+      // swallowed failure must still be diagnosable.
+      console.warn(
+        `conversation_memory_retention_failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

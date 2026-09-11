@@ -201,6 +201,103 @@ def test_unwrap_exception_group_single():
     assert _unwrap_exception_group(inner) is inner
 
 
+def test_format_error_is_type_first_and_never_empty():
+    from src.engine.graphrag.pipeline import format_error
+
+    assert format_error(RuntimeError("boom")) == "RuntimeError: boom"
+    # 无消息异常（如取消/超时）也能标识失败原因
+    assert format_error(asyncio.CancelledError()) == "CancelledError"
+    assert format_error(TimeoutError()) == "TimeoutError"
+    assert format_error(asyncio.CancelledError()).strip()
+
+
+class _FlakyAnalyzer(_RecordingAnalyzer):
+    """前 N 次 chunk 调用抛瞬时异常，之后成功。"""
+
+    def __init__(self, transient_failures: int, error: Exception):
+        super().__init__(delay=0.01)
+        self._remaining = transient_failures
+        self._error = error
+        self.attempts = 0
+
+    async def analyze_chunk(self, chunk_text, doc_title, idx):
+        from src.engine.components.analyzer import ChunkAnalysisResult
+
+        self.attempts += 1
+        if self._remaining > 0:
+            self._remaining -= 1
+            raise self._error
+        return ChunkAnalysisResult(chunk_index=idx)
+
+
+async def test_analyze_document_retries_transient_llm_failures(monkeypatch):
+    import httpx
+
+    from src.engine.graphrag import pipeline as pipeline_mod
+
+    analyzer = _FlakyAnalyzer(1, httpx.ConnectError("endpoint saturated"))
+    monkeypatch.setattr(pipeline_mod, "embedder", _FakeEmbedder())
+    pipe = pipeline_mod.Pipeline(
+        object(), analyzer=analyzer, chunk_concurrency=2, llm_retries=2,
+        llm_backoff_base_seconds=0.001,
+    )
+
+    doc_analysis, _chunks, chunk_results, _embeddings = await pipe._analyze_document(
+        "# T\n\n短文本", "t.md", uuid4()
+    )
+
+    assert doc_analysis.overview == "ov"
+    assert len(chunk_results) >= 1  # 瞬时失败自愈，文档继续分析
+
+
+async def test_analyze_document_does_not_retry_non_transient(monkeypatch):
+    from src.engine.graphrag import pipeline as pipeline_mod
+
+    analyzer = _FlakyAnalyzer(1, ValueError("bad schema"))
+    monkeypatch.setattr(pipeline_mod, "embedder", _FakeEmbedder())
+    pipe = pipeline_mod.Pipeline(
+        object(), analyzer=analyzer, chunk_concurrency=2, llm_retries=3,
+        llm_backoff_base_seconds=0.001,
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        await pipe._analyze_document("# T\n\n短文本", "t.md", uuid4())
+
+    messages = [str(excinfo.value)] + [
+        str(e) for e in getattr(excinfo.value, "exceptions", [])
+    ]
+    assert any("bad schema" in m for m in messages)
+    assert analyzer.attempts == 1  # 非瞬时异常不重试
+
+
+async def test_mark_failed_writes_non_empty_error_for_messageless_exception(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from src.engine.graphrag import pipeline as pipeline_mod
+
+    doc_id = uuid4()
+    doc = SimpleNamespace(id=doc_id, status="processing")
+    session = _PipelineSession({doc_id: doc})
+    monkeypatch.setattr(pipeline_mod, "async_session_factory", lambda: session)
+
+    pipe = pipeline_mod.Pipeline(object(), analyzer=_RecordingAnalyzer())
+    await pipe._mark_failed(doc_id, asyncio.CancelledError(), "Pipeline")
+
+    statuses = _doc_statuses(session)
+    assert statuses[-1] == "failed"
+    # error_msg 非空且标识异常类型
+    for stmt in session.statements:
+        try:
+            params = stmt.compile().params
+        except Exception:
+            continue
+        if params.get("status") == "failed":
+            assert params["error_msg"].strip()
+            assert "CancelledError" in params["error_msg"]
+
+
 class _RecordingNeo4j:
     def __init__(self):
         self.entity_items = None

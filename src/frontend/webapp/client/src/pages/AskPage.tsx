@@ -13,7 +13,14 @@ import {
   UserRound,
   X,
 } from 'lucide-react'
-import { AgentStreamError, api, type AgentSession, type AgentSessionDetail, type PiAgentEvent } from '../api/client'
+import {
+  AgentStreamError,
+  api,
+  type AgentSession,
+  type AgentSessionDetail,
+  type PiAgentEvent,
+} from '../api/client'
+import { randomUUID } from '../api/uuid'
 import './AskPage.css'
 import { appendActivity } from './tool-activity'
 import {
@@ -26,6 +33,18 @@ import {
   reconcileMessages,
   type ChatMessage,
 } from './session-transcript'
+import {
+  isSessionOperationLoading,
+  resolveSendSession,
+  retryTarget,
+  sessionOperationFailed,
+  sessionOperationMessage,
+  sessionOperationSucceeded,
+  startSessionOperation,
+  threadClearedAfterFailure,
+  type SessionOperation,
+  type SessionOperationKind,
+} from './session-recovery'
 
 interface Citation {
   docId: string
@@ -67,7 +86,9 @@ export function AskPage() {
   const [status, setStatus] = useState('正在恢复对话')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [sessionLoading, setSessionLoading] = useState(true)
+  const [sessionOperation, setSessionOperation] = useState<SessionOperation>(
+    startSessionOperation('restore'),
+  )
   const [sessions, setSessions] = useState<AgentSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -75,46 +96,92 @@ export function AskPage() {
   const controllerRef = useRef<AbortController | undefined>(undefined)
   const acceptedSubmissionsRef = useRef(new Set<string>())
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  // The in-flight restore, so a send can await it instead of racing it into
+  // creating a duplicate session.
+  const restoreRef = useRef<Promise<void> | undefined>(undefined)
+  // Monotonic counter identifying the latest session-level intent. A restore
+  // or switch checks it after each await and bails if the user has since
+  // moved on (started a new conversation, switched elsewhere), so a slow
+  // response cannot resurrect a thread the user already left.
+  const intentRef = useRef(0)
 
-  const restoreMessages = (detail: AgentSessionDetail) => {
+  const startIntent = () => {
+    intentRef.current += 1
+    return intentRef.current
+  }
+  const isCurrentIntent = (token: number) => intentRef.current === token
+
+  const applyDetail = (detail: AgentSessionDetail) => {
+    sessionRef.current = detail.id
+    setActiveSessionId(detail.id)
     setMessages(messagesFromDetail(detail))
   }
 
-  useEffect(() => {
-    let cancelled = false
+  const clearThread = () => {
+    sessionRef.current = undefined
+    setActiveSessionId(undefined)
+    setMessages([])
+  }
 
-    const load = async () => {
+  // One place that turns a caught value into the displayed state, so the
+  // failure state and the message shown can never drift apart.
+  const failSessionOperation = (
+    kind: SessionOperationKind,
+    sessionId: string | undefined,
+    caught: unknown,
+  ) => {
+    const operation = sessionOperationFailed(kind, sessionId, caught)
+    setSessionOperation(operation)
+    setError(sessionOperationMessage(operation))
+  }
+
+  const restoreConversation = async (): Promise<void> => {
+    const token = startIntent()
+    const promise = (async () => {
+      setSessionOperation(startSessionOperation('restore'))
+      setError('')
+      setStatus('正在恢复对话')
       try {
         const result = await api.listAgentSessions()
+        if (!isCurrentIntent(token)) return
         const sorted = sortSessions(result.items)
-        if (cancelled) return
         setSessions(sorted)
         if (sorted.length === 0) {
+          clearThread()
           setStatus('新对话')
+          setSessionOperation(sessionOperationSucceeded())
           return
         }
 
         const detail = await api.getAgentSession(sorted[0].id)
-        if (cancelled) return
-        sessionRef.current = detail.id
-        setActiveSessionId(detail.id)
-        restoreMessages(detail)
+        if (!isCurrentIntent(token)) return
+        applyDetail(detail)
         setStatus('历史对话已恢复')
+        setSessionOperation(sessionOperationSucceeded())
       } catch (caught) {
-        if (cancelled) return
-        const message = caught instanceof Error ? caught.message : String(caught)
-        setError(message)
+        if (!isCurrentIntent(token)) return
+        // A half-restored thread is not what the user asked for, and leaving
+        // it up would read as the current conversation. Clear it.
+        if (threadClearedAfterFailure('restore')) clearThread()
+        failSessionOperation('restore', undefined, caught)
         setStatus('会话加载失败')
-      } finally {
-        if (!cancelled) setSessionLoading(false)
       }
+    })()
+    restoreRef.current = promise
+    try {
+      await promise
+    } finally {
+      if (restoreRef.current === promise) restoreRef.current = undefined
     }
+  }
 
-    void load()
+  useEffect(() => {
+    void restoreConversation()
     return () => {
-      cancelled = true
       controllerRef.current?.abort()
     }
+    // Mount-only: the retry affordance re-runs restoreConversation directly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -183,30 +250,68 @@ export function AskPage() {
 
   const run = async (retryText?: string) => {
     const prompt = (retryText ?? query).trim()
-    if (!prompt || loading || sessionLoading) return
+    if (!prompt || loading) return
 
-    const clientMessageId = crypto.randomUUID()
-    const pending = optimisticMessages(prompt, clientMessageId)
-    const assistantId = pending[1].id
-    setMessages((current) => [...current, ...pending])
     setQuery('')
     setCitations([])
+
+    // If a session operation is still in flight, the send waits for it — and
+    // saying so beats a frozen-looking composer when that operation is stalled
+    // or about to fail. A send that is about to actually stream takes over the
+    // status line below.
+    const pendingRestore = restoreRef.current
+    if (isSessionOperationLoading(sessionOperation)) {
+      setStatus('正在等待会话就绪')
+    }
     setError('')
-    setStatus('正在连接 Agent')
+
+    // Resolve the target session BEFORE appending the optimistic rows: a
+    // restore settling underneath would reload the transcript and wipe them.
+    // This awaits any in-flight restore, so a send during a restore reuses the
+    // restored session instead of creating a duplicate alongside it.
+    if (!sessionRef.current) {
+      try {
+        const target = await resolveSendSession(
+          pendingRestore,
+          () => sessionRef.current,
+          async () => (await api.createAgentSession()).id,
+        )
+        if (target.created) {
+          sessionRef.current = target.id
+          setActiveSessionId(target.id)
+          setSessions((current) => sortSessions([
+            { id: target.id, messageCount: 0, streaming: false },
+            ...current.filter((session) => session.id !== target.id),
+          ]))
+        }
+      } catch (caught) {
+        // No session could be reached, so the send never happened. Put the
+        // text back rather than discarding what the user typed; retrying is
+        // just pressing send again once the dependency recovers.
+        failSessionOperation('switch', undefined, caught)
+        setStatus('会话不可用')
+        setQuery(prompt)
+        return
+      }
+    }
+
+    const sessionId = sessionRef.current
+    if (!sessionId) return
+
+    const clientMessageId = randomUUID()
+    const pending = optimisticMessages(prompt, clientMessageId)
+    const assistantId = pending[1].id
+    // A send implies a session is ready, so no session operation is pending.
+    setSessionOperation(sessionOperationSucceeded())
+    setMessages((current) => [...current, ...pending])
     setLoading(true)
 
     const controller = new AbortController()
     controllerRef.current = controller
     try {
-      if (!sessionRef.current) {
-        const session = await api.createAgentSession()
-        sessionRef.current = session.id
-        setActiveSessionId(session.id)
-        setSessions((current) => sortSessions([session, ...current]))
-      }
       setStatus('正在思考')
       await api.streamAgentMessage(
-        sessionRef.current,
+        sessionId,
         prompt,
         (event) => handleEvent(event, assistantId, clientMessageId),
         controller.signal,
@@ -263,68 +368,85 @@ export function AskPage() {
   }
 
   const newConversation = () => {
-    if (loading || sessionLoading) return
-    sessionRef.current = undefined
-    setActiveSessionId(undefined)
-    setMessages([])
+    if (loading) return
+    // Abandon any restore or switch still in flight: it must not install its
+    // thread over the fresh conversation the user just asked for.
+    startIntent()
+    clearThread()
     setCitations([])
     setError('')
+    setSessionOperation(sessionOperationSucceeded())
     setStatus('新对话')
     setSidebarOpen(false)
   }
 
   const selectConversation = async (sessionId: string) => {
-    if (loading || sessionLoading || sessionId === sessionRef.current) {
+    if (loading || sessionId === sessionRef.current) {
       setSidebarOpen(false)
       return
     }
-    setSessionLoading(true)
+    const token = startIntent()
+    setSessionOperation(startSessionOperation('switch', sessionId))
     setError('')
     setCitations([])
     setStatus('正在加载对话')
     try {
       const detail = await api.getAgentSession(sessionId)
-      sessionRef.current = detail.id
-      setActiveSessionId(detail.id)
-      restoreMessages(detail)
+      if (!isCurrentIntent(token)) return
+      applyDetail(detail)
       setStatus('历史对话已恢复')
+      setSessionOperation(sessionOperationSucceeded())
       setSidebarOpen(false)
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught)
-      setError(message)
+      if (!isCurrentIntent(token)) return
+      // Leave nothing half-applied: the thread on screen would otherwise look
+      // like the conversation the user tried to open.
+      if (threadClearedAfterFailure('switch')) clearThread()
+      failSessionOperation('switch', sessionId, caught)
       setStatus('会话加载失败')
-    } finally {
-      setSessionLoading(false)
     }
   }
 
   const deleteConversation = async (sessionId: string) => {
-    if (loading || sessionLoading) return
+    if (loading) return
     if (!window.confirm('确定删除这个会话及其长期记忆吗？此操作无法撤销。')) return
-    setSessionLoading(true)
+    setSessionOperation(startSessionOperation('delete', sessionId))
     setError('')
     try {
       await deleteConversationWithMemory(api, sessionId)
-      const remaining = sessions.filter((session) => session.id !== sessionId)
-      setSessions(remaining)
+      setSessions((current) => current.filter((session) => session.id !== sessionId))
       if (sessionRef.current === sessionId) {
-        sessionRef.current = undefined
-        setActiveSessionId(undefined)
-        setMessages([])
+        clearThread()
         setCitations([])
         setStatus('会话已删除')
       }
+      setSessionOperation(sessionOperationSucceeded())
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught)
-      setError(message)
+      failSessionOperation('delete', sessionId, caught)
       setStatus('删除失败')
-    } finally {
-      setSessionLoading(false)
     }
   }
 
-  const busy = loading || sessionLoading
-  const statusTone = error ? 'error' : busy ? 'busy' : 'ready'
+  const retrySessionOperation = () => {
+    const target = retryTarget(sessionOperation)
+    if (!target || loading) return
+    if (target.kind === 'restore') {
+      void restoreConversation()
+    } else if (target.kind === 'switch' && target.sessionId) {
+      void selectConversation(target.sessionId)
+    } else if (target.kind === 'delete' && target.sessionId) {
+      void deleteConversation(target.sessionId)
+    }
+  }
+
+  const canRetrySessionOperation = retryTarget(sessionOperation) !== undefined
+  const sessionFailure = sessionOperationMessage(sessionOperation)
+  const restoringSessions =
+    sessionOperation.status === 'loading' && sessionOperation.kind === 'restore'
+  const switchingSession =
+    sessionOperation.status === 'loading' && sessionOperation.kind === 'switch'
+  const busy = loading || isSessionOperationLoading(sessionOperation)
+  const statusTone = sessionFailure ? 'error' : busy ? 'busy' : 'ready'
 
   return (
     <section className={`ask-shell${sidebarOpen ? ' ask-shell--sidebar-open' : ''}`}>
@@ -353,7 +475,7 @@ export function AskPage() {
           type="button"
           className="ask-new-button"
           onClick={newConversation}
-          disabled={busy}
+          disabled={loading}
         >
           <Plus size={17} aria-hidden="true" />
           <span>新建对话</span>
@@ -361,15 +483,20 @@ export function AskPage() {
 
         <div className="ask-session-heading">最近对话</div>
         <div className="ask-session-list">
-          {sessionLoading && sessions.length === 0 && (
+          {restoringSessions && sessions.length === 0 && (
             <div className="ask-session-placeholder">
               <LoaderCircle className="ask-spin" size={16} aria-hidden="true" />
               <span>正在加载</span>
             </div>
           )}
-          {!sessionLoading && sessions.length === 0 && (
-            <div className="ask-session-placeholder">暂无对话</div>
+          {sessionOperation.status === 'failed' && sessions.length === 0 && (
+            <div className="ask-session-placeholder">对话列表加载失败</div>
           )}
+          {!isSessionOperationLoading(sessionOperation) &&
+            sessionOperation.status !== 'failed' &&
+            sessions.length === 0 && (
+              <div className="ask-session-placeholder">暂无对话</div>
+            )}
           {sessions.map((session) => (
             <div
               key={session.id}
@@ -379,7 +506,7 @@ export function AskPage() {
                 type="button"
                 className="ask-session-select"
                 onClick={() => void selectConversation(session.id)}
-                disabled={busy}
+                disabled={loading}
                 title={sessionLabel(session)}
               >
                 <span className="ask-session-name">{sessionLabel(session)}</span>
@@ -389,7 +516,7 @@ export function AskPage() {
                 type="button"
                 className="ask-session-delete"
                 onClick={() => void deleteConversation(session.id)}
-                disabled={busy}
+                disabled={loading}
                 title="删除对话"
                 aria-label={`删除 ${sessionLabel(session)}`}
               >
@@ -425,7 +552,7 @@ export function AskPage() {
 
         <div className="ask-thread" aria-live="polite">
           <div className="ask-thread-inner">
-            {messages.length === 0 && !sessionLoading && (
+            {messages.length === 0 && !busy && !error && (
               <div className="ask-empty-state">
                 <div className="ask-empty-icon" aria-hidden="true">
                   <BookOpen size={26} />
@@ -447,10 +574,10 @@ export function AskPage() {
               </div>
             )}
 
-            {sessionLoading && messages.length === 0 && (
+            {(restoringSessions || switchingSession) && messages.length === 0 && (
               <div className="ask-thread-loading">
                 <LoaderCircle className="ask-spin" size={20} aria-hidden="true" />
-                <span>正在恢复对话</span>
+                <span>{restoringSessions ? '正在恢复对话' : '正在加载对话'}</span>
               </div>
             )}
 
@@ -520,6 +647,16 @@ export function AskPage() {
               <div className="ask-error" role="alert">
                 <AlertCircle size={17} aria-hidden="true" />
                 <span>{error}</span>
+                {canRetrySessionOperation && (
+                  <button
+                    type="button"
+                    className="ask-error-retry"
+                    onClick={retrySessionOperation}
+                    disabled={loading}
+                  >
+                    重试
+                  </button>
+                )}
               </div>
             )}
             <div ref={messagesEndRef} />
@@ -543,7 +680,7 @@ export function AskPage() {
                   void run()
                 }
               }}
-              disabled={busy}
+              disabled={loading}
               placeholder="向团队知识库提问"
               rows={1}
               aria-label="问题"
@@ -562,7 +699,7 @@ export function AskPage() {
               <button
                 type="submit"
                 className="ask-submit-button"
-                disabled={!query.trim() || sessionLoading}
+                disabled={!query.trim()}
                 title="发送"
                 aria-label="发送"
               >

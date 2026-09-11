@@ -122,7 +122,7 @@ def test_retry_failed_document(client):
 
 def test_retry_missing_document_has_upload_guidance(client):
     c, _ = client
-    res = c.post("/api/documents/missing/retry")
+    res = c.post("/api/documents/44444444-5555-6666-7777-888888888888/retry")
 
     assert res.status_code == 400
     assert res.json()["detail"]["code"] == "document_not_retryable"
@@ -148,15 +148,55 @@ def test_edit_document_content(client):
 
 def test_edit_document_content_not_found(client):
     c, _ = client
-    res = c.put("/api/documents/missing/content", json={"content": "new"})
+    res = c.put(
+        "/api/documents/55555555-6666-7777-8888-999999999999/content",
+        json={"content": "new"},
+    )
     assert res.status_code == 404
+
+
+def test_list_document_versions(client):
+    c, kb = client
+    doc_id = "66666666-7777-8888-9999-000000000000"
+
+    async def list_versions(doc_id):
+        return [{"id": doc_id, "version_number": 1, "is_current": True}]
+
+    kb.list_versions = list_versions
+    res = c.get(f"/api/documents/{doc_id}/versions")
+
+    assert res.status_code == 200
+    assert res.json()["versions"][0]["version_number"] == 1
+
+
+def test_diff_document_versions(client):
+    c, kb = client
+    doc_id = "77777777-8888-9999-0000-111111111111"
+
+    async def diff_versions(doc_id, from_version, to_version):
+        return {
+            "doc_id": doc_id,
+            "from_version": from_version,
+            "to_version": to_version,
+            "changes": [],
+        }
+
+    kb.diff_versions = diff_versions
+    res = c.get(
+        f"/api/documents/{doc_id}/versions/diff",
+        params={"from_version": 1, "to_version": 2},
+    )
+
+    assert res.status_code == 200
+    assert res.json()["to_version"] == 2
 
 
 def test_delete_document(client):
     c, _ = client
-    res = c.delete("/api/documents/abc")
+    doc_id = "88888888-9999-0000-1111-222222222222"
+    res = c.delete(f"/api/documents/{doc_id}")
     assert res.status_code == 200
-    assert res.json() == {"removed": "abc"}
+    assert res.json() == {"removed": doc_id}
 
 
 def test_get_document_not_found(client):
@@ -191,3 +231,117 @@ def test_upload_batch_rejects_empty_request(client):
     # 0 个文件在 FastAPI 参数校验层被拒绝（required File 字段缺失）
     res = c.post("/api/documents/upload/batch", files=[])
     assert res.status_code == 422
+
+
+def test_upload_rejects_oversized_file_with_413(client, monkeypatch):
+    from src.frontend.webapp.server import routes_documents
+
+    # 补丁打在路由模块实际读取的 settings 对象上（避免其他测试
+    # reload settings 模块导致的实例错位）。
+    monkeypatch.setattr(routes_documents.settings, "kb_max_upload_bytes", 16)
+    c, kb = client
+    res = c.post(
+        "/api/documents/upload",
+        files={"file": ("big.md", b"# " + b"x" * 100, "text/markdown")},
+    )
+
+    assert res.status_code == 413
+    detail = res.json()["detail"]
+    assert detail["code"] == "file_too_large"
+    assert "16 字节" in detail["message"]
+    assert "KB_MAX_UPLOAD_BYTES" in detail["suggestion"]
+    assert not kb.docs  # 未创建文档
+
+
+def test_upload_batch_isolates_oversized_file(client, monkeypatch):
+    from src.frontend.webapp.server import routes_documents
+
+    monkeypatch.setattr(routes_documents.settings, "kb_max_upload_bytes", 16)
+    c, kb = client
+    res = c.post(
+        "/api/documents/upload/batch",
+        files=[
+            ("files", ("small.md", b"# ok", "text/markdown")),
+            ("files", ("big.md", b"x" * 100, "text/markdown")),
+        ],
+    )
+
+    assert res.status_code == 200
+    items = res.json()["items"]
+    assert items[0]["ok"] is True
+    assert items[0]["document"]["title"] == "small.md"
+    assert items[1]["ok"] is False
+    assert items[1]["error"]["code"] == "file_too_large"
+    assert items[1]["error"]["filename"] == "big.md"
+    assert list(kb.raw.values()) == [b"# ok"]  # 超限文件隔离，不影响其余文件
+
+
+def test_malformed_document_id_is_rejected_with_422(client):
+    c, _ = client
+    for path in [
+        "/api/documents/not-a-uuid",
+        "/api/documents/not-a-uuid/versions",
+        "/api/documents/not-a-uuid/versions/diff?from_version=1&to_version=2",
+    ]:
+        res = c.get(path)
+        assert res.status_code == 422, path
+    assert c.post("/api/documents/not-a-uuid/retry").status_code == 422
+    assert c.delete("/api/documents/not-a-uuid").status_code == 422
+    assert (
+        c.put("/api/documents/not-a-uuid/content", json={"content": "x"}).status_code
+        == 422
+    )
+
+
+def test_well_formed_missing_document_still_404(client):
+    c, kb = client
+    missing = "11111111-2222-3333-4444-555555555555"
+
+    async def list_versions_raises(doc_id):
+        raise ValueError(f"文档不存在: {doc_id}")
+
+    kb.list_versions = list_versions_raises
+
+    res = c.get(f"/api/documents/{missing}")
+    assert res.status_code == 404
+    res = c.get(f"/api/documents/{missing}/versions")
+    assert res.status_code == 404
+
+
+def test_edit_content_on_non_markdown_is_400_with_reason(client):
+    from src.engine.interface import DocumentRef
+
+    c, kb = client
+    doc_id = "22222222-3333-4444-5555-666666666666"
+    kb.docs[doc_id] = DocumentRef(
+        id=doc_id, title="report.pdf", file_type="pdf", status="indexed"
+    )
+
+    res = c.put(f"/api/documents/{doc_id}/content", json={"content": "new text"})
+
+    assert res.status_code == 400
+    assert "Markdown" in res.json()["detail"]
+
+
+def test_edit_content_on_missing_document_is_404(client):
+    c, _ = client
+    missing = "33333333-4444-5555-6666-777777777777"
+    res = c.put(f"/api/documents/{missing}/content", json={"content": "new text"})
+    assert res.status_code == 404
+
+
+def test_spa_fallback_excludes_mcp_and_serves_client_routes(client, monkeypatch, tmp_path):
+    from src.frontend.webapp.server import app as app_mod
+
+    index = tmp_path / "index.html"
+    index.write_text("<html>spa-shell</html>", encoding="utf-8")
+    monkeypatch.setattr(app_mod, "SPA_DIST", tmp_path)
+    c, _ = client
+
+    mcp = c.get("/mcp")
+    assert mcp.status_code == 404
+    assert "spa-shell" not in mcp.text  # MCP 端点不被 SPA 外壳掩盖
+
+    spa = c.get("/no-such-client-route")
+    assert spa.status_code == 200
+    assert "spa-shell" in spa.text

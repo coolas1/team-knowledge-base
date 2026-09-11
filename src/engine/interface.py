@@ -22,6 +22,12 @@ class NotSupported(Exception):
     """Raised by an optional KnowledgeBase method the backend does not support."""
 
 
+# Shared answer when recall finds nothing relevant above the relevance gates.
+# Used by the reflect engine and the answer skills so the not-found wording
+# stays identical across surfaces.
+NOT_FOUND_ANSWER = "知识库中未找到与该问题相关的内容。"
+
+
 @dataclass
 class Capabilities:
     """Declares what a backend supports. Optional methods raise NotSupported."""
@@ -53,6 +59,13 @@ class DocumentRef:
     memory_error_msg: str | None = None
     memory_count: int = 0
     memory_link_count: int = 0
+    # 版本链信息（纵向迭代管理）
+    version_group: str = ""
+    version_number: int = 1
+    is_current: bool = True
+    # 改名识别：疑似同文档候选（相似度匹配命中但未自动挂链时），
+    # 由调用方/用户确认后手动挂链。
+    version_match: dict | None = None
 
 
 @dataclass
@@ -317,10 +330,15 @@ class KnowledgeBase(Protocol):
     async def ingest_batch(self, sources: list[IngestSource]) -> list[DocumentRef]: ...
     async def edit_content(self, doc_id: str, content: str) -> DocumentRef: ...
     async def reingest(self, doc_id: str) -> DocumentRef: ...
+    async def edit_document(self, doc_id: str, new_text: str) -> DocumentRef: ...
+    async def propose_edit(self, doc_id: str, edit_request: str) -> dict: ...
+    async def confirm_version_match(
+        self, doc_id: str, parent_doc_id: str
+    ) -> dict: ...
     async def remove(self, doc_id: str) -> None: ...
     async def recall(self, request: RecallRequest) -> RecallResult: ...
     async def get_graph(self, entity: str | None = None) -> GraphData: ...
-    async def get_neighbors(self, entity: str) -> GraphData: ...
+    async def get_neighbors(self, entity: str, hops: int = 2) -> GraphData: ...
     async def list_documents(
         self,
         page: int = 1,
@@ -329,6 +347,10 @@ class KnowledgeBase(Protocol):
         status: str | None = None,
     ) -> dict: ...
     async def get_document(self, doc_id: str) -> dict | None: ...
+    async def list_versions(self, doc_id: str) -> list[dict]: ...
+    async def diff_versions(
+        self, doc_id: str, from_version: int, to_version: int
+    ) -> dict: ...
 
 
 class DocumentIndexHook(Protocol):

@@ -27,4 +27,4 @@ async def neighbors(
     hops: int = Query(2, ge=1, le=3),
     kb: KnowledgeBase = Depends(deps.get_kb),
 ):
-    return asdict(await kb.get_neighbors(name))
+    return asdict(await kb.get_neighbors(name, hops))

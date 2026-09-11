@@ -851,6 +851,7 @@ class PostgresMemoryRepository:
                 Document.status == "indexed",
                 Document.raw_text != "",
                 self._document_scope(),
+                Document.is_current.is_(True),
             )
             .order_by(Document.created_at, Document.id)
         )
@@ -1571,6 +1572,7 @@ class PostgresMemoryRepository:
                     MemoryUnit.embedding.is_not(None),
                     Document.status == "indexed",
                     *self._recall_source_conditions(source_type, filters),
+                    Document.is_current.is_(True),
                 )
                 .order_by(score.desc())
                 .limit(limit)
@@ -1682,6 +1684,7 @@ class PostgresMemoryRepository:
                             MemoryUnit.id.in_(score_by_id),
                             self._memory_scope(),
                             *self._recall_source_conditions(source_type, filters),
+                            Document.is_current.is_(True),
                         )
                     )
                 ).all()
@@ -1722,6 +1725,7 @@ class PostgresMemoryRepository:
                     self._memory_scope(),
                     Document.status == "indexed",
                     *self._recall_source_conditions(source_type, filters),
+                    Document.is_current.is_(True),
                     or_(
                         *[
                             MemoryEntity.normalized_name.contains(item)
@@ -1766,6 +1770,7 @@ class PostgresMemoryRepository:
                                 self._memory_scope(),
                                 Document.status == "indexed",
                                 *self._recall_source_conditions(source_type, filters),
+                                Document.is_current.is_(True),
                             )
                         )
                     ).all()
@@ -1812,6 +1817,7 @@ class PostgresMemoryRepository:
                     self._memory_scope(),
                     Document.status == "indexed",
                     *self._recall_source_conditions(source_type, filters),
+                    Document.is_current.is_(True),
                 )
                 .order_by(MemoryUnit.occurred_start.desc())
                 .limit(limit)
@@ -2087,7 +2093,10 @@ class PostgresMemoryRepository:
             )
             .exists()
         )
-        conditions = [or_(Document.file_type != "conversation", completed_conversation)]
+        conditions = [
+            Document.is_current.is_(True),
+            or_(Document.file_type != "conversation", completed_conversation),
+        ]
         conditions.append(
             MemoryUnit.state.in_(("active", "stale"))
             if filters.include_stale

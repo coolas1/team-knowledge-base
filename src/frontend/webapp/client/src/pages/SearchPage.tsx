@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api/client'
+import { relatedDocLabel } from './related-docs'
 
 export function SearchPage() {
   const [query, setQuery] = useState('')
@@ -51,7 +52,9 @@ export function SearchPage() {
           {result.related_docs.length > 0 && (
             <>
               <h3>相关文档</h3>
-              {result.related_docs.map((d: any, i) => <div key={i}>{d.title} ({d.relation_type})</div>)}
+              {result.related_docs.map((d: any, i) => (
+                <div key={i}>{relatedDocLabel(d)}</div>
+              ))}
             </>
           )}
         </div>

@@ -1,16 +1,57 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 
 from neo4j import AsyncGraphDatabase
+from neo4j.exceptions import Neo4jError
 
 from config.settings import settings
+
+logger = logging.getLogger(__name__)
+
+# 瞬态错误（死锁/锁超时等）重试参数。
+TRANSIENT_RETRY_ATTEMPTS = 3
+TRANSIENT_RETRY_BASE_DELAY = 0.5  # 秒，指数退避基数
+
+
+def _is_transient(error: Exception) -> bool:
+    """Neo4j 瞬态错误（死锁、锁等待超时等）可安全重试。"""
+    return isinstance(error, Neo4jError) and (
+        error.code in ("Neo.TransientError.Transaction.DeadlockDetected",)
+        or "deadlock" in str(error).lower()
+        or error.code.startswith("Neo.TransientError")
+    )
 
 
 def _quote_cypher_identifier(value: str, fallback: str) -> str:
     identifier = value.strip() or fallback
     return f"`{identifier.replace('`', '``')}`"
+
+
+def _public_source_predicate(node_var: str, doc_alias: str) -> str:
+    """公共图谱节点的来源谓词（Cypher 片段）。
+
+    节点要么是公共 Document（当前版本且非会话转录），要么带 sources
+    且至少有一个公共来源文档 —— 仅以会话记忆文档（file_type=
+    conversation）为来源的实体/边从公共图谱视图与检索增强中排除；
+    无 sources 的 Hindsight 投影节点（HindsightEntity 等）同样排除。
+    """
+    return (
+        f"({node_var}:Document"
+        f" AND coalesce({node_var}.is_current, true) <> false"
+        f" AND coalesce({node_var}.file_type, '') <> 'conversation')"
+        f" OR (NOT {node_var}:Document"
+        f" AND {node_var}.sources IS NOT NULL"
+        f" AND EXISTS {{"
+        f" MATCH ({doc_alias}:Document)"
+        f" WHERE coalesce({doc_alias}.is_current, true) <> false"
+        f" AND coalesce({doc_alias}.file_type, '') <> 'conversation'"
+        f" AND {node_var}.sources CONTAINS {doc_alias}.doc_id"
+        f" }})"
+    )
 
 
 @dataclass
@@ -23,6 +64,7 @@ class EntityData:
 @dataclass
 class EntitySource:
     """实体溯源信息。"""
+
     doc_id: str
     chunk_index: int
     doc_title: str
@@ -118,46 +160,166 @@ class Neo4jClient:
         title: str,
         file_type: str,
         overview: str = "",
+        version_number: int = 1,
+        is_current: bool = True,
     ) -> None:
-        """创建/更新 Document 节点。"""
+        """创建/更新 Document 节点（含版本链属性）。"""
         async with self._driver.session() as session:
             await session.run(
                 """
                 MERGE (d:Document {doc_id: $doc_id})
                 SET d.title = $title,
                     d.file_type = $file_type,
-                    d.overview = $overview
+                    d.overview = $overview,
+                    d.version_number = $version_number,
+                    d.is_current = $is_current
                 """,
                 doc_id=doc_id,
                 title=title,
                 file_type=file_type,
                 overview=overview,
+                version_number=version_number,
+                is_current=is_current,
             )
 
-    async def delete_document_graph(self, doc_id: str) -> None:
-        """删除文档的图谱数据：清理实体 sources + 删 Document 节点。"""
+    # ── 版本链投影 ──────────────────────────────────────────────
+
+    async def link_next_version(self, from_doc_id: str, to_doc_id: str) -> None:
+        """连接两个版本：(:Document)-[:NEXT_VERSION]->(:Document)。"""
         async with self._driver.session() as session:
-            # 1. 从所有实体的 sources 中移除该 doc_id 的条目
+            await session.run(
+                """
+                MATCH (prev:Document {doc_id: $from_doc_id})
+                MATCH (next:Document {doc_id: $to_doc_id})
+                MERGE (prev)-[r:NEXT_VERSION]->(next)
+                SET r.created_at = toString(date())
+                """,
+                from_doc_id=from_doc_id,
+                to_doc_id=to_doc_id,
+            )
+
+    async def upsert_changes(
+        self,
+        doc_id: str,
+        from_version: int,
+        to_version: int,
+        summary: str,
+        changes: list[dict],
+    ) -> None:
+        """写入版本 diff：(:Change)-[:CHANGE_OF]->(:Document)。"""
+        async with self._driver.session() as session:
+            await session.run(
+                """
+                MATCH (d:Document {doc_id: $doc_id})
+                MERGE (c:Change {doc_id: $doc_id})
+                SET c.from_version = $from_version,
+                    c.to_version = $to_version,
+                    c.summary = $summary,
+                    c.changes = $changes
+                MERGE (c)-[:CHANGE_OF]->(d)
+                """,
+                doc_id=doc_id,
+                from_version=from_version,
+                to_version=to_version,
+                summary=summary,
+                changes=json.dumps(changes, ensure_ascii=False),
+            )
+
+    async def get_version_chain(self, doc_id: str) -> list[dict]:
+        """查询某版本所在版本链（沿 NEXT_VERSION 双向展开，按版本号排序）。"""
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (d:Document {doc_id: $doc_id})
+                MATCH (chain:Document)
+                WHERE chain = d
+                   OR (chain)-[:NEXT_VERSION*]->(d)
+                   OR (d)-[:NEXT_VERSION*]->(chain)
+                RETURN chain.doc_id AS doc_id,
+                    chain.title AS title,
+                    chain.version_number AS version_number,
+                    chain.is_current AS is_current,
+                    chain.overview AS overview
+                ORDER BY chain.version_number
+                """,
+                doc_id=doc_id,
+            )
+            records = await result.data()
+            return [
+                {
+                    "doc_id": r["doc_id"],
+                    "title": r["title"],
+                    "version_number": r["version_number"],
+                    "is_current": r["is_current"],
+                    "overview": r["overview"] or "",
+                }
+                for r in records
+            ]
+
+    async def delete_document_graph(self, doc_id: str) -> None:
+        """删除文档的图谱数据：清理实体 sources + 删 Document 节点。
+
+        并发删除同一版本链的文档时，两个删除会触碰同一批 MERGE 聚合的
+        实体节点。逐条 SET 会在不同事务间交叉加锁引发死锁
+        （TransientError.DeadlockDetected），因此：
+        1. sources 清理合并为单条 UNWIND 批量写（一个事务一次性加锁）；
+        2. 读取按 name 排序，与批处理共同保证确定的加锁顺序；
+        3. 整个删除包在瞬态错误重试里（指数退避）。
+        """
+        for attempt in range(TRANSIENT_RETRY_ATTEMPTS):
+            try:
+                await self._delete_document_graph_once(doc_id)
+                return
+            except Neo4jError as error:
+                if attempt + 1 >= TRANSIENT_RETRY_ATTEMPTS or not _is_transient(error):
+                    raise
+                delay = TRANSIENT_RETRY_BASE_DELAY * (2**attempt)
+                logger.warning(
+                    "删除文档图谱遭遇瞬态错误（第 %s 次），%.1fs 后重试: %s",
+                    attempt + 1,
+                    delay,
+                    error.code,
+                )
+                await asyncio.sleep(delay)
+
+    async def _delete_document_graph_once(self, doc_id: str) -> None:
+        async with self._driver.session() as session:
+            # 1. 从所有实体的 sources 中移除该 doc_id 的条目。
+            #    ORDER BY name 保证并发删除以相同顺序触碰实体。
             result = await session.run(
                 """
                 MATCH (e)
                 WHERE e.sources IS NOT NULL
                   AND e.sources CONTAINS $doc_id
                 RETURN e.name AS name, e.sources AS sources
+                ORDER BY name
                 """,
                 doc_id=doc_id,
             )
             records = await result.data()
-            for record in records:
-                sources: list[dict] = json.loads(record["sources"])
-                new_sources = [s for s in sources if s["doc_id"] != doc_id]
+            if records:
+                updates = []
+                for record in records:
+                    sources: list[dict] = json.loads(record["sources"])
+                    new_sources = [s for s in sources if s["doc_id"] != doc_id]
+                    updates.append(
+                        {
+                            "name": record["name"],
+                            "sources": (
+                                json.dumps(new_sources, ensure_ascii=False)
+                                if new_sources
+                                else "[]"
+                            ),
+                        }
+                    )
+                # 单条批量写：一次事务、一次性加锁，替代原来的逐条 SET。
                 await session.run(
                     """
-                    MATCH (e {name: $name})
-                    SET e.sources = $sources
+                    UNWIND $updates AS u
+                    MATCH (e {name: u.name})
+                    SET e.sources = u.sources
                     """,
-                    name=record["name"],
-                    sources=json.dumps(new_sources, ensure_ascii=False) if new_sources else "[]",
+                    updates=updates,
                 )
 
             # 2. 删除 sources 为空的孤立实体
@@ -169,7 +331,16 @@ class Neo4jClient:
                 """
             )
 
-            # 3. 删除 Document 节点及其 doc 级关系
+            # 3. 删除版本 diff Change 节点（版本链上的孤儿子图）
+            await session.run(
+                """
+                MATCH (c:Change {doc_id: $doc_id})
+                DETACH DELETE c
+                """,
+                doc_id=doc_id,
+            )
+
+            # 4. 删除 Document 节点及其 doc 级关系
             await session.run(
                 """
                 MATCH (d:Document {doc_id: $doc_id})
@@ -181,9 +352,7 @@ class Neo4jClient:
 
     # ── 实体 ────────────────────────────────────────────────────
 
-    async def upsert_entity(
-        self, entity: EntityData, source: EntitySource
-    ) -> None:
+    async def upsert_entity(self, entity: EntityData, source: EntitySource) -> None:
         """创建/更新实体节点，追加溯源来源。
 
         MERGE by name → 同名实体全局唯一。
@@ -389,9 +558,7 @@ class Neo4jClient:
             return
         by_type: dict[str, list[tuple[RelationData, list[dict]]]] = {}
         for relation, sources in _group_relation_items(items):
-            by_type.setdefault(relation.relation_type, []).append(
-                (relation, sources)
-            )
+            by_type.setdefault(relation.relation_type, []).append((relation, sources))
 
         for relation_type, group in by_type.items():
             rel_label = _quote_cypher_identifier(relation_type, "RELATED_TO")
@@ -488,14 +655,16 @@ class Neo4jClient:
 
     async def query_neighbors(
         self, name: str, hops: int = 2
-    ) -> list[GraphQueryResult]:
-        """获取实体 N 跳内的所有邻居。"""
+    ) -> tuple[list[GraphQueryResult], list[dict]]:
+        """获取实体 N 跳内的邻居节点 + 邻域内部的关系边。"""
+        neighbor_filter = _public_source_predicate("neighbor", "ldn")
         async with self._driver.session() as session:
             result = await session.run(
                 f"""
                 MATCH (start {{name: $name}})
                 MATCH (start)-[*1..{hops}]-(neighbor)
                 WHERE neighbor <> start
+                  AND ({neighbor_filter})
                 RETURN DISTINCT neighbor, labels(neighbor) AS labels
                 """,
                 name=name,
@@ -517,7 +686,36 @@ class Neo4jClient:
                         properties=dict(node),
                     )
                 )
-            return results
+
+            # 邻域内部的关系边（图谱视图的 links）
+            link_result = await session.run(
+                f"""
+                MATCH (start {{name: $name}})
+                MATCH (start)-[*1..{hops}]-(neighbor)
+                WHERE neighbor <> start
+                  AND ({neighbor_filter})
+                WITH collect(DISTINCT neighbor) AS neighborhood
+                UNWIND neighborhood AS a
+                UNWIND neighborhood AS b
+                MATCH (a)-[r]->(b)
+                WHERE a <> b
+                RETURN coalesce(a.name, a.doc_id) AS source,
+                       coalesce(b.name, b.doc_id) AS target,
+                       type(r) AS type, r.description AS description
+                """,
+                name=name,
+            )
+            link_records = await link_result.data()
+            links = [
+                {
+                    "source": r["source"],
+                    "target": r["target"],
+                    "type": r["type"],
+                    "description": r["description"] or "",
+                }
+                for r in link_records
+            ]
+            return results, links
 
     async def get_entity_details(self, name: str) -> GraphQueryResult | None:
         """查询实体详情 + 直接关联关系。"""
@@ -526,6 +724,13 @@ class Neo4jClient:
                 """
                 MATCH (n {name: $name})
                 WHERE NOT n:Document
+                  AND n.sources IS NOT NULL
+                  AND EXISTS {
+                    MATCH (ldn:Document)
+                    WHERE coalesce(ldn.is_current, true) <> false
+                      AND coalesce(ldn.file_type, '') <> 'conversation'
+                      AND n.sources CONTAINS ldn.doc_id
+                  }
                 WITH n
                 ORDER BY coalesce(n.entity_type, ''), elementId(n)
                 WITH collect(n) AS matches
@@ -557,11 +762,27 @@ class Neo4jClient:
                 (label for label in labels if label != "Document"), "Unknown"
             )
 
+            # 平行边去重：同一 (type, direction, endpoint) 只保留一条
+            deduped: list[dict] = []
+            seen: set[tuple] = set()
+            for relation in record["relations"]:
+                if not relation.get("type"):
+                    continue
+                key = (
+                    relation["type"],
+                    relation["direction"],
+                    relation["other_name"],
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(relation)
+
             return GraphQueryResult(
                 name=node.get("name", ""),
                 entity_type=entity_type,
                 properties=dict(node),
-                relations=[r for r in record["relations"] if r.get("type")],
+                relations=deduped,
             )
 
     async def get_document_entities(self, doc_id: str) -> list[GraphQueryResult]:
@@ -619,7 +840,8 @@ class Neo4jClient:
                     for s in sources
                 ):
                     entity_type = next(
-                        (label for label in labels if label not in ("Document",)), "Entity"
+                        (label for label in labels if label not in ("Document",)),
+                        "Entity",
                     )
                     results.append(
                         GraphQueryResult(
@@ -633,11 +855,17 @@ class Neo4jClient:
     async def get_full_graph(self) -> dict:
         """返回全图数据：所有实体节点 + 所有实体间关系。"""
         async with self._driver.session() as session:
-            # 1. 查询所有实体节点（排除 Document）
+            # 1. 查询所有实体节点（排除 Document 与会话转录来源）
             node_result = await session.run(
                 """
                 MATCH (e)
                 WHERE NOT e:Document AND e.sources IS NOT NULL
+                AND EXISTS {
+                    MATCH (ld:Document)
+                    WHERE coalesce(ld.is_current, true) <> false
+                      AND coalesce(ld.file_type, '') <> 'conversation'
+                      AND e.sources CONTAINS ld.doc_id
+                }
                 RETURN e.name AS name, e.description AS description,
                        e.sources AS sources, labels(e) AS labels
                 """
@@ -650,12 +878,14 @@ class Neo4jClient:
                     (label for label in labels if label != "Document"), "Unknown"
                 )
                 sources_raw = r["sources"] or "[]"
-                nodes.append({
-                    "name": r["name"],
-                    "type": entity_type,
-                    "description": r["description"] or "",
-                    "sources": json.loads(sources_raw),
-                })
+                nodes.append(
+                    {
+                        "name": r["name"],
+                        "type": entity_type,
+                        "description": r["description"] or "",
+                        "sources": json.loads(sources_raw),
+                    }
+                )
 
             # 2. 查询所有实体间关系（排除 Document 节点和 RELATED_TO）
             link_result = await session.run(
@@ -664,6 +894,24 @@ class Neo4jClient:
                 WHERE NOT a:Document AND NOT b:Document
                   AND type(r) <> 'RELATED_TO'
                   AND a.sources IS NOT NULL AND b.sources IS NOT NULL
+                  AND EXISTS {
+                    MATCH (lda:Document)
+                    WHERE coalesce(lda.is_current, true) <> false
+                      AND coalesce(lda.file_type, '') <> 'conversation'
+                      AND a.sources CONTAINS lda.doc_id
+                  }
+                  AND EXISTS {
+                    MATCH (ldb:Document)
+                    WHERE coalesce(ldb.is_current, true) <> false
+                      AND coalesce(ldb.file_type, '') <> 'conversation'
+                      AND b.sources CONTAINS ldb.doc_id
+                  }
+                  AND (r.sources IS NULL OR EXISTS {
+                    MATCH (ldr:Document)
+                    WHERE coalesce(ldr.is_current, true) <> false
+                      AND coalesce(ldr.file_type, '') <> 'conversation'
+                      AND r.sources CONTAINS ldr.doc_id
+                  })
                 RETURN a.name AS source, b.name AS target,
                        type(r) AS type, r.description AS description
                 """
@@ -691,10 +939,11 @@ class Neo4jClient:
                 """
                 MATCH (d1:Document)-[r:RELATED_TO]-(d2:Document)
                 WHERE d1.doc_id IN $doc_ids AND NOT d2.doc_id IN $doc_ids
+                  AND coalesce(d2.file_type, '') <> 'conversation'
                 RETURN DISTINCT d2.doc_id AS doc_id,
                        d2.title AS title,
                        type(r) AS rel_type,
-                       r.relation_type AS relation_type,
+                       coalesce(r.relation_type, type(r)) AS relation_type,
                        r.reason AS reason
                 """,
                 doc_ids=doc_ids,
@@ -704,8 +953,43 @@ class Neo4jClient:
                 {
                     "doc_id": r["doc_id"],
                     "title": r["title"],
-                    "relation_type": r.get("relation_type", ""),
-                    "reason": r.get("reason", ""),
+                    "relation_type": r.get("relation_type") or "",
+                    "reason": r.get("reason") or "",
+                }
+                for r in records
+            ]
+
+    async def find_related_docs_via_entities(
+        self, doc_id: str, limit: int = 5
+    ) -> list[dict]:
+        """查找与本文档共享实体的其他文档（跨文档一致性检查用）。
+
+        sources 是 JSON 字符串，按子串匹配 doc_id（与现有清理逻辑同策略）。
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (e), (d:Document)
+                WHERE e.sources IS NOT NULL
+                  AND e.sources CONTAINS $doc_id
+                  AND d.doc_id <> $doc_id
+                  AND coalesce(d.is_current, true) <> false
+                  AND e.sources CONTAINS d.doc_id
+                RETURN d.doc_id AS doc_id,
+                       d.title AS title,
+                       count(DISTINCT e) AS shared_entities
+                ORDER BY shared_entities DESC
+                LIMIT $limit
+                """,
+                doc_id=doc_id,
+                limit=limit,
+            )
+            records = await result.data()
+            return [
+                {
+                    "doc_id": r["doc_id"],
+                    "title": r["title"],
+                    "shared_entities": r["shared_entities"],
                 }
                 for r in records
             ]

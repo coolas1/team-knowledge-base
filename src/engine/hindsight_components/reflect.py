@@ -9,6 +9,7 @@ from collections import defaultdict
 from dataclasses import replace
 from typing import Any, Literal, Protocol
 
+from src.engine.interface import NOT_FOUND_ANSWER
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .config import HindsightOptions
@@ -506,7 +507,7 @@ class ReflectEngine:
                 }
             )
         if not evidence:
-            return ReflectResult("知识库中未找到与该问题相关的内容。", {}, trace)
+            return ReflectResult(NOT_FOUND_ANSWER, {}, trace)
         embeddings = await self._providers.embed([query])
         if not embeddings:
             raise ValueError("embedding provider returned no reflection embedding")

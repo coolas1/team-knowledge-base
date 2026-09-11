@@ -30,7 +30,7 @@ async def run(ctx: SkillContext) -> SkillResult:
     if ctx.query is None:
         raise RuntimeError("Hindsight query service not available in this context")
 
-    from src.engine.interface import KnowledgeQueryRequest
+    from src.engine.interface import NOT_FOUND_ANSWER, KnowledgeQueryRequest
 
     result = await ctx.query.query(
         KnowledgeQueryRequest(
@@ -54,7 +54,7 @@ async def run(ctx: SkillContext) -> SkillResult:
     answer = result.answer
     if not answer:
         if not sources:
-            answer = "知识库中未找到与该问题相关的内容。"
+            answer = NOT_FOUND_ANSWER
         elif ctx.llm is not None and needs_answer:
             context = _format_sources(sources)
             answer = await ctx.llm.complete(_answer_prompt(query, context))

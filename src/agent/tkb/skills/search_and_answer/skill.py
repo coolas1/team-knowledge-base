@@ -2,7 +2,7 @@
 (when provided); else return the formatted context for the harness to answer."""
 from __future__ import annotations
 
-from src.engine.interface import RecallRequest
+from src.engine.interface import NOT_FOUND_ANSWER, RecallRequest
 from src.agent.interface import SkillContext, SkillResult
 
 
@@ -29,7 +29,7 @@ async def run(ctx: SkillContext) -> SkillResult:
     recall = await ctx.kb.recall(RecallRequest(query=query, top_k=top_k))
     context = _format_context(recall)
     if not recall.chunks:
-        answer = "知识库中未找到与该问题相关的内容。"
+        answer = NOT_FOUND_ANSWER
     elif ctx.llm:
         answer = await ctx.llm.complete(_answer_prompt(query, context))
     else:

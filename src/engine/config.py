@@ -20,6 +20,8 @@ class IngestSettings:
     vector_only: bool = True
     chunk_concurrency: int = 4
     doc_concurrency: int = 2
+    llm_retries: int = 3
+    llm_backoff_base_seconds: float = 2.0
 
 
 @dataclass
@@ -48,6 +50,8 @@ def engine_config_from_app(app: AppConfig) -> EngineConfig:
             vector_only=app.engine.ingest.vector_only,
             chunk_concurrency=app.engine.ingest.chunk_concurrency,
             doc_concurrency=app.engine.ingest.doc_concurrency,
+            llm_retries=app.engine.ingest.llm_retries,
+            llm_backoff_base_seconds=app.engine.ingest.llm_backoff_base_seconds,
         ),
         memory=memory,
     )

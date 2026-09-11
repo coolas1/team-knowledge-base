@@ -50,37 +50,69 @@ WORKDIR /app
 # Python deps (the optional reranker extra, and therefore torch, is omitted).
 # Copying only the lock inputs keeps this layer cached across code edits.
 COPY pyproject.toml uv.lock ./
-# Use a reachable PyPI mirror in this deployment environment. The frozen lock
-# file still fixes the exact dependency graph and artifact hashes. The lock
-# records absolute PyPI artifact URLs, so remap those hosts inside the image.
-RUN sed -i \
-    -e 's#https://pypi.org/simple#https://mirrors.aliyun.com/pypi/simple#g' \
-    -e 's#https://files.pythonhosted.org/packages#https://mirrors.aliyun.com/pypi/packages#g' \
-    uv.lock
+# Package index: upstream PyPI by default. A regional mirror is opt-in via
+# --build-arg PYPI_MIRROR=<simple-index-url> (the CICD build passes Aliyun for
+# the LAN deployment), so a default build never depends on a mirror host. The
+# frozen lock fixes the dependency graph and artifact hashes either way; the
+# lock records absolute PyPI artifact URLs, so a mirror also needs those hosts
+# remapped inside the image.
+ARG PYPI_MIRROR=""
+RUN if [ -n "$PYPI_MIRROR" ]; then \
+      sed -i \
+        -e "s#https://pypi.org/simple#${PYPI_MIRROR}#g" \
+        -e "s#https://files.pythonhosted.org/packages#${PYPI_MIRROR%/simple}/packages#g" \
+        uv.lock; \
+    fi
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple \
     UV_CONCURRENT_DOWNLOADS=1 \
     UV_HTTP_TIMEOUT=600 \
-    uv sync --frozen --no-dev --no-install-project
+    sh -c 'uv sync --frozen --no-dev --no-install-project \
+      ${PYPI_MIRROR:+--default-index "$PYPI_MIRROR"}'
 
 # SPA: client source only, so a Python edit never invalidates this layer.
 # node_modules is installed and removed in the SAME layer, so it is not in
 # the final image (only dist/ is). The later `COPY src/` overlay cannot
 # clobber dist because the context excludes **/dist (see .dockerignore).
+#
+# npm registries. Install defaults to a regional mirror: the direct route to
+# registry.npmjs.org stalls from the LAN build host (npm error ETIMEDOUT
+# after ~30 min), and npm ignores HTTP(S)_PROXY - it reads only its own
+# npm_config_proxy - so the proxy the pipeline exports does not reach it.
+# The security audit stays pinned to the authoritative registry because
+# mirrors do not uniformly implement npm's audit API (npmmirror answers
+# 404 NOT_IMPLEMENTED) and the gate is fail-closed. npm ci verifies each
+# tarball against the package-lock integrity hashes, so a mirror can only
+# withhold a package, not substitute content. NPM_PROXY is a local-only,
+# opt-in escape hatch (empty by default - never commit a machine-specific
+# value). All three ARGs are consumed on the RUN line below, so they
+# participate in the layer's cache key: unchanged source + unchanged
+# registries = cache hit; a registry change rebuilds the layer.
 COPY src/frontend/webapp/client/ ./src/frontend/webapp/client/
+ARG NPM_REGISTRY="https://registry.npmmirror.com"
+ARG NPM_AUDIT_REGISTRY="https://registry.npmjs.org"
+ARG NPM_PROXY=""
 RUN cd src/frontend/webapp/client \
- && npm ci \
- && npm run security \
- && npm run build \
+ && if [ -n "$NPM_PROXY" ]; then \
+      export npm_config_proxy="$NPM_PROXY" npm_config_https_proxy="$NPM_PROXY"; \
+    fi \
+ && npm_config_registry="$NPM_REGISTRY" npm ci \
+ && npm_config_registry="$NPM_AUDIT_REGISTRY" npm run security \
+ && npm_config_registry="$NPM_REGISTRY" npm run build \
  && rm -rf node_modules
 
 # App source + config: the most frequently changed inputs, last.
 COPY src/ ./src/
 COPY config/ ./config/
+# The runtime semantic version (see src/frontend/webapp/server/version.py).
+COPY VERSION ./
 
+# Source commit this image was built from (the pipeline passes SHORT_SHA;
+# empty = unknown, which /version reports as commit: null).
+ARG GIT_COMMIT=""
 ENV PYTHONPATH=/app \
     SPA_DIST=/app/src/frontend/webapp/client/dist \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    GIT_COMMIT=${GIT_COMMIT}
 
 EXPOSE 8000
 

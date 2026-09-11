@@ -28,6 +28,15 @@ try {
   process.exit(1);
 }
 
+// Fail closed on a non-report response: a registry that cannot serve the
+// audit API (e.g. a mirror answering 404) prints a JSON error object, which
+// parses fine but carries no vulnerabilities - without this check the gate
+// would pass vacuously on that error.
+if (report.error || typeof report.vulnerabilities !== "object") {
+  console.error(audit.stderr || audit.stdout || "npm audit returned no vulnerability report");
+  process.exit(1);
+}
+
 const blocking = [];
 const accepted = new Set();
 for (const vulnerability of Object.values(report.vulnerabilities ?? {})) {

@@ -36,3 +36,26 @@ def test_entity_graph(client):
 def test_neighbors(client):
     res = client.get("/api/graph/neighbors/Acme?hops=2")
     assert res.status_code == 200
+
+
+def test_neighbors_threads_hops_to_the_backend(client):
+    c = client
+    kb = app_mod.app.dependency_overrides[deps.get_kb]()
+    seen = []
+
+    async def get_neighbors(entity, hops=2):
+        seen.append((entity, hops))
+        return kb.graph
+
+    kb.get_neighbors = get_neighbors
+
+    assert c.get("/api/graph/neighbors/Acme?hops=1").status_code == 200
+    assert c.get("/api/graph/neighbors/Acme").status_code == 200
+
+    assert seen == [("Acme", 1), ("Acme", 2)]  # 透传 hops，默认 2
+
+
+def test_neighbors_rejects_out_of_range_hops(client):
+    c = client
+    assert c.get("/api/graph/neighbors/Acme?hops=0").status_code == 422
+    assert c.get("/api/graph/neighbors/Acme?hops=9").status_code == 422

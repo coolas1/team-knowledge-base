@@ -104,6 +104,19 @@ export function KnowledgeGraph({
     [matchSet, neighborSet]
   )
 
+  // 指针命中区域：默认识别半径与绘制半径同小（6/globalScale），千级
+  // 节点时几乎点不中；放大到 2 倍绘制半径（design D11）。
+  const nodePointerAreaPaint = useCallback(
+    (node: any, color: string, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const r = 12 / globalScale
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, r, 0, 2 * Math.PI)
+      ctx.fillStyle = color
+      ctx.fill()
+    },
+    []
+  )
+
   const nodeCanvasObject = useCallback(
     (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
       const n = node as FgNode
@@ -173,6 +186,7 @@ export function KnowledgeGraph({
       nodeId="id"
       nodeColor={nodeColor}
       nodeCanvasObject={nodeCanvasObject}
+      nodePointerAreaPaint={nodePointerAreaPaint}
       linkColor={linkColor}
       linkLabel={linkLabel}
       linkDirectionalArrowLength={4}

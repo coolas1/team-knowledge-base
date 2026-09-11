@@ -14,6 +14,7 @@ def _conditions(scope, filters):
         public_document_filter(scope),
         scope_predicate(Chunk.bank_id, Chunk.tags, scope),
         Document.status == "indexed",
+        Document.is_current.is_(True),
     ]
     if filters.tags is not None:
         conditions.append(tag_predicate(Chunk.tags, filters.tags))

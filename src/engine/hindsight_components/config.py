@@ -43,6 +43,10 @@ class HindsightOptions:
     # neural-rerank path (deep mode).
     recall_min_semantic: float = 0.45
     recall_min_score: float = 0.4
+    # Conversation-memory recall applies its own, lower semantic floor instead
+    # of the public-corpus floor, so memory recall is not governed by the
+    # public gate.
+    conversation_recall_min_semantic: float = 0.25
     # Cap neural reranker scores with vector similarity to stop the LLM from
     # "hallucinating" high scores for semantically unrelated chunks.
     rerank_semantic_margin: float = 0.25
@@ -51,6 +55,9 @@ class HindsightOptions:
     reflect_max_iterations: int = 8
     reflect_max_tokens: int = 8192
     reflect_total_timeout_seconds: float = 60
+    # 自动留存的单轮对话内容上限（字符）：超出部分截断并附 [truncated]
+    # 标记，避免粘贴的巨文档每轮触发数十次 LLM 抽取。
+    conversation_max_turn_chars: int = 100_000
 
     def __post_init__(self) -> None:
         if self.entity_candidate_limit > 100:

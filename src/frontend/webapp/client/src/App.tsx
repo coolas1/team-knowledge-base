@@ -6,6 +6,7 @@ import { GraphPage } from './pages/GraphPage'
 import { SearchPage } from './pages/SearchPage'
 import { AskPage } from './pages/AskPage'
 import { MemoryPage } from './pages/MemoryPage'
+import { NotFoundPage } from './pages/NotFoundPage'
 
 export default function App() {
   return (
@@ -17,6 +18,8 @@ export default function App() {
         <Route path="/ask" element={<AskPage />} />
         <Route path="/graph" element={<GraphPage />} />
         <Route path="/memory" element={<MemoryPage />} />
+        {/* 未匹配的客户端路由渲染 404 页面，而不是空白屏 */}
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   )

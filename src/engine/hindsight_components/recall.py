@@ -725,6 +725,13 @@ class RecallEngine:
     def _filter_by_relevance(
         self, ordered: list[RecallCandidate], mode: str, filters: RecallFilter
     ) -> tuple[list[RecallCandidate], int]:
+        # Conversation-memory recall uses its own, lower semantic floor so the
+        # public-corpus gate does not determine what memories are recalled.
+        min_semantic = (
+            self._options.conversation_recall_min_semantic
+            if filters.source_types == ("conversation",)
+            else self._options.recall_min_semantic
+        )
         kept: list[RecallCandidate] = []
         for item in ordered:
             score_values = {
@@ -743,11 +750,13 @@ class RecallEngine:
             if (item.keyword_score or 0.0) > 0:
                 kept.append(item)
                 continue
+            # Semantic floor applies in every mode; the deep-mode rerank-score
+            # gate applies on top of it, never instead of it.
+            if (item.semantic_score or 0.0) < min_semantic:
+                continue
             if mode == "deep" and item.reranker_score is not None:
                 if item.final_score < self._options.recall_min_score:
                     continue
-            elif (item.semantic_score or 0.0) < self._options.recall_min_semantic:
-                continue
             kept.append(item)
         return kept, len(ordered) - len(kept)
 

@@ -95,6 +95,17 @@ async def test_original_file_vectors_remain_recallable_without_memory_facts(
         assert await hidden.expand_memory_record(str(chunk_id)) is None
     async with sessions() as session, session.begin():
         await session.execute(
+            update(Document).where(Document.id == document_id).values(is_current=False)
+        )
+    assert await repo.semantic_search(vector, 3) == []
+    assert await repo.keyword_search("739", 3) == []
+    assert await repo.expand_memory_record(str(chunk_id)) is None
+    async with sessions() as session, session.begin():
+        await session.execute(
+            update(Document).where(Document.id == document_id).values(is_current=True)
+        )
+    async with sessions() as session, session.begin():
+        await session.execute(
             update(Document).where(Document.id == document_id).values(status="failed")
         )
         assert await session.scalar(select(func.count()).select_from(MemoryUnit)) == 0
@@ -3024,6 +3035,15 @@ async def test_cached_fact_validation_across_workers_and_mutations(scope_databas
         )
     latest = (await worker_b.load_cached_facts([str(fact_id)]))[str(fact_id)]
     assert not same_fact(cached, latest)
+    async with sessions() as session, session.begin():
+        await session.execute(
+            update(Document).where(Document.id == doc_id).values(is_current=False)
+        )
+    assert await worker_b.load_cached_facts([str(fact_id)]) == {}
+    async with sessions() as session, session.begin():
+        await session.execute(
+            update(Document).where(Document.id == doc_id).values(is_current=True)
+        )
     async with sessions() as session, session.begin():
         await session.execute(
             update(Document).where(Document.id == doc_id).values(tags=["private"])

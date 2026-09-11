@@ -1,13 +1,16 @@
 """Webapp host document routes: call the in-process KnowledgeBase."""
+
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
+from config.settings import settings
 from src.engine.interface import IngestSource, KnowledgeBase
 from src.frontend.webapp.server import deps
 
@@ -55,26 +58,61 @@ class EditContentRequest(BaseModel):
 
 @router.get("")
 async def list_documents(
-    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
-    file_type: str | None = None, status: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    file_type: str | None = None,
+    status: str | None = None,
     kb: KnowledgeBase = Depends(deps.get_kb),
 ):
     return await kb.list_documents(page, page_size, file_type, status)
 
 
 @router.get("/{doc_id}")
-async def get_document(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
-    out = await kb.get_document(doc_id)
+async def get_document(doc_id: uuid.UUID, kb: KnowledgeBase = Depends(deps.get_kb)):
+    out = await kb.get_document(str(doc_id))
     if out is None:
         raise HTTPException(404, f"文档不存在: {doc_id}")
 
     # Pipeline progress: in-memory (engine runs in-process).
     from src.engine.graphrag.progress import get_progress
 
-    p = get_progress(doc_id)
+    p = get_progress(str(doc_id))
     if p is not None:
         out["pipeline"] = p
     return out
+
+
+@router.get("/{doc_id}/versions")
+async def list_versions(doc_id: uuid.UUID, kb: KnowledgeBase = Depends(deps.get_kb)):
+    try:
+        return {"doc_id": str(doc_id), "versions": await kb.list_versions(str(doc_id))}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.get("/{doc_id}/versions/diff")
+async def diff_versions(
+    doc_id: uuid.UUID,
+    from_version: int = Query(..., ge=1),
+    to_version: int = Query(..., ge=1),
+    kb: KnowledgeBase = Depends(deps.get_kb),
+):
+    try:
+        return await kb.diff_versions(str(doc_id), from_version, to_version)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+def _format_size_limit(limit: int) -> str:
+    if limit >= 1024 * 1024 and limit % (1024 * 1024) == 0:
+        return f"{limit // (1024 * 1024)} MiB"
+    return f"{limit} 字节"
+
+
+async def _read_bounded(file: UploadFile) -> bytes:
+    """读取至多 max_upload_bytes + 1 字节：超限文件不做全量缓冲。"""
+    limit = settings.kb_max_upload_bytes
+    return await file.read(limit + 1)
 
 
 def _upload_file_error(filename: str | None, data: bytes) -> tuple[int, dict] | None:
@@ -86,6 +124,20 @@ def _upload_file_error(filename: str | None, data: bytes) -> tuple[int, dict] | 
                 "code": "missing_filename",
                 "message": "未读取到文件名",
                 "suggestion": "请重新选择本地文件后再试。",
+                "retryable": False,
+            },
+        )
+    limit = settings.kb_max_upload_bytes
+    if len(data) > limit:
+        return (
+            413,
+            {
+                "code": "file_too_large",
+                "message": f"文件超过大小上限（{_format_size_limit(limit)}）",
+                "suggestion": (
+                    "请压缩或拆分文件后重新上传；如需上传更大的文件，"
+                    "请管理员调整 KB_MAX_UPLOAD_BYTES。"
+                ),
                 "retryable": False,
             },
         )
@@ -138,8 +190,10 @@ async def _ingest_uploaded(kb: KnowledgeBase, filename: str, data: bytes):
 
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...), kb: KnowledgeBase = Depends(deps.get_kb)):
-    data = await file.read()
+async def upload_document(
+    file: UploadFile = File(...), kb: KnowledgeBase = Depends(deps.get_kb)
+):
+    data = await _read_bounded(file)
     error = _upload_file_error(file.filename, data)
     if error is not None:
         status_code, detail = error
@@ -158,13 +212,11 @@ async def upload_documents_batch(
     """
     items: list[dict] = []
     for file in files:
-        data = await file.read()
+        data = await _read_bounded(file)
         error = _upload_file_error(file.filename, data)
         if error is not None:
             _status, detail = error
-            items.append(
-                {"ok": False, "error": {**detail, "filename": file.filename}}
-            )
+            items.append({"ok": False, "error": {**detail, "filename": file.filename}})
             continue
         try:
             ref = await _ingest_uploaded(kb, file.filename, data)
@@ -177,22 +229,10 @@ async def upload_documents_batch(
     return {"items": items}
 
 
-@router.put("/{doc_id}/content")
-async def edit_document_content(
-    doc_id: str,
-    body: EditContentRequest,
-    kb: KnowledgeBase = Depends(deps.get_kb),
-):
-    try:
-        return asdict(await kb.edit_content(doc_id, body.content))
-    except ValueError as exc:
-        raise HTTPException(404, str(exc)) from exc
-
-
 @router.post("/{doc_id}/retry")
-async def retry_document(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
+async def retry_document(doc_id: uuid.UUID, kb: KnowledgeBase = Depends(deps.get_kb)):
     try:
-        return asdict(await kb.reingest(doc_id))
+        return asdict(await kb.reingest(str(doc_id)))
     except ValueError as exc:
         raise _upload_error(
             400,
@@ -212,7 +252,29 @@ async def retry_document(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
         ) from exc
 
 
+@router.put("/{doc_id}/content")
+async def edit_document_content(
+    doc_id: uuid.UUID,
+    body: EditContentRequest,
+    kb: KnowledgeBase = Depends(deps.get_kb),
+):
+    """版本化编辑：保存生成新版本，旧版保留在版本链中。"""
+    if not body.content.strip():
+        raise HTTPException(400, "内容不能为空")
+    # 区分"文档不存在"（404）与"存在但不可编辑"（400）：非 Markdown
+    # 文档没有可编辑的原文，404 会误导用户以为 ID 错了。
+    existing = await kb.get_document(str(doc_id))
+    if existing is None:
+        raise HTTPException(404, f"文档不存在: {doc_id}")
+    if existing.get("file_type") != "markdown":
+        raise HTTPException(400, "仅支持 Markdown 文档")
+    try:
+        return asdict(await kb.edit_content(str(doc_id), body.content))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @router.delete("/{doc_id}")
-async def delete_document(doc_id: str, kb: KnowledgeBase = Depends(deps.get_kb)):
-    await kb.remove(doc_id)
-    return {"removed": doc_id}
+async def delete_document(doc_id: uuid.UUID, kb: KnowledgeBase = Depends(deps.get_kb)):
+    await kb.remove(str(doc_id))
+    return {"removed": str(doc_id)}

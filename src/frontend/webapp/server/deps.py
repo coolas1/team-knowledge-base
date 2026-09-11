@@ -155,6 +155,7 @@ async def startup() -> None:
             build_conversation_memory_service(
                 max_recall_results=settings.hindsight_conversation_recall_limit,
                 consolidation_enabled=cfg.engine.memory.features.consolidation,
+                max_turn_chars=settings.hindsight_conversation_max_turn_chars,
             )
         )
         _conversation_worker = build_conversation_worker_runtime(

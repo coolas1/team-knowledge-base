@@ -67,6 +67,21 @@ services:
     build:
       context: .
       dockerfile: Containerfile
+      # Opt-in regional PyPI mirror (empty = upstream pypi.org). The LAN
+      # pipeline sets PYPI_MIRROR; a plain `compose build` uses upstream.
+      # GIT_COMMIT is the source SHA /version reports (pipeline sets it).
+      # The npm defaults duplicate the Containerfile ARG defaults on purpose:
+      # an empty value passed through compose OVERRIDES the recipe default
+      # (verified with docker-compose 2.40), so ${VAR:-} alone would silently
+      # send plain `compose build` installs back to upstream npmjs.
+      args:
+        PYPI_MIRROR: ${PYPI_MIRROR:-}
+        GIT_COMMIT: ${GIT_COMMIT:-}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        NPM_AUDIT_REGISTRY: ${NPM_AUDIT_REGISTRY:-https://registry.npmjs.org}
+        # Local-only opt-in proxy for npm (empty = no proxy). Never commit a
+        # machine-specific value.
+        NPM_PROXY: ${NPM_PROXY:-}
     image: team-kb-webapp:latest
     container_name: team-kb-webapp
     depends_on:

@@ -45,3 +45,58 @@ def test_guess_file_type():
 def test_unsupported_type_raises():
     with pytest.raises(ValueError, match="不支持的文件类型"):
         registry.get_extractor(Path("a.xyz"))
+
+
+def _blank_png(path):
+    from PIL import Image as PILImage
+
+    PILImage.new("RGB", (16, 16), "white").save(path)
+    return path
+
+
+def test_image_ocr_quality_gate_rejects_textless_image(monkeypatch, tmp_path):
+    from src.engine.components.extractors import image as image_mod
+
+    monkeypatch.setattr(
+        image_mod.pytesseract, "image_to_string", lambda _img, lang=None: "  \n *** \n"
+    )
+    path = _blank_png(tmp_path / "blank.png")
+
+    with pytest.raises(ValueError, match="OCR 未提取到有效文本"):
+        registry.extract(path)
+
+
+def test_image_ocr_quality_gate_passes_adequate_text(monkeypatch, tmp_path):
+    from src.engine.components.extractors import image as image_mod
+
+    monkeypatch.setattr(
+        image_mod.pytesseract,
+        "image_to_string",
+        lambda _img, lang=None: "Acme 园区在 A 栋 3 层。",
+    )
+    path = _blank_png(tmp_path / "text.png")
+
+    text = registry.extract(path)
+
+    assert text == "Acme 园区在 A 栋 3 层。"
+
+
+def test_image_ocr_missing_install_hint_is_platform_aware(monkeypatch, tmp_path):
+    from src.engine.components.extractors import image as image_mod
+
+    def _not_installed(_img, lang=None):
+        raise image_mod.pytesseract.TesseractNotFoundError()
+
+    monkeypatch.setattr(image_mod.pytesseract, "image_to_string", _not_installed)
+    path = _blank_png(tmp_path / "any.png")
+
+    with monkeypatch.context() as m:
+        m.setattr(image_mod.sys, "platform", "linux")
+        with pytest.raises(ValueError, match="tesseract-ocr") as excinfo:
+            registry.extract(path)
+        assert "brew" not in str(excinfo.value)
+
+    with monkeypatch.context() as m:
+        m.setattr(image_mod.sys, "platform", "darwin")
+        with pytest.raises(ValueError, match="brew install tesseract"):
+            registry.extract(path)

@@ -73,6 +73,9 @@ class IngestCfg(BaseModel):
     vector_only: bool = True
     chunk_concurrency: int = Field(default=4, ge=1)
     doc_concurrency: int = Field(default=2, ge=1)
+    # 模型端点瞬时失败（超时/连接错误/429/5xx）的有界重试预算。
+    llm_retries: int = Field(default=3, ge=0)
+    llm_backoff_base_seconds: float = Field(default=2.0, gt=0)
 
 
 class EngineCfg(BaseModel):

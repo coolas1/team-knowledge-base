@@ -53,6 +53,17 @@ export interface MemoryDirective {
   is_active: boolean
   tags: string[]
 }
+/**
+ * Client-side deadline for session requests.
+ *
+ * The BFF bounds its own read of the sidecar, but that cannot protect the
+ * browser↔BFF hop — a proxy holding the connection, a sleeping laptop, dropped
+ * Wi-Fi. This is the guarantee that the UI settles, so it is the load-bearing
+ * bound. It MUST exceed the BFF read timeout (PI_AGENT_READ_TIMEOUT_SECONDS,
+ * default 30s) so that a sidecar stall normally surfaces as the server's more
+ * specific error rather than as a generic client timeout.
+ */
+export const AGENT_REQUEST_TIMEOUT_MS = 45_000
 
 export interface PipelineProgress {
   stage: string
@@ -78,9 +89,43 @@ export interface Document {
   memory_count?: number
   memory_link_count?: number
   chunk_count?: number
+  version_group?: string
+  version_number?: number
+  is_current?: boolean
   pipeline?: PipelineProgress
   created_at?: string
   updated_at?: string
+}
+
+export interface DocumentVersion {
+  id: string
+  title: string
+  version_number: number
+  is_current: boolean
+  status: string
+  overview: string
+  change_summary: string
+  created_at?: string
+}
+
+export interface DocumentVersionList {
+  doc_id: string
+  versions: DocumentVersion[]
+}
+
+export interface DocumentChange {
+  name: string
+  description: string
+  status: 'added' | 'removed' | 'modified'
+}
+
+export interface DocumentVersionDiff {
+  doc_id: string
+  from_version: number
+  to_version: number
+  summary: string
+  changes: DocumentChange[]
+  error?: string
 }
 
 export interface DocumentList {
@@ -169,6 +214,21 @@ export type PiAgentEvent =
   | { type: 'message.completed'; sessionId: string; answer: string; toolCalls: number; turnId?: string; messageId?: string; clientMessageId?: string; searchDegraded?: boolean; searchFallback?: boolean }
   | { type: 'message.failed'; error: string; code?: string; sessionId?: string; turnId?: string; messageId?: string; clientMessageId?: string; status?: 'failed' | 'cancelled' | 'interrupted' }
 
+export interface VersionInfo {
+  version: string
+  commit: string | null
+}
+
+/**
+ * Fetch the running instance's version. Lives outside `/api` (the BFF serves
+ * it at `/version` next to `/health`), so it cannot go through `request`.
+ */
+export async function fetchVersion(): Promise<VersionInfo> {
+  const res = await fetch('/version')
+  if (!res.ok) throw new ApiError(res.statusText, res.status)
+  return res.json()
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -186,6 +246,18 @@ export class AgentStreamError extends Error {
   constructor(readonly event: Extract<PiAgentEvent, { type: 'message.failed' }>) {
     super(event.error)
     this.name = 'AgentStreamError'
+  }
+}
+
+/**
+ * A session request that received no response before its client deadline. Kept
+ * distinct from ApiError so the UI can say "timed out" rather than reporting a
+ * server status the server never sent.
+ */
+export class SessionRequestTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`请求超时（${Math.round(timeoutMs / 1000)} 秒无响应）`)
+    this.name = 'SessionRequestTimeoutError'
   }
 }
 
@@ -222,6 +294,31 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     throw await responseError(res)
   }
   return res.json()
+}
+
+/**
+ * `request` bounded by a client-side deadline. A stalled transport resolves
+ * into a SessionRequestTimeoutError instead of an indefinite pending state.
+ */
+async function requestWithDeadline<T>(
+  url: string,
+  options?: RequestInit,
+  timeoutMs = AGENT_REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  try {
+    return await request<T>(url, { ...options, signal: controller.signal })
+  } catch (error) {
+    if (timedOut) throw new SessionRequestTimeoutError(timeoutMs)
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export async function readSseEvents(
@@ -335,6 +432,18 @@ export const api = {
 
   deleteDocument(id: string) {
     return request<{ deleted: boolean }>(`/documents/${id}`, { method: 'DELETE' })
+  },
+
+  listVersions(id: string) {
+    return request<DocumentVersionList>(`/documents/${id}/versions`)
+  },
+
+  diffVersions(id: string, fromVersion: number, toVersion: number) {
+    const qs = new URLSearchParams({
+      from_version: String(fromVersion),
+      to_version: String(toVersion),
+    })
+    return request<DocumentVersionDiff>(`/documents/${id}/versions/diff?${qs}`)
   },
 
   // 图谱
@@ -455,35 +564,35 @@ export const api = {
   },
 
   createAgentSession() {
-    return request<AgentSession>('/agent/sessions', { method: 'POST' })
+    return requestWithDeadline<AgentSession>('/agent/sessions', { method: 'POST' })
   },
 
   listAgentSessions() {
-    return request<AgentSessionList>('/agent/sessions')
+    return requestWithDeadline<AgentSessionList>('/agent/sessions')
   },
 
   getAgentSession(sessionId: string) {
-    return request<AgentSessionDetail>(
+    return requestWithDeadline<AgentSessionDetail>(
       `/agent/sessions/${encodeURIComponent(sessionId)}`,
     )
   },
 
   cancelAgentSession(sessionId: string) {
-    return request<{ cancelled: boolean; sessionId: string }>(
+    return requestWithDeadline<{ cancelled: boolean; sessionId: string }>(
       `/agent/sessions/${encodeURIComponent(sessionId)}/cancel`,
       { method: 'POST' },
     )
   },
 
   deleteAgentSession(sessionId: string) {
-    return request<{ deleted: boolean; sessionId: string }>(
+    return requestWithDeadline<{ deleted: boolean; sessionId: string }>(
       `/agent/sessions/${encodeURIComponent(sessionId)}`,
       { method: 'DELETE' },
     )
   },
 
   forgetAgentSessionMemory(sessionId: string) {
-    return request<{
+    return requestWithDeadline<{
       sessionId: string
       cancelledJobs: number
       deletedDocuments: number

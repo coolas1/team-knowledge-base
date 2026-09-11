@@ -38,7 +38,7 @@ def test_engine_config_from_app_memory_on():
 def test_build_memory_wiring(monkeypatch):
     import src.engine.graphrag.backend as backend_mod
     import src.engine.hindsight_components.repository as repo_mod
-    from src.engine.config import MemorySettings
+    from src.engine.config import IngestSettings, MemorySettings
 
     built = {}
 
@@ -50,19 +50,42 @@ def test_build_memory_wiring(monkeypatch):
         built["hook"] = (max_concurrent, repository)
         return object()
 
+    def fake_pipeline(
+        neo4j,
+        *,
+        analyzer,
+        index_hook,
+        chunk_concurrency,
+        doc_concurrency,
+        llm_retries,
+        llm_backoff_base_seconds,
+        vector_only,
+        summary_manager,
+    ):
+        built["pipeline_hook"] = index_hook
+        built["ingest"] = (
+            chunk_concurrency,
+            doc_concurrency,
+            llm_retries,
+            llm_backoff_base_seconds,
+        )
+        return object()
+
     monkeypatch.setattr(backend_mod, "Neo4jClient", lambda: None)
     monkeypatch.setattr(backend_mod, "Analyzer", lambda schema_path: None)
-    monkeypatch.setattr(
-        backend_mod,
-        "Pipeline",
-        lambda neo4j, analyzer, index_hook, **kwargs: built.update(pipeline_hook=index_hook),
-    )
+    monkeypatch.setattr(backend_mod, "Pipeline", fake_pipeline)
     monkeypatch.setattr(repo_mod, "PostgresMemoryRepository", FakeRepo)
     monkeypatch.setattr(backend_mod, "build_retain_hook", fake_hook)
 
     cfg = EngineConfig(
         impl="graphrag",
         config_dir=Path("config/engine/graphrag"),
+        ingest=IngestSettings(
+            chunk_concurrency=5,
+            doc_concurrency=1,
+            llm_retries=4,
+            llm_backoff_base_seconds=1.5,
+        ),
         memory=MemorySettings(retain_max_concurrent=2),
     )
     backend_mod.build(cfg)
@@ -70,3 +93,5 @@ def test_build_memory_wiring(monkeypatch):
     assert built["repository_options"] == {"consolidation_enabled": False}
     assert isinstance(built["hook"][1], FakeRepo)
     assert built["pipeline_hook"] is not None
+    # engine.ingest 旋钮（并发 + 重试预算）真实传入 Pipeline
+    assert built["ingest"] == (5, 1, 4, 1.5)

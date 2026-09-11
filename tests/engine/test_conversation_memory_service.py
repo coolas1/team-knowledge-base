@@ -114,6 +114,28 @@ async def test_service_enqueues_only_visible_user_and_assistant_text():
     )
 
 
+async def test_service_bounds_oversized_turn_with_truncation_marker():
+    queue = FakeQueue()
+    service = ConversationMemoryService(
+        queue, FakeRecall(None), FakeRepository(), max_turn_chars=1000
+    )
+
+    result = await service.enqueue_conversation_turn(
+        ConversationTurn(
+            session_id="session-1",
+            turn_id="turn-1",
+            user_text="x" * 200_000,
+            assistant_text="done",
+        )
+    )
+
+    content = queue.enqueued["content"]
+    assert result.status == "pending"
+    assert len(content) <= 1000 + len("\n\n[truncated]")
+    assert content.endswith("[truncated]")
+    assert content.startswith("[user]\nx")  # 保留开头（说话人标记 + 正文）
+
+
 async def test_service_forgets_only_requested_session_and_reports_diagnostics():
     queue = FakeQueue()
     repository = FakeRepository()

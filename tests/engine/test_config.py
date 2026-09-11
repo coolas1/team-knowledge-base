@@ -96,6 +96,8 @@ def test_appconfig_ingest_defaults():
     cfg = AppConfig()
     assert cfg.engine.ingest.chunk_concurrency == 4
     assert cfg.engine.ingest.doc_concurrency == 2
+    assert cfg.engine.ingest.llm_retries == 3
+    assert cfg.engine.ingest.llm_backoff_base_seconds == 2.0
 
 
 def test_ingest_concurrency_must_be_positive():
@@ -109,11 +111,22 @@ def test_engine_config_maps_ingest_concurrency():
     from src.engine.config import engine_config_from_app
 
     app = AppConfig.model_validate(
-        {"engine": {"ingest": {"chunk_concurrency": 8, "doc_concurrency": 3}}}
+        {
+            "engine": {
+                "ingest": {
+                    "chunk_concurrency": 8,
+                    "doc_concurrency": 3,
+                    "llm_retries": 5,
+                    "llm_backoff_base_seconds": 0.5,
+                }
+            }
+        }
     )
     ecfg = engine_config_from_app(app)
     assert ecfg.ingest.chunk_concurrency == 8
     assert ecfg.ingest.doc_concurrency == 3
+    assert ecfg.ingest.llm_retries == 5
+    assert ecfg.ingest.llm_backoff_base_seconds == 0.5
 
 
 def test_engine_config_ingest_defaults_when_absent():

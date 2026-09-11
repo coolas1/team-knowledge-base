@@ -53,6 +53,7 @@
     "node": ">=24.0.0"
   },
   "overrides": {
+    "brace-expansion": "5.0.9",
     "fast-uri": "3.1.7",
     "qs": "6.16.0",
     "undici": "$undici"

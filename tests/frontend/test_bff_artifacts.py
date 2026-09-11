@@ -59,7 +59,7 @@ def test_scoped_download_and_pi_proxy(tmp_path, monkeypatch):
         monkeypatch.setattr(
             routes_agent,
             "_pi_client",
-            lambda: httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
+            lambda *args: httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
         )
         assert (
             client.post(

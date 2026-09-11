@@ -5,6 +5,10 @@ engine:
     vector_only: true
     chunk_concurrency: 4
     doc_concurrency: 2
+    # 模型端点瞬时失败（超时/连接错误/HTTP 429/5xx）的有界重试：
+    # 指数退避 + 抖动，单次退避上限 30s。llm_retries=0 关闭重试。
+    llm_retries: 3
+    llm_backoff_base_seconds: 2
   memory:
     enabled: true
     fact_cache_capacity: 256

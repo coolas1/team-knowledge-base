@@ -37,6 +37,19 @@ TKB_CICD_VENV="${TKB_CICD_VENV:-/var/tmp/tkb-venvs/cicd}"
 TKB_NODE22_BIN="${TKB_NODE22_BIN:-/var/tmp/node22/bin}"
 # SPA tests need Node 22 (system Node is 18 and fails 3 upload tests).
 TKB_HEALTH_TIMEOUT="${TKB_HEALTH_TIMEOUT:-180}"
+# Regional PyPI mirror for LAN builds (Containerfile's PYPI_MIRROR build arg;
+# empty = upstream PyPI). Overridable from deploy.env / the environment.
+PYPI_MIRROR="${PYPI_MIRROR:-https://mirrors.aliyun.com/pypi/simple}"
+# npm registries (Containerfile build args). Install defaults to a regional
+# mirror because direct registry.npmjs.org fetches stall from this host
+# (npm ignores HTTP(S)_PROXY). The audit stays on upstream npmjs: mirrors do
+# not implement npm's audit API and the security gate fails closed.
+# NPM_PROXY is deliberately NOT defaulted here - a local-only opt-in,
+# settable from deploy.env / the environment, never a committed default.
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
+NPM_AUDIT_REGISTRY="${NPM_AUDIT_REGISTRY:-https://registry.npmjs.org}"
+# Backups: how many dated backup sets to keep in <stable-dir>/backups/.
+TKB_BACKUP_KEEP="${TKB_BACKUP_KEEP:-5}"
 
 repo_dir="$TKB_CICD_HOME/repo"
 deploy_env="$TKB_CICD_HOME/deploy.env"
@@ -165,10 +178,20 @@ stage_gate() {
 stage_build() {
   cd "$repo_dir"
   [[ -f "$deploy_env" ]] || die "deploy.env missing at $deploy_env"
-  log "build: podman compose build"
-  podman compose --env-file "$deploy_env" build || die "compose build failed"
-
+  # The LAN deployment builds from a regional PyPI mirror (opt-in build arg);
+  # an unset PYPI_MIRROR means upstream PyPI. GIT_COMMIT is the source SHA
+  # the built image reports through /version (Containerfile GIT_COMMIT arg).
+  # npm registries mirror the Containerfile defaults (see the config block
+  # above for why install and audit differ); NPM_PROXY reaches compose only
+  # if deploy.env sets it (local-only opt-in).
   SHORT_SHA="$(git -C "$repo_dir" rev-parse --short=7 "$HEAD_SHA")"
+  export GIT_COMMIT="$SHORT_SHA"
+  log "build: podman compose build (PYPI_MIRROR=${PYPI_MIRROR:-<upstream PyPI>}, NPM_REGISTRY=$NPM_REGISTRY, NPM_AUDIT_REGISTRY=$NPM_AUDIT_REGISTRY, GIT_COMMIT=$SHORT_SHA)"
+  PYPI_MIRROR="${PYPI_MIRROR:-}" \
+    NPM_REGISTRY="$NPM_REGISTRY" \
+    NPM_AUDIT_REGISTRY="$NPM_AUDIT_REGISTRY" \
+    podman compose --env-file "$deploy_env" build || die "compose build failed"
+
   local image
   for image in "${compose_images[@]}"; do
     if podman image exists "$image:latest"; then
@@ -177,6 +200,15 @@ stage_build() {
       log "build: tagged $image:$SHORT_SHA"
     fi
   done
+}
+
+stage_backup() {
+  # Before the redeploy replaces the running stack: dump Postgres and snapshot
+  # the uploads volume into <stable-dir>/backups/ (keep-last-N).
+  cd "$repo_dir"
+  TKB_CICD_HOME="$TKB_CICD_HOME" TKB_BACKUP_KEEP="$TKB_BACKUP_KEEP" \
+    bash "$repo_dir/cicd/backup.sh" "$SHORT_SHA" \
+    || die "pre-deploy backup failed"
 }
 
 stage_deploy() {
@@ -226,6 +258,9 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
+# Backup before replacing the running stack (a --dry-run must not touch the
+# deployment's data, so this runs only on a real deploy).
+stage_backup
 stage_deploy
 stage_verify
 stage_record

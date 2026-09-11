@@ -8,7 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.components.reranker import get_reranker
-from src.engine.components.store.models import Chunk, Document, public_document_filter
+from src.engine.components.store.models import (
+    Chunk,
+    Document,
+    public_document_filter,
+    INTERNAL_DOCUMENT_FILE_TYPES,
+)
 from src.engine.components.store.scope import scope_predicate
 from src.engine.scope import MemoryScope
 from src.engine.components.store.neo4j import Neo4jClient, GraphQueryResult
@@ -48,6 +53,7 @@ async def vector_search(
     session: AsyncSession,
     query: str,
     top_k: int = DEFAULT_TOP_K,
+    current_only: bool = True,
     *,
     scope: MemoryScope | None = None,
 ) -> list[dict]:
@@ -60,6 +66,8 @@ async def vector_search(
     """
     query_embedding = await embedder.embed_text(query)
 
+    # current_only=True 时只检索版本链的最新版（is_current），历史版本
+    # 通过显式的版本工具访问。
     stmt = (
         select(
             Chunk.id.label("chunk_id"),
@@ -79,6 +87,11 @@ async def vector_search(
         .order_by(Chunk.embedding.cosine_distance(query_embedding))
         .limit(top_k)
     )
+    # 公共检索排除会话记忆文档（file_type=conversation）的 chunk：
+    # 会话转录只服务记忆召回路径，不进入公开搜索结果。
+    stmt = stmt.where(Document.file_type.not_in(INTERNAL_DOCUMENT_FILE_TYPES))
+    if current_only:
+        stmt = stmt.where(Document.is_current.is_(True))
 
     result = await session.execute(stmt)
     rows = result.all()
