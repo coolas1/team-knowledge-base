@@ -56,7 +56,7 @@ services:
     profiles: [ollama]
     image: docker.io/ollama/ollama:latest
     container_name: team-kb-ollama
-    # gpus: all
+    gpus: all
     ports:
       - "11434:11434"
     volumes:
