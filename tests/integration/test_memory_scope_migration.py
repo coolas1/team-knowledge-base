@@ -67,6 +67,7 @@ async def test_original_file_vectors_remain_recallable_without_memory_facts(
     repo = PostgresMemoryRepository(sessions, scope=scope)
     rows = await repo.semantic_search(vector, 3)
     assert len(rows) == 1 and "739" in rows[0].text
+    assert [r.id for r in await repo.keyword_search("阈值 739", 3)] == [str(chunk_id)]
     assert rows[0].metadata["source_kind"] == "file_chunk"
     assert (await repo.expand_memory_record(str(chunk_id)))["chunk"]["text"] == rows[
         0
@@ -81,6 +82,7 @@ async def test_original_file_vectors_remain_recallable_without_memory_facts(
         RecallFilter(tags=TagFilter(("other",), "all_strict")),
     ):
         assert await repo.semantic_search(vector, 3, filters=filters) == []
+        assert await repo.keyword_search("739", 3, filters=filters) == []
     for invisible in (
         MemoryScope(bank_id="other"),
         MemoryScope(
@@ -89,6 +91,7 @@ async def test_original_file_vectors_remain_recallable_without_memory_facts(
     ):
         hidden = repo.with_scope(invisible)
         assert await hidden.semantic_search(vector, 3) == []
+        assert await hidden.keyword_search("739", 3) == []
         assert await hidden.expand_memory_record(str(chunk_id)) is None
     async with sessions() as session, session.begin():
         await session.execute(

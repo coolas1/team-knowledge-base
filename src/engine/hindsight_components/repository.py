@@ -1606,6 +1606,18 @@ class PostgresMemoryRepository:
         query_tokens = list(dict.fromkeys(lexical_tokens(query)))
         if not query_tokens:
             return []
+        from .file_chunk_recall import search_file_keywords
+
+        file_candidates = await search_file_keywords(
+            self._session_factory,
+            self.scope,
+            query,
+            limit,
+            source_type,
+            filters,
+            candidate_limit=self._keyword_candidate_limit,
+            scorer=self._bm25,
+        )
         async with self._session_factory() as session:
             conditions = (
                 self._memory_scope(),
@@ -1659,7 +1671,7 @@ class PostgresMemoryRepository:
                 key=lambda item: (-item[1], str(item[0])),
             )[:limit]
             if not ranked_ids:
-                return []
+                return file_candidates
             score_by_id = dict(ranked_ids)
             rows = list(
                 (
@@ -1678,7 +1690,11 @@ class PostgresMemoryRepository:
             unit.id: self._candidate(unit, document, keyword_score=score_by_id[unit.id])
             for unit, document in rows
         }
-        return [candidates[memory_id] for memory_id, _score in ranked_ids]
+        return sorted(
+            [*candidates.values(), *file_candidates],
+            key=lambda candidate: candidate.keyword_score or 0,
+            reverse=True,
+        )[:limit]
 
     async def graph_search(
         self,
