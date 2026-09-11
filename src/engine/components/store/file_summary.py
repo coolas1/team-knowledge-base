@@ -24,7 +24,7 @@ class SummaryIdentity:
     title_hash: str
     model: str
     policy_version: str = "file-summary-v1"
-    template_version: str = "bounded-overview-v1"
+    template_version: str = "bounded-overview-v2"
     input_chars: int = 24000
     output_chars: int = 2000
 

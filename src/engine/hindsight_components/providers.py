@@ -11,6 +11,7 @@ import httpx
 
 from config.settings import settings
 from src.engine.components.embedder import embedder
+from src.engine.components.llm_options import bounded_json_options
 
 
 class EmbeddingProvider(Protocol):
@@ -145,6 +146,8 @@ class ProjectHindsightProviders:
             payload["response_format"] = {"type": "json_object"}
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+            if json_mode:
+                payload.update(bounded_json_options(payload["model"]))
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{settings.llm.base_url.rstrip('/')}/chat/completions",

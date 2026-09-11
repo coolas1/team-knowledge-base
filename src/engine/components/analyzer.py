@@ -9,6 +9,7 @@ from pathlib import Path
 
 import httpx
 import yaml
+from .llm_options import bounded_json_options
 
 from config.settings import settings
 
@@ -218,6 +219,7 @@ class Analyzer:
                     "messages": [{"role": "user", "content": prompt}],
                     "response_format": {"type": "json_object"},
                     **({"max_tokens": max_tokens} if max_tokens is not None else {}),
+                    **(bounded_json_options(model) if max_tokens is not None else {}),
                 },
             )
             resp.raise_for_status()
