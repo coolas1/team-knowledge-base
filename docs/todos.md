@@ -67,6 +67,14 @@ vs 21 at 2) with populated links, `related_docs` no longer render `()`.
 
 ## Open — environment / infra
 
+- [ ] **The build stage has no bounded retry, and systemd can kill a long
+      attempt leaving orphaned fetch processes.** This is why a lengthened
+      start timeout made the npm ETIMEDOUT failures worse: each doomed
+      attempt ran longer and could leave concurrent orphaned fetches.
+      (The mirror-routing fix in the `add-npm-build-mirrors` change removes
+      the stall that triggered this, but the interaction remains.) Separate
+      work: bound the build stage's wall-clock, and clean up orphaned build
+      processes on abort.
 - [ ] **Fix git push credentials.** `git push` fails: the credential helper
       points at a VSCode-server `askpass.sh` that no longer exists. Work
       around with `gh auth login` or a working credential helper. (The user

@@ -40,6 +40,14 @@ TKB_HEALTH_TIMEOUT="${TKB_HEALTH_TIMEOUT:-180}"
 # Regional PyPI mirror for LAN builds (Containerfile's PYPI_MIRROR build arg;
 # empty = upstream PyPI). Overridable from deploy.env / the environment.
 PYPI_MIRROR="${PYPI_MIRROR:-https://mirrors.aliyun.com/pypi/simple}"
+# npm registries (Containerfile build args). Install defaults to a regional
+# mirror because direct registry.npmjs.org fetches stall from this host
+# (npm ignores HTTP(S)_PROXY). The audit stays on upstream npmjs: mirrors do
+# not implement npm's audit API and the security gate fails closed.
+# NPM_PROXY is deliberately NOT defaulted here - a local-only opt-in,
+# settable from deploy.env / the environment, never a committed default.
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
+NPM_AUDIT_REGISTRY="${NPM_AUDIT_REGISTRY:-https://registry.npmjs.org}"
 # Backups: how many dated backup sets to keep in <stable-dir>/backups/.
 TKB_BACKUP_KEEP="${TKB_BACKUP_KEEP:-5}"
 
@@ -173,10 +181,15 @@ stage_build() {
   # The LAN deployment builds from a regional PyPI mirror (opt-in build arg);
   # an unset PYPI_MIRROR means upstream PyPI. GIT_COMMIT is the source SHA
   # the built image reports through /version (Containerfile GIT_COMMIT arg).
+  # npm registries mirror the Containerfile defaults (see the config block
+  # above for why install and audit differ); NPM_PROXY reaches compose only
+  # if deploy.env sets it (local-only opt-in).
   SHORT_SHA="$(git -C "$repo_dir" rev-parse --short=7 "$HEAD_SHA")"
   export GIT_COMMIT="$SHORT_SHA"
-  log "build: podman compose build (PYPI_MIRROR=${PYPI_MIRROR:-<upstream PyPI>}, GIT_COMMIT=$SHORT_SHA)"
+  log "build: podman compose build (PYPI_MIRROR=${PYPI_MIRROR:-<upstream PyPI>}, NPM_REGISTRY=$NPM_REGISTRY, NPM_AUDIT_REGISTRY=$NPM_AUDIT_REGISTRY, GIT_COMMIT=$SHORT_SHA)"
   PYPI_MIRROR="${PYPI_MIRROR:-}" \
+    NPM_REGISTRY="$NPM_REGISTRY" \
+    NPM_AUDIT_REGISTRY="$NPM_AUDIT_REGISTRY" \
     podman compose --env-file "$deploy_env" build || die "compose build failed"
 
   local image
