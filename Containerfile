@@ -73,11 +73,31 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # node_modules is installed and removed in the SAME layer, so it is not in
 # the final image (only dist/ is). The later `COPY src/` overlay cannot
 # clobber dist because the context excludes **/dist (see .dockerignore).
+#
+# npm registries. Install defaults to a regional mirror: the direct route to
+# registry.npmjs.org stalls from the LAN build host (npm error ETIMEDOUT
+# after ~30 min), and npm ignores HTTP(S)_PROXY - it reads only its own
+# npm_config_proxy - so the proxy the pipeline exports does not reach it.
+# The security audit stays pinned to the authoritative registry because
+# mirrors do not uniformly implement npm's audit API (npmmirror answers
+# 404 NOT_IMPLEMENTED) and the gate is fail-closed. npm ci verifies each
+# tarball against the package-lock integrity hashes, so a mirror can only
+# withhold a package, not substitute content. NPM_PROXY is a local-only,
+# opt-in escape hatch (empty by default - never commit a machine-specific
+# value). All three ARGs are consumed on the RUN line below, so they
+# participate in the layer's cache key: unchanged source + unchanged
+# registries = cache hit; a registry change rebuilds the layer.
 COPY src/frontend/webapp/client/ ./src/frontend/webapp/client/
+ARG NPM_REGISTRY="https://registry.npmmirror.com"
+ARG NPM_AUDIT_REGISTRY="https://registry.npmjs.org"
+ARG NPM_PROXY=""
 RUN cd src/frontend/webapp/client \
- && npm ci \
- && npm run security \
- && npm run build \
+ && if [ -n "$NPM_PROXY" ]; then \
+      export npm_config_proxy="$NPM_PROXY" npm_config_https_proxy="$NPM_PROXY"; \
+    fi \
+ && npm_config_registry="$NPM_REGISTRY" npm ci \
+ && npm_config_registry="$NPM_AUDIT_REGISTRY" npm run security \
+ && npm_config_registry="$NPM_REGISTRY" npm run build \
  && rm -rf node_modules
 
 # App source + config: the most frequently changed inputs, last.
