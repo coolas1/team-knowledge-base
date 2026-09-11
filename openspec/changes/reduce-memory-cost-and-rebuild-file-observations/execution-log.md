@@ -83,3 +83,18 @@
 - 回归适配：旧全文 append/cache/权限契约测试显式设置旧模式；队列测试按既有“保留有效 lease、新水位随后消费”契约模拟租约过期；mental model enqueue 使用数据库时间，避免 Windows 与 Docker 时钟差异导致新任务暂不可领取。
 - 全库 ruff passed；`pytest tests src/engine/hindsight_components/tests`：519 passed / 38 skipped。跳过项由集成环境开关控制，适用真实数据库用例已单独执行。
 - 本批提交 SHA 待提交后记录。第六批目标预览已经核对，但未对目标运行清理或生成模型调用。
+
+第五批提交：`2457708c`。
+
+## 批次六准备状态（尚未执行目标清理）
+
+- 2026-09-11 只读核对本机 TKB：PostgreSQL `localhost:5433/knowledge_base`，schema `public`，角色 `kb_user`；唯一 bank `default-team`，1 PDF + 10 conversations。文件来源 active facts 272、文件 observation 56、混合 observation 1；对话来源 facts 45、observation 13。
+- 最终 dry-run：1 target、57 affected observations、ambiguous=0。明细在非提交文件 `output/rebuild-target-manifest.json`，不在 Git 放入文档标题、原文、恢复内容或凭据。
+- 仅新增摘要和迁移侧表、建立 planned run：`8f3854e9-eff0-4ec7-b479-4653d878d5d0`；恢复材料 `output/rebuild-recovery-8f3854e9-eff0-4ec7-b479-4653d878d5d0.json`，checksum `243fca393d9c9f49eaa13d2b4eeaabe3619286b83fbfe7dd04da21f5b677c799`。没有在目标 retire 或调用生成模型。
+- 使用目标实际备份在独立 `summary_test` 随机 schema 中重放退休和恢复；恢复 snapshot 与目标导出逐项相等，临时 schema 已删除。结果 `output/rebuild-recovery-rehearsal.json`。目标业务数据未改写。
+- 运行容器没有 FileRebuildRunner，且没有源码 bind mount。原镜像 `sha256:7dfd9a841893b377ec2553532f88fbb2f19610c339acbad3717ea066736166af`；因此不能把本地提交视为运行版本已升级。
+- 标准 Containerfile 构建遇到 Docker Hub auth EOF。核对已有镜像的 pyproject、规范化 uv.lock 和全部前端输入（33 文件）与 `2457708c` 一致后，复用该精确本地镜像依赖/SPA，COPY 提交快照 src/config，离线构建 `team-kb-webapp:2457708c`，镜像 manifest `sha256:2fea7ce28caf6565067650211cece0c3c2d4f3a92ebb972851e242115f9f28b7`。未改 latest 或运行容器。
+- 镜像离线 smoke：runner import 成功，vector_only=true，fact_cache_capacity=256。OpenSpec strict validate 通过。构建上下文来自 git archive，不含工作区无关修改/凭据/备份。
+- 拟执行策略：代码 `2457708c`，batch_size=1，run 累计生成 token 上限 100000；每次调用前预留，达到上限暂停。尚无目标实际 provider usage 或费用节省结论。
+- 当前待决：根 CLAUDE.md 要求 team-kb 由 pipeline 操作，禁止手动 compose up；已配置流程面向 Linux LAN 的 origin/main，当前运行的是 Windows Docker 本机实例。版本切换需用户明确授权本机例外或通过其发布流程完成。不自动 push/merge，不把“继续实现”解释成绕过部署约束。
+- 6.2–6.7 保持未完成：虽已具备备份与恢复证明，目标版本切换、实际清理/摘要重处理、最终查询对照和六批最终审计尚未完成。
