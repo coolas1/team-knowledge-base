@@ -137,6 +137,27 @@ async def test_projector_validates_and_forwards_projection():
     assert store.deleted == ["document-1"]
 
 
+async def test_projector_preserves_same_name_entities_and_separate_mentions():
+    value = projection()
+    first = value.entities[0]
+    second = replace(first, id="another-scoped-entity")
+    value = replace(
+        value,
+        entities=(first, second),
+        mentions=(
+            MemoryGraphMention(memory_id=value.memories[0].id, entity_id=first.id),
+            MemoryGraphMention(memory_id=value.memories[1].id, entity_id=second.id),
+        ),
+    )
+    store = FakeStore()
+    await MemoryGraphProjector(store).replace_document(value)
+    assert store.projections == [value]
+    with pytest.raises(ValueError, match="duplicate entity id"):
+        await MemoryGraphProjector(store).replace_document(
+            replace(value, entities=(first, first))
+        )
+
+
 @pytest.mark.parametrize(
     ("value", "message"),
     [

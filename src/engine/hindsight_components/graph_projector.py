@@ -68,18 +68,14 @@ class MemoryGraphProjector:
             memory_ids.add(memory.id)
 
         entity_ids: set[str] = set()
-        normalized_names: set[str] = set()
         for entity in projection.entities:
             if not entity.id.strip() or not entity.normalized_name.strip():
                 raise ValueError("entity id and normalized_name cannot be empty")
             if entity.id in entity_ids:
                 raise ValueError(f"duplicate entity id: {entity.id}")
-            if entity.normalized_name in normalized_names:
-                raise ValueError(
-                    f"duplicate normalized entity: {entity.normalized_name}"
-                )
+            # Names are search attributes. Distinct scoped entity IDs may share
+            # a name and must keep their own mentions in the projection.
             entity_ids.add(entity.id)
-            normalized_names.add(entity.normalized_name)
 
         mentions: set[tuple[str, str, str]] = set()
         for mention in projection.mentions:
