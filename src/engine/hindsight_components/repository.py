@@ -1575,10 +1575,25 @@ class PostgresMemoryRepository:
                 .order_by(score.desc())
                 .limit(limit)
             )
-        return [
+        candidates = [
             self._candidate(unit, document, semantic_score=float(value))
             for unit, document, value in rows
         ]
+        from .file_chunk_recall import search_file_chunks
+
+        candidates.extend(
+            await search_file_chunks(
+                self._session_factory,
+                self.scope,
+                embedding,
+                limit,
+                source_type,
+                filters,
+            )
+        )
+        return sorted(
+            candidates, key=lambda item: item.semantic_score or 0, reverse=True
+        )[:limit]
 
     async def keyword_search(
         self,
@@ -1928,7 +1943,9 @@ class PostgresMemoryRepository:
                 )
             ).one_or_none()
         if row is None:
-            return None
+            from .file_chunk_recall import expand_file_chunk
+
+            return await expand_file_chunk(self._session_factory, self.scope, identity)
         unit, document = row
         detail = (
             await self.recall_details([memory_id], include_source_facts=True)

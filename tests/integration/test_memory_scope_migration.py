@@ -23,6 +23,85 @@ from src.engine.hindsight_components.types import MemoryDraft, RetainPlan
 pytestmark = pytest.mark.integration
 
 
+async def test_original_file_vectors_remain_recallable_without_memory_facts(
+    scope_database,
+):
+    from sqlalchemy import delete, update
+    from src.engine.components.store.models import Chunk
+    from src.engine.hindsight_components.fact_cache import FactCache, cache_key
+    from src.engine.hindsight_components.types import RecallFilter
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_id, chunk_id = uuid.uuid4(), uuid.uuid4()
+    vector = [0.1] * 768
+    async with sessions() as session, session.begin():
+        session.add(
+            Document(
+                id=document_id,
+                bank_id="file-bank",
+                tags=["private"],
+                title="file",
+                file_type="pdf",
+                raw_text="末尾独有细节：阈值 739。",
+                overview="不含阈值的摘要",
+                status="indexed",
+            )
+        )
+        await session.flush()
+        session.add(
+            Chunk(
+                id=chunk_id,
+                doc_id=document_id,
+                bank_id="file-bank",
+                tags=["private"],
+                chunk_index=4,
+                chunk_text="末尾独有细节：阈值 739。",
+                embedding=vector,
+                doc_uri="file",
+            )
+        )
+    scope = MemoryScope(
+        bank_id="file-bank", visibility=TagFilter(("private",), "all_strict")
+    )
+    repo = PostgresMemoryRepository(sessions, scope=scope)
+    rows = await repo.semantic_search(vector, 3)
+    assert len(rows) == 1 and "739" in rows[0].text
+    assert rows[0].metadata["source_kind"] == "file_chunk"
+    assert (await repo.expand_memory_record(str(chunk_id)))["chunk"]["text"] == rows[
+        0
+    ].text
+    cache = FactCache()
+    cache.remember(cache_key(scope), [rows[0].as_evidence()])
+    assert not cache.candidates(cache_key(scope), "739", limit=3, max_tokens=500)
+    for filters in (
+        RecallFilter(source_types=("conversation",)),
+        RecallFilter(memory_types=("observation",)),
+        RecallFilter(include=()),
+        RecallFilter(tags=TagFilter(("other",), "all_strict")),
+    ):
+        assert await repo.semantic_search(vector, 3, filters=filters) == []
+    for invisible in (
+        MemoryScope(bank_id="other"),
+        MemoryScope(
+            bank_id="file-bank", visibility=TagFilter(("other",), "all_strict")
+        ),
+    ):
+        hidden = repo.with_scope(invisible)
+        assert await hidden.semantic_search(vector, 3) == []
+        assert await hidden.expand_memory_record(str(chunk_id)) is None
+    async with sessions() as session, session.begin():
+        await session.execute(
+            update(Document).where(Document.id == document_id).values(status="failed")
+        )
+        assert await session.scalar(select(func.count()).select_from(MemoryUnit)) == 0
+    assert await repo.semantic_search(vector, 3) == []
+    assert await repo.expand_memory_record(str(chunk_id)) is None
+    async with sessions() as session, session.begin():
+        await session.execute(delete(Chunk).where(Chunk.id == chunk_id))
+    assert await repo.expand_memory_record(str(chunk_id)) is None
+
+
 async def test_pi_process_replays_ack_through_production_mcp_to_postgres(
     scope_database, tmp_path, monkeypatch
 ):
