@@ -56,7 +56,7 @@ class BudgetedProviders:
         self.input_price, self.output_price = input_price, output_price
 
     async def json_with_usage(self, system, user, *, max_tokens=None, **kwargs):
-        output_limit = min(max_tokens or 2048, 2048)
+        output_limit = min(max_tokens or 2048, 8192)
         # Conservative byte bound plus protocol overhead, before any network call.
         reserve = len(system.encode()) + len(user.encode()) + output_limit + 4096
         reserve_cost = reserve * max(self.input_price, self.output_price) / 1_000_000
@@ -454,7 +454,9 @@ class FileRebuildRunner:
                 consolidation_repo,
                 budget,
                 ConsolidationOptions(
-                    max_output_tokens=2048, semantic_dedup_enabled=False
+                    batch_size=4,
+                    max_output_tokens=8192,
+                    semantic_dedup_enabled=False,
                 ),
             )
             for _ in range(max_steps):
