@@ -194,4 +194,40 @@ describe("runtime transcript integrity", () => {
       await runtime.close();
     }
   });
+
+  it("logs the redacted underlying error when a turn fails", async () => {
+    mockDependencies();
+    const root = await mkdtemp(path.join(tmpdir(), "tkb-runtime-errorlog-"));
+    const runtime = new PiAgentRuntime(loadPiAgentConfig({
+      PI_AGENT_CWD: root, PI_AGENT_DATA_DIR: root,
+      PI_AGENT_PROVIDER: "test", PI_AGENT_MODEL: "test", PI_AGENT_API_KEY: "test",
+      PI_AGENT_TOOL_AUTHORING_ENABLED: "false",
+    }), loadTkbAdapterConfig({}));
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runtime.initialize();
+      const session = await runtime.createSession();
+      const managed = (runtime as any).sessions.get(session.id);
+      vi.spyOn(managed.session, "prompt")
+        .mockRejectedValue(new Error("provider crashed after api_key=sk-live-secret-1234567890"));
+      const events: PiRuntimeEvent[] = [];
+      await expect(runtime.streamMessage(session.id, "log the cause", (event) => {
+        events.push(event);
+      })).rejects.toThrow("provider crashed");
+      const failures = errorLog.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("turn_failed"));
+      expect(failures).toHaveLength(1);
+      const entry = JSON.parse(failures[0]);
+      expect(entry).toMatchObject({
+        event: "turn_failed", session_id: session.id,
+        turn_id: (events[0] as { turnId?: string }).turnId, code: "agent_failed",
+      });
+      expect(entry.error).toContain("provider crashed after");
+      expect(entry.error).toContain("[redacted]");
+      expect(entry.error).not.toContain("sk-live-secret");
+    } finally {
+      await runtime.close();
+    }
+  });
 });
