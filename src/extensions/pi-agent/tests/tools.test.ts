@@ -15,9 +15,9 @@ function client() {
 }
 
 describe("TKB Pi tools", () => {
-  it("maps all eleven engine MCP tools", () => {
+  it("maps engine and image presentation MCP tools", () => {
     const tools = buildAllTkbTools({ client: client() });
-    expect(tools).toHaveLength(11);
+    expect(tools).toHaveLength(17);
     expect(tools.map((tool) => tool.name)).not.toEqual(
       expect.arrayContaining([
         "recall_conversation_memory",
@@ -40,6 +40,7 @@ describe("TKB Pi tools", () => {
       "tkb_query_graph",
       "tkb_list_documents",
       "tkb_generate_document",
+      "tkb_create_ppt", "tkb_get_ppt", "tkb_approve_ppt", "tkb_cancel_ppt", "tkb_retry_ppt", "tkb_preview_ppt",
     ]);
   });
 

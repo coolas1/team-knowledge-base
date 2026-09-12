@@ -345,3 +345,14 @@ class PPTStore:
             ):
                 raise ValueError("Artifact integrity check failed")
             return path
+
+    async def reference_file(self, identifier, document_id, binding, authority):
+        async with self.sessions() as session:
+            job = await session.get(PPTJob, identifier)
+            if job is None:
+                raise PermissionError("PPT task unavailable")
+            await self.authorized(session, job, binding=binding, authority=authority)
+            if not any(s["id"] == document_id and s["reference"] for s in job.sources):
+                raise PermissionError("Reference unavailable")
+            doc = await session.get(Document, uuid.UUID(document_id))
+            return Path(doc.file_path).resolve()

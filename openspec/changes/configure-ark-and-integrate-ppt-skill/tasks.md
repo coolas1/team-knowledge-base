@@ -24,10 +24,10 @@
 
 ## 4. 第四批：Agent 工具与样张预览交互
 
-- [ ] 4.1 增加 create/status/approve/retry/cancel PPT 工具与 HTTP 契约，保持旧 generate_document 不变；验收：MCP 与 BFF 测试验证 schema、可信 binding、错误类型和向后兼容。
-- [ ] 4.2 打包本地适配 skill，接通模型图片输入和参考素材，给 Agent 清晰的图片式 PPT 路由；验收：模型实际收到图片消息而非仅文件路径，旧 DOCX/PDF/普通 PPT 路由不回退。
-- [ ] 4.3 前端添加大纲/样张预览和 revision 绑定审批、进度、取消、失败页与单页重试；验收：未批准样张无法批量执行，过期批准提示更新，重连恢复真实任务状态。
-- [ ] 4.4 全链路校验来源、任务、预览、缓存与下载权限，执行新前端与 Agent 契约测试并提交 feat(webapp): review image presentation jobs；验收：跨 bank 与撤销访问均拒绝，展示内容无凭据，记录 SHA。
+- [x] 4.1 增加 create/status/approve/retry/cancel PPT 工具与 HTTP 契约，保持旧 generate_document 不变；验收：MCP 与 BFF 测试验证 schema、可信 binding、错误类型和向后兼容。
+- [x] 4.2 打包本地适配 skill，接通模型图片输入和参考素材，给 Agent 清晰的图片式 PPT 路由；验收：模型实际收到图片消息而非仅文件路径，旧 DOCX/PDF/普通 PPT 路由不回退。
+- [x] 4.3 前端添加大纲/样张预览和 revision 绑定审批、进度、取消、失败页与单页重试；验收：未批准样张无法批量执行，过期批准提示更新，重连恢复真实任务状态。
+- [x] 4.4 全链路校验来源、任务、预览、缓存与下载权限，执行新前端与 Agent 契约测试并提交 feat(webapp): review image presentation jobs；验收：跨 bank 与撤销访问均拒绝，展示内容无凭据，记录 SHA。
 
 ## 5. 第五批：视觉 QA、讲稿和 PPTX 交付
 

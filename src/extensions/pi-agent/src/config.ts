@@ -58,6 +58,7 @@ export interface PiAgentConfig {
   modelBaseUrl: string;
   modelApiKey: string;
   modelReasoning: boolean;
+  modelImageInput: boolean;
   thinkingLevel: PiThinkingLevel;
   exposeThinking: boolean;
   exposeToolResults: boolean;
@@ -205,6 +206,7 @@ export function loadPiAgentConfig(
       (inheritSharedModel ? env.LLM_API_KEY?.trim() : undefined) ||
       (isOllama ? "ollama" : ""),
     modelReasoning: enabled(env.PI_AGENT_REASONING, true),
+    modelImageInput: enabled(env.PI_AGENT_IMAGE_INPUT, false),
     thinkingLevel: enumValue(
       env.PI_AGENT_THINKING_LEVEL,
       ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const,

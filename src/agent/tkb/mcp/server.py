@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from src.engine.trusted_scope import bind_service, resolve_binding
+from src.agent.ppt.tools import register as register_ppt_tools
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -753,6 +754,8 @@ mcp.tool()(tkb_list_versions)
 mcp.tool()(tkb_diff_versions)
 mcp.tool()(get_full_graph)
 mcp.tool()(generate_document)
+
+register_ppt_tools(mcp, _request_binding)
 mcp.tool()(recall_conversation_memory)
 mcp.tool()(enqueue_conversation_turn)
 mcp.tool()(forget_conversation_memory)

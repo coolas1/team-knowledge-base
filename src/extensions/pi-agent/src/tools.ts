@@ -12,7 +12,7 @@ import { McpAbortedError, McpTimeoutError, TkbMcpClient } from "./mcp-client.js"
 import { redact } from "./runner-client.js";
 
 type PiToolResult = {
-  content: Array<{ type: "text"; text: string }>;
+  content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
   details: {
     mcpTool: string;
     arguments: Record<string, unknown>;
@@ -39,7 +39,7 @@ async function executeMcpTool(
     const result = await client.callTool(mcpTool, args, { signal, timeoutMs });
     if (result.isError) throw new Error(result.text || "MCP returned a tool error");
     return {
-      content: [{ type: "text", text: result.text || "TKB MCP returned no content." }],
+      content: [{ type: "text", text: result.text || "TKB image result." }, ...(result.images ?? [])],
       details: { mcpTool, arguments: args },
       isError: result.isError,
     };
@@ -434,7 +434,28 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
     }),
   ];
 
-  return tools as ToolDefinition[];
+  const pptPage = Type.Object({
+    title: Type.String(), points: Type.Array(Type.String(), { minItems: 1, maxItems: 6 }),
+    layout: Type.String(), notes: Type.String(),
+    reference_document_ids: Type.Optional(Type.Array(Type.String())),
+  });
+  const pptSpec = Type.Object({ title: Type.String(), style: Type.String(),
+    context: Type.Optional(Type.String()), source_document_ids: Type.Optional(Type.Array(Type.String())),
+    pages: Type.Array(pptPage, { minItems: 1, maxItems: 20 }),
+  });
+  const controls = [
+    { name: "create_ppt", description: "Create an image presentation draft and return its user review link. Read tkb-image-ppt skill first.", parameters: Type.Object({ spec: pptSpec, session_id: Type.Optional(Type.String()) }) },
+    { name: "get_ppt", description: "Read persistent PPT progress, approvals and usage.", parameters: Type.Object({ identifier: Type.String() }) },
+    { name: "approve_ppt", description: "Get the user approval link for a PPT revision; does not approve automatically.", parameters: Type.Object({ identifier: Type.String(), revision: Type.Integer() }) },
+    { name: "cancel_ppt", description: "Cancel further generation at the user's request.", parameters: Type.Object({ identifier: Type.String(), revision: Type.Integer() }) },
+    { name: "retry_ppt", description: "Get explicit retry review link for a failed page.", parameters: Type.Object({ identifier: Type.String(), revision: Type.Integer(), page: Type.Integer() }) },
+    { name: "preview_ppt", description: "Read an actual slide image into the model context for inspection.", parameters: Type.Object({ identifier: Type.String(), page: Type.Integer() }) },
+  ];
+  return [...tools, ...controls.map((control) => defineTool({
+    name: `tkb_${control.name}`, label: "Image PPT", description: control.description,
+    parameters: control.parameters,
+    execute: (_id, params, signal) => executeMcpTool(client, control.name, params, signal, normal),
+  }))] as ToolDefinition[];
 }
 
 export function enabledTkbTools(options: BuildToolsOptions = {}): ToolDefinition[] {

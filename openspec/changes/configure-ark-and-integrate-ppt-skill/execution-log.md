@@ -42,3 +42,12 @@
 - AFP/金额无供应商报价时不允许声称可满足该预算；token 有保守预留，未知 usage 阻止有 token 上限的后续请求。请求数硬限制始终生效。
 - 隔离 PostgreSQL 11 passed，覆盖重复升级、审批、过期审批、双 worker 竞争、取消在途请求、重启复用、文件发布后恢复、未知结果 fencing、预算暂停、跨 bank、凭据/银行策略撤销、来源变化、单页/风格失效、跨任务授权缓存零新请求。所有故障测试为 mock provider，未新增付费调用。
 - ruff check 通过；本批提交 feat(agent): persist PPT generation jobs，尚未启动生产 PPT worker。
+
+## 第四批实施与验收（2026-09-12）
+
+- 第三批提交 7b970dd。新增 create/get/approve/cancel/retry/preview PPT MCP 工具和 /api/ppt/jobs HTTP 契约；旧 generate_document 保持兼容。
+- Agent 的 approve/retry 工具提供真实 UI 链接，不能替用户隐式批准；HTTP 控制携带 revision。新增 /ppt 与 /ppt/:id 页面，大纲/风格/原图映射、样张、进度、取消、单页重试与重连均读取数据库状态。
+- Pi 打包 tkb-image-ppt skill，并通过 PI_AGENT_IMAGE_INPUT 显式启用图片能力。本机 Turbo 已实测视觉后设置 true；MCP 图片块一路保留至 Pi tool result，修正了 FastMCP 默认结构化包装（preview 使用 structured_output=False）。
+- 预览、来源原图与下载重新检查权限并禁止公共缓存；前端不接收凭据。MCP approve 测试断言不触发 store.control，图片返回测试断言真实 image content。
+- Python frontend+agent 159 passed（修复既有 test_deps 的 singleton hooks 泄漏，使反向测试顺序也通过）；Pi check 包含安全本地门禁/typecheck/105 tests/build 全通过；SPA 64 tests 与构建通过；ruff 通过。
+- 本批提交 feat(webapp): review image presentation jobs。真实 UI 生图与下载验收留在第六批，不把 mock 契约当作端到端证明。

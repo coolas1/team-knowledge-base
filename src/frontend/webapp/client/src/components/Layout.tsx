@@ -126,6 +126,7 @@ export function Layout() {
             <BrainCircuit size={17} aria-hidden="true" />
             <span>记忆</span>
           </NavLink>
+          <NavLink to="/ppt" className={({ isActive }) => `app-nav-link${isActive ? ' is-active' : ''}`}>PPT</NavLink>
         </nav>
         <div className="app-header-spacer" />
         <button

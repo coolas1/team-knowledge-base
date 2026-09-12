@@ -12,6 +12,7 @@ export interface McpToolInfo {
 export interface McpCallResult {
   text: string;
   isError: boolean;
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
 }
 
 export interface ConversationMemoryRecallResult {
@@ -55,7 +56,7 @@ export interface McpClientLike {
     name: string;
     arguments: Record<string, unknown>;
   }): Promise<{
-    content?: Array<{ type: string; text?: string }>;
+    content?: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
     structuredContent?: unknown;
     isError?: boolean;
   }>;
@@ -165,7 +166,13 @@ export class TkbMcpClient {
       options.timeoutMs ?? this.config.defaultToolTimeoutMs,
       async (client) => {
         const result = await client.callTool({ name: toolName, arguments: args });
-        return { text: resultText(result), isError: result.isError === true };
+        const images = (result.content ?? []).filter(
+          (part): part is { type: "image"; data: string; mimeType: string } =>
+            part.type === "image" && typeof part.data === "string" &&
+            part.data.length <= 28_000_000 && ["image/png", "image/jpeg"].includes(part.mimeType ?? ""),
+        );
+        return { text: resultText(result), isError: result.isError === true,
+          ...(images.length ? { images } : {}) };
       },
     );
   }
