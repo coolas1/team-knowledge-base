@@ -117,6 +117,31 @@ describe("Pi Agent HTTP service", () => {
     );
   });
 
+  it("keeps a quiet foreground tool stream alive with SSE comments", async () => {
+    const runtime = fakeRuntime();
+    runtime.streamMessage = vi.fn(async (_id, _message, emit) => {
+      await emit({
+        type: "message.accepted", sessionId: "s1", turnId: "t1",
+        messageId: "u1", clientMessageId: "client-1", status: "accepted",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      await emit({ type: "message.completed", sessionId: "s1", answer: "done", toolCalls: 1 });
+    });
+    const server = createPiAgentHttpServer(runtime, { sseHeartbeatMs: 10 });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const response = await fetch(`http://127.0.0.1:${port}/v1/sessions/s1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "generate ppt", clientMessageId: "client-1" }),
+    });
+
+    const body = await response.text();
+    expect(body).toContain(": keep-alive\n\n");
+    expect(body).toContain("event: message.completed");
+  });
+
   it("keeps old message request bodies backward compatible", async () => {
     const runtime = fakeRuntime();
     const { base } = await listen(runtime);

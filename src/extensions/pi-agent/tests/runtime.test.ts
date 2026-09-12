@@ -3,6 +3,8 @@ import {
   conversationMessagesFrom,
   extractCitations,
   sessionTitleFrom,
+  terminalLengthFailureFrom,
+  terminalPptFailureFrom,
 } from "../src/runtime.js";
 
 describe("Pi runtime result handling", () => {
@@ -60,5 +62,40 @@ describe("Pi runtime result handling", () => {
     expect(extractCitations('{"sources":[{"doc_id":"x","title":"Doc"}]}')).toEqual([
       { docId: "x", title: "Doc" },
     ]);
+  });
+
+  it("turns a terminal PPT tool failure into a completed user-visible answer", () => {
+    expect(terminalPptFailureFrom({
+      role: "toolResult",
+      toolName: "tkb_generate_image_ppt",
+      details: { errorSummary: "visual_check_failed: page 7" },
+    })).toContain("PPT 生成失败：visual_check_failed: page 7");
+    expect(terminalPptFailureFrom({
+      role: "toolResult",
+      toolName: "tkb_search_fast",
+      details: { errorSummary: "unrelated" },
+    })).toBeUndefined();
+
+    expect(terminalPptFailureFrom({
+      role: "toolResult",
+      toolName: "tkb_generate_image_ppt",
+      content: [{
+        type: "text",
+        text: "Tool call was not executed: response hit output token limit, arguments may be truncated",
+      }],
+    })).toContain("工具没有执行");
+  });
+
+  it("turns an empty length-limited model response into a completed answer", () => {
+    expect(terminalLengthFailureFrom({
+      role: "assistant",
+      stopReason: "length",
+      content: [{ type: "thinking", thinking: "hidden" }],
+    })).toContain("模型输出达到长度上限");
+    expect(terminalLengthFailureFrom({
+      role: "assistant",
+      stopReason: "stop",
+      content: [],
+    })).toBeUndefined();
   });
 });

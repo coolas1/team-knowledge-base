@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -323,6 +324,56 @@ def generate_artifact(
             download_url=f"/api/artifacts/{artifact_id}/download",
             slidev_filename=slidev_filename,
             slidev_url=slidev_url,
+        )
+        (directory / "metadata.json").write_text(
+            json.dumps(
+                {
+                    **asdict(artifact),
+                    "_scope": {"bank_id": scope.bank_id, "tags": list(write_tags)},
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return artifact
+    except Exception:
+        for child in directory.iterdir():
+            child.unlink(missing_ok=True)
+        directory.rmdir()
+        raise
+
+
+def publish_pptx(
+    source: Path,
+    *,
+    title: str,
+    file_name: str | None = None,
+    scope: MemoryScope | None = None,
+    write_tags: tuple[str, ...] = (),
+) -> Artifact:
+    """Publish a preassembled PPTX through the normal artifact contract."""
+    scope = scope or MemoryScope()
+    write_tags = TagFilter(write_tags).tags
+    if not scope.permits(scope.bank_id, write_tags):
+        raise ValueError("artifact write tags are outside the trusted scope")
+    if not source.is_file() or not title.strip():
+        raise ValueError("PPTX source and title are required")
+
+    artifact_id = str(uuid.uuid4())
+    directory = artifacts_root() / artifact_id
+    directory.mkdir(parents=True, exist_ok=False)
+    filename = _filename(title.strip(), file_name, "pptx")
+    destination = directory / filename
+    try:
+        shutil.copyfile(source, destination)
+        artifact = Artifact(
+            id=artifact_id,
+            format="pptx",
+            title=title.strip(),
+            filename=filename,
+            size=destination.stat().st_size,
+            download_url=f"/api/artifacts/{artifact_id}/download",
         )
         (directory / "metadata.json").write_text(
             json.dumps(

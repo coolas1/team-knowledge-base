@@ -42,7 +42,7 @@ export async function buildModelServices(
         name: config.modelName,
         api: config.modelApi,
         reasoning: config.modelReasoning,
-        input: ["text"],
+        input: config.modelImageInput ? ["text", "image"] : ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: config.contextWindow,
         maxTokens: config.maxOutputTokens,

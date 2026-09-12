@@ -4,6 +4,7 @@ import {
   applyCompletion,
   deleteConversationWithMemory,
   applyFailure,
+  messagesFromDetail,
   optimisticMessages,
   reconcileMessages,
 } from '../session-transcript'
@@ -57,6 +58,19 @@ describe('session transcript reconciliation', () => {
     expect(reconcileMessages(local, detail)).toEqual([
       expect.objectContaining({ id: 'u1', status: 'interrupted' }),
     ])
+  })
+
+  it('restores a generated PPT attachment link from the durable assistant message', () => {
+    const download = '/api/artifacts/9b8a4870-fb11-43f8-a9c3-0a4f1391ac58/download'
+    const detail = {
+      id: 's1', messageCount: 2, streaming: false,
+      messages: [
+        { id: 'u1', role: 'user' as const, text: '生成 PPT', status: 'completed' as const },
+        { id: 'a1', role: 'assistant' as const, text: `[下载 PPT](${download})`, status: 'completed' as const },
+      ],
+    }
+
+    expect(messagesFromDetail(detail)[1].text).toContain(download)
   })
 
   it('forgets long-term memory before deleting a conversation', async () => {

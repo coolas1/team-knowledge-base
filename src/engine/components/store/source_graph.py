@@ -79,17 +79,32 @@ class SourceNeo4jClient(Neo4jClient):
                         ids=ids,
                     )
 
-    async def upsert_document_node(self, doc_id, title, file_type, overview=""):
+    async def upsert_document_node(
+        self,
+        doc_id,
+        title,
+        file_type,
+        overview="",
+        version_number=1,
+        is_current=True,
+    ):
         bank, tags = await self._owner(doc_id)
         async with self._driver.session() as session:
             await session.run(
-                "MERGE (d:Document {doc_id: $id}) SET d.bank_id=$bank, d.tags=$tags, d.title=$title, d.file_type=$file_type, d.overview=$overview",
+                """
+                MERGE (d:Document {doc_id: $id})
+                SET d.bank_id=$bank, d.tags=$tags, d.title=$title,
+                    d.file_type=$file_type, d.overview=$overview,
+                    d.version_number=$version_number, d.is_current=$is_current
+                """,
                 id=doc_id,
                 bank=bank,
                 tags=tags,
                 title=title,
                 file_type=file_type,
                 overview=overview,
+                version_number=version_number,
+                is_current=is_current,
             )
 
     async def upsert_entity(self, entity: EntityData, source: EntitySource):

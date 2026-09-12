@@ -33,6 +33,10 @@ def stubs(monkeypatch, tmp_path):
     at call time, so patching deps-module attributes would be ignored."""
 
     made = {}
+    # startup() mutates the MCP singleton; restore hooks after this test so
+    # selecting frontend tests before agent tests does not leak FakePlugin.
+    from src.agent.tkb.mcp import server as mcp_server
+    monkeypatch.setattr(mcp_server, "_hooks", mcp_server._hooks)
 
     async def fake_init_db():
         made["init_db"] = True

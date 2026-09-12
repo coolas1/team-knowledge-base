@@ -1,7 +1,7 @@
 import type { PiAgentEvent } from '../api/client'
 
 export interface ActivityRecord { key: string; label: string; failed: boolean }
-const labels: Record<string, string> = { execute: '执行程序', discover: '查找可复用工具', test: '测试工具', save: '工具已保存', reuse: '复用工具', retire: '工具已停用', failure: '工具失败', repair: '修复程序' }
+const labels: Record<string, string> = { execute: '执行程序', discover: '查找可复用工具', test: '测试工具', save: '工具已保存', reuse: '复用工具', retire: '工具已停用', failure: '工具失败', repair: '修复程序', ppt: '生成图片式 PPT' }
 export function appendActivity(current: ActivityRecord[], event: PiAgentEvent): ActivityRecord[] {
   if (event.type !== 'tool.start' && event.type !== 'tool.result') return current
   if (!event.activity) return current

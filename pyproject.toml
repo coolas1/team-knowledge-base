@@ -42,3 +42,6 @@ testpaths = ["tests"]
 markers = [
     "integration: requires live Postgres+Neo4j+Ollama (set RUN_INTEGRATION=1)",
 ]
+
+[tool.ruff]
+extend-exclude = ["src/agent/ppt/vendor"]

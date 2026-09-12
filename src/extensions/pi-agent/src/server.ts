@@ -75,9 +75,14 @@ function sendSse(response: ServerResponse, event: unknown): void {
 
 export function createPiAgentHttpServer(
   sharedRuntime: AgentRuntimeApi,
-  options: { maxRequestBytes?: number; scopes?: Pick<ScopedRuntimeRegistry, "resolve"> } = {},
+  options: {
+    maxRequestBytes?: number;
+    scopes?: Pick<ScopedRuntimeRegistry, "resolve">;
+    sseHeartbeatMs?: number;
+  } = {},
 ): Server {
   const maxRequestBytes = options.maxRequestBytes ?? 1_048_576;
+  const sseHeartbeatMs = options.sseHeartbeatMs ?? 15_000;
   return createServer(async (request, response) => {
     const method = request.method ?? "GET";
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -142,6 +147,15 @@ export function createPiAgentHttpServer(
           "x-accel-buffering": "no",
         });
         response.flushHeaders();
+        // Image generation can be silent for more than a minute. Send SSE
+        // comments while no model/tool event is available so browsers and
+        // intermediate proxies do not treat a healthy foreground turn as an
+        // idle connection. Comments are ignored by EventSource parsers.
+        const heartbeat = sseHeartbeatMs > 0
+          ? setInterval(() => {
+              if (!response.writableEnded) response.write(": keep-alive\n\n");
+            }, sseHeartbeatMs)
+          : undefined;
         response.on("close", () => {
           if (!response.writableEnded) void runtime.cancel(sessionId);
         });
@@ -161,6 +175,7 @@ export function createPiAgentHttpServer(
             sendSse(response, { type: "message.failed", ...errorBody(error) });
           }
         } finally {
+          if (heartbeat) clearInterval(heartbeat);
           response.end();
         }
         return;

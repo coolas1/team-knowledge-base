@@ -21,6 +21,7 @@ describe("TKB Pi extension entry point", () => {
       "tkb_query_graph",
       "tkb_list_documents",
       "tkb_generate_document",
+      "tkb_generate_image_ppt",
     ]);
     expect(events).toContain("session_start");
   });

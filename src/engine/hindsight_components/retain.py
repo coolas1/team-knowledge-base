@@ -313,6 +313,9 @@ class RetainEngine:
         from hashlib import sha256
 
         cache = cache or {}
+        # Validate before the per-chunk degradation boundary: a configuration
+        # error must not look like successful retention without facts.
+        provider_identity = getattr(self._providers, "extraction_identity", None)
         semaphore = asyncio.Semaphore(self._options.retain_chunk_concurrency)
 
         async def extract_chunk(
@@ -327,7 +330,8 @@ class RetainEngine:
                 key = sha256(
                     json.dumps(
                         [
-                            "tkb-extraction-v3",
+                            "tkb-extraction-v4",
+                            provider_identity,
                             extraction_context(chunk_input),
                             chunk_input.source_type,
                             chunk_input.title,
