@@ -34,7 +34,7 @@ import { buildSkillReadTool } from "./skill-reader.js";
 import { enabledTkbTools } from "./tools.js";
 import { AUTHORING_NAMES, AUTHORING_PROMPT, AuthoringBudget, authoringActivity, buildAuthoringTools } from "./authoring.js";
 import { ToolLibrary } from "./tool-library.js";
-import { RunnerClient, type RunnerHealth } from "./runner-client.js";
+import { redact, RunnerClient, type RunnerHealth } from "./runner-client.js";
 import { buildConversationMemoryExtension } from "./conversation-memory.js";
 import {
   assertSafeTranscriptId,
@@ -584,6 +584,10 @@ export class PiAgentRuntime implements AgentRuntimeApi {
           status, errorCode, timestamp: new Date().toISOString(),
         }).catch(() => undefined);
         this.logTranscript(status, id, accepted.id, errorCode);
+        console.error(JSON.stringify({
+          event: "turn_failed", session_id: id, turn_id: accepted.id,
+          code: errorCode, error: redact(error instanceof Error ? error.message : String(error)),
+        }));
         await emit({
           type: "message.failed",
           error: status === "cancelled" ? "agent run was cancelled" : "agent run failed",

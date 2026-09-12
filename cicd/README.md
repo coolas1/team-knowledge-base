@@ -42,6 +42,10 @@ checkout (e.g. `git clean -fdx` from the parent, or deleting the directory)
 also wipes `deploy.env` and the deploy state. Volumes, images, and the
 systemd units survive; restore `deploy.env` from the source `.env` plus the
 proxy/`npm_config_cache` lines (install step 1 below) and re-run step 2.
+`deploy.env` also carries `PI_AGENT_MAX_RUN_SECONDS=300` (the LAN LLM
+backend's mean request time is ~128s, so the compose default of 180s kills
+healthy multi-iteration turns) — the setting lives in the source `.env`
+too, so a plain restore keeps it; do not drop it back to 180.
 
 ## Self-update
 
