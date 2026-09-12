@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,13 @@ spec = importlib.util.spec_from_file_location(
 )
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
+
+consolidation_spec = importlib.util.spec_from_file_location(
+    "parity_consolidation",
+    Path(__file__).parents[1] / "benchmark/memory-parity/run_consolidation.py",
+)
+consolidation = importlib.util.module_from_spec(consolidation_spec)
+consolidation_spec.loader.exec_module(consolidation)
 
 
 def test_reasoning_is_counted_once_for_both_provider_conventions():
@@ -67,3 +75,51 @@ def test_missing_or_changed_evidence_cannot_pass_acceptance():
     row["status"] = "degraded"
     with pytest.raises(ValueError, match="evidence changed"):
         report.summarize(manifest, [row], [review], cases)
+
+
+async def test_consolidation_observer_forwards_completion_limit(monkeypatch):
+    captured = {}
+
+    class Response:
+        status_code = 200
+
+        async def aread(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, *, headers, json):
+            captured.update(json)
+            assert headers["Authorization"] == "Bearer secret"
+            return Response()
+
+    monkeypatch.setattr(consolidation.httpx, "AsyncClient", lambda **_kwargs: Client())
+    monkeypatch.setattr(
+        consolidation,
+        "settings",
+        SimpleNamespace(
+            llm=SimpleNamespace(
+                require_model=lambda: "test-model",
+                base_url="https://example.test/v1",
+                api_key="secret",
+            )
+        ),
+    )
+
+    value = await consolidation.ObservedProvider()._complete(
+        "system", "user", json_mode=True, timeout=1, max_tokens=321
+    )
+
+    assert value == "{}"
+    assert captured["max_tokens"] == 321

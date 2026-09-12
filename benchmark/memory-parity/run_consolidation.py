@@ -72,7 +72,9 @@ class ObservedProvider(ProjectHindsightProviders):
         super().__init__()
         self.calls: list[dict] = []
 
-    async def _complete(self, system, user, *, json_mode, timeout):
+    async def _complete(
+        self, system, user, *, json_mode, timeout, max_tokens=None
+    ):
         payload = {
             "model": settings.llm.require_model(),
             "temperature": 0,
@@ -84,6 +86,8 @@ class ObservedProvider(ProjectHindsightProviders):
         if json_mode:
             payload["messages"][0]["content"] += "\nReturn a valid JSON object."
             payload["response_format"] = {"type": "json_object"}
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
