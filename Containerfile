@@ -17,14 +17,32 @@
 # Run:    via docker-compose.yml (webapp service), or:
 #         podman run --rm -p 8000:8000 --env-file .env team-kb-webapp
 
-FROM docker.io/library/python:3.12-slim
+FROM docker.io/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
 
 # System libraries:
 #   tesseract-ocr          - OCR binary for image documents (pytesseract)
 #   libgomp1               - OpenMP runtime for torch (reranker)
+#   libreoffice-impress    - render generated PPTX before publication
+#   poppler-utils          - render LibreOffice's PDF output for validation
+#   fonts-noto-cjk         - exact local Chinese and Latin slide typography
 #   ca-certificates, curl  - to fetch the Node 22 binary
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# Keep all fixed OS packages before application source so ordinary code edits
+# retain this large layer. Regional Debian mirrors are local build options;
+# upstream remains the reproducible default.
+ARG DEBIAN_MIRROR=""
+ARG DEBIAN_SECURITY_MIRROR=""
+RUN if [ -n "$DEBIAN_SECURITY_MIRROR" ]; then \
+      sed -i "s#http://deb.debian.org/debian-security#${DEBIAN_SECURITY_MIRROR}#g" \
+        /etc/apt/sources.list.d/debian.sources; \
+    fi \
+ && if [ -n "$DEBIAN_MIRROR" ]; then \
+      sed -i "s#http://deb.debian.org/debian#${DEBIAN_MIRROR}#g" \
+        /etc/apt/sources.list.d/debian.sources; \
+    fi \
+ && apt-get update && apt-get install -y --no-install-recommends \
         tesseract-ocr libgomp1 ca-certificates curl \
+        libreoffice-impress poppler-utils fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # Node 22 (Vite 6 requires Node >=20; Debian's nodejs is v18, too old).
@@ -104,10 +122,6 @@ RUN cd src/frontend/webapp/client \
 COPY src/ ./src/
 COPY config/ ./config/
 RUN /app/.venv/bin/python /app/src/agent/ppt/verify_vendor.py
-# Image decks must actually open and render before publication.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libreoffice-impress poppler-utils fonts-noto-cjk \
-    && rm -rf /var/lib/apt/lists/*
 # The runtime semantic version (see src/frontend/webapp/server/version.py).
 COPY VERSION ./
 

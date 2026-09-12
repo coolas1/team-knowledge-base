@@ -1,9 +1,17 @@
 import io
 
-from PIL import Image
+from PIL import Image, ImageDraw
 import pytest
 
-from src.agent.ppt.composition import compose, regions, verify_composite, check_boxes
+from src.agent.ppt.composition import (
+    _font,
+    _wrap,
+    check_boxes,
+    compose,
+    regions,
+    render_text,
+    verify_composite,
+)
 
 
 def png(size, color):
@@ -48,3 +56,49 @@ def test_invalid_regions_and_missing_assets_refused():
         check_boxes([{"box": [0, 0, 100, 100]}, {"box": [50, 50, 100, 100]}])
     with pytest.raises(ValueError, match="missing"):
         compose(png((2560, 1440), "navy"), ["a"], ())
+
+
+def test_mixed_text_wrap_keeps_latin_terms_intact():
+    canvas = Image.new("RGB", (1000, 400), "white")
+    draw = ImageDraw.Draw(canvas)
+    lines = _wrap(
+        draw,
+        "Hindsight Worker Consolidation Mental Model Recall Reflect",
+        _font(36),
+        310,
+    )
+    assert all(
+        any(term in line for line in lines)
+        for term in (
+            "Hindsight",
+            "Worker",
+            "Consolidation",
+            "Mental Model",
+            "Recall",
+            "Reflect",
+        )
+    )
+    assert " ".join(lines).split() == [
+        "Hindsight",
+        "Worker",
+        "Consolidation",
+        "Mental",
+        "Model",
+        "Recall",
+        "Reflect",
+    ]
+
+
+def test_comparison_layout_has_two_distinct_panels():
+    data = render_text(
+        png((2560, 1440), "navy"),
+        {
+            "title": "处理方式对比",
+            "points": ["旧流程", "成本高", "新流程", "按需检索"],
+            "layout": "左右对比",
+            "reference_document_ids": [],
+        },
+    )
+    with Image.open(io.BytesIO(data)) as image:
+        assert image.getpixel((182, 500)) != image.getpixel((1280, 500))
+        assert image.getpixel((2378, 500)) != image.getpixel((1280, 500))

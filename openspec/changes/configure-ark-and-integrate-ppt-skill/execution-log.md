@@ -125,3 +125,12 @@
 - 成品 artifact `31083cc6-8ff6-4dc6-b4cc-8c66508ef8c8`，10 页、10 份演讲者备注。现场视觉抽查发现初版主体版式过于一致，随后在不新增图片模型请求的前提下按架构、流程、分层列表和总结卡片进行本地精排并清除旧文字底影；最终下载 1,811,192 字节，SHA-256 `8907c146a506223f907bd7335bc0c7ef267a7f8b973c000e90edba918f8e71a8`。
 - 定向检查：Pi server/tools/PPT-chat 20 tests 通过；PPT generator/quality 11 tests 通过。最终全量检查为 Python 486 passed / 39 skipped、ruff 全库通过；Pi 安全门禁/typecheck/108 tests/build 通过；SPA 63 tests/build 通过；OpenSpec strict validate 41/41。测试临时目录和本地验收副本在执行后删除。
 - 最终标准 compose build 与 recreate 成功；Webapp `/health` 为 ok，Pi health/MCP 为 ok，附件重建后仍以 HTTP 200 下载且大小为 1,811,192 字节。最终 webapp/pi-agent 镜像 ID 为 `3eca12696342` / `b56b7d5e2cc4`。
+
+## 第八批现场失败终态修复（2026-09-12）
+
+- 会话 `01a09495-f892-7074-91ad-3bf0df75e545` 的原始记录显示：第 3 页因 `Hindsight`、`Worker`、`Consolidation` 等英文术语被逐字符换行而未通过视觉检查；用户发送“继续”后的新调用在第 7 页因要求左右对比、实际仍是两列卡片而失败。随后一次工具意图因模型输出长度截断而未执行。界面显示的多条工具活动不等于全部产生了图片请求。
+- 混排换行改为保留普通 Latin/数字技术词，只有中日韩字符继续按字换行；comparison/对比版式改为带中央分隔线的明确左右双面板。新增回归测试覆盖术语完整性和双面板像素结构。
+- 移除 PPT 专属“一轮一次”预算，仍使用 Agent 通用工具调用上限；单次 PPT 调用内部保持每页最多两次图片生成/视觉检查。整个 PPT 工具最终失败时返回 `terminate`，运行时把脱敏后的失败详情写成正常 `message.completed`；模型工具参数或空回答达到输出长度上限时也转换为明确的正常终态，避免 `agent run failed`。系统提示同时要求精简页面参数，用户可在下一条消息中再次发起生成。
+- 验证：PPT 定向 Python 13 passed；Pi 定向 8 passed；Python 全库 488 passed / 39 skipped；Pi 安全门禁、typecheck、110 tests 和 build 通过。保留既有 Starlette 与 Windows SSE 清理 warning。本次没有调用文本或图片模型，也没有新增付费 usage。
+- 标准 Webapp 镜像重建暴露出 LibreOffice 系统依赖层位于源码 COPY 之后：任何业务改动都会重新下载全部系统包。将 LibreOffice、Poppler 与 Noto CJK 移入源码无关的固定系统层，并增加可选 Debian/安全镜像构建参数；运行时仍保留真实 PPTX 渲染校验。
+- 上游 Debian 首次构建先后出现单包 502 和整体连接超时；未删除渲染依赖或跳过检查，改用显式阿里云 Debian/安全镜像参数后标准 Webapp 构建成功。相同配置二次构建确认系统依赖层命中缓存。Pi 构建成功，两个服务 force-recreate 后均运行；Webapp `/health=ok`，Pi health/MCP 均 ok。部署镜像 ID 为 webapp `e137f4470380`、pi-agent `75e81281e5ee`。

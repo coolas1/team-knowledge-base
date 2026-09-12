@@ -24,6 +24,7 @@ type PiToolResult = {
     fallback?: boolean;
   };
   isError: boolean;
+  terminate?: boolean;
 };
 
 function errorMessage(error: unknown): string {
@@ -47,6 +48,7 @@ async function executeMcpTool(
         content: [{ type: "text", text: `PPT generation failed: ${summary}. Do not call this tool again in this turn; report this failure to the user.` }],
         details: { mcpTool, arguments: args, activity: "ppt", errorSummary: summary },
         isError: false,
+        terminate: true,
       };
     }
     const payload = parsedObject(result.text);
@@ -67,6 +69,7 @@ async function executeMcpTool(
         content: [{ type: "text", text: `PPT generation failed: ${summary}. Do not call this tool again in this turn; report this failure to the user.` }],
         details: { mcpTool, arguments: args, activity: "ppt", errorSummary: summary },
         isError: false,
+        terminate: true,
       };
     }
     throw new Error(redact(`TKB tool ${mcpTool} failed: ${errorMessage(error)}`));
@@ -131,7 +134,6 @@ export interface BuildToolsOptions {
   config?: TkbAdapterConfig;
   turnDeadline?: TurnDeadlineBudget;
   fallbackBudget?: SearchFallbackBudget;
-  pptBudget?: SearchFallbackBudget;
 }
 
 function parsedObject(text: string): Record<string, unknown> | undefined {
@@ -301,7 +303,6 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
   const normal = config.defaultToolTimeoutMs;
   const deep = config.deepToolTimeoutMs;
   const ppt = config.pptToolTimeoutMs;
-  const pptBudget = options.pptBudget ?? new SearchFallbackBudget();
 
   const tools = [
     defineTool({
@@ -478,24 +479,15 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
       spec: pptSpec,
       file_name: Type.Optional(Type.String()),
     }),
-    execute: (_id, params, signal) => {
-      if (!pptBudget.claim()) {
-        return Promise.resolve({
-          content: [{ type: "text" as const, text: "PPT generation was already attempted in this turn. Report the first result without retrying." }],
-          details: { mcpTool: "generate_image_ppt", arguments: {}, activity: "ppt" as const },
-          isError: true,
-          terminate: true,
-        });
-      }
-      return executeMcpTool(
+    execute: (_id, params, signal) =>
+      executeMcpTool(
         client,
         "generate_image_ppt",
         { spec: params.spec, file_name: params.file_name ?? null },
         signal,
         ppt,
         true,
-      );
-    },
+      ),
   })] as ToolDefinition[];
 }
 

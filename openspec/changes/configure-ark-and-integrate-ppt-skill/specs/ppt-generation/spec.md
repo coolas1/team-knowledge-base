@@ -63,6 +63,10 @@ The system SHALL expose generation progress through the existing chat tool-event
 - **WHEN** a provider, rendering or validation stage fails
 - **THEN** the chat reports the failing stage and known usage without creating a hidden background retry
 
+#### Scenario: Terminal generation failure is returned
+- **WHEN** the foreground PPT tool exhausts its internal per-page attempts and returns a known failure
+- **THEN** the Agent turn completes with that failure as a visible answer instead of emitting a generic agent-run failure or automatically invoking the whole deck again
+
 ### Requirement: Scope applies throughout presentation lifecycle
 The system SHALL enforce trusted bank/tag permissions for source reads, reference assets, skill execution and attachment download. Credentials MUST remain server-side. Source or authorization changes SHALL prevent further unauthorized generation and access.
 
@@ -91,6 +95,14 @@ Each page SHALL pass structural and visual checks for content, readable text, nu
 #### Scenario: A page fails visual checks
 - **WHEN** required text is missing or figures are incorrect
 - **THEN** the page remains unaccepted and the deck is not reported as complete
+
+#### Scenario: Mixed Chinese and Latin text is composed
+- **WHEN** a locally rasterized title or point contains ordinary Latin technical terms
+- **THEN** line wrapping preserves each term as a unit while keeping it within the assigned text region
+
+#### Scenario: A comparison layout is requested
+- **WHEN** a page requests a comparison or left-right layout
+- **THEN** the final composition uses two visually distinct side-by-side panels and visual QA evaluates that structure
 
 #### Scenario: Final download is offered
 - **WHEN** a skill invocation is completed

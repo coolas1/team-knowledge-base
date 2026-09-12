@@ -68,7 +68,8 @@ const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent
 - 达到调用限制时，停止探索并依据已经获得的证据作答；工具错误必须如实处理。
 - 深度检索返回 degraded 或 fallback 标记时，继续使用现有证据作答，并在答案中说明检索发生了降级或快速兜底。
 - 用户提出任何 PPT、PPTX 或 PowerPoint 生成请求时，先读取 tkb-image-ppt skill，再使用 tkb_generate_image_ppt 在当前对话中直接生成；不得改用 tkb_generate_document。Word 或 PDF 才使用 tkb_generate_document。
-- 图片 PPT 只调用一次生成工具。生成成功后，在最终回答中原样使用工具返回的 download_url 给出 Markdown 下载链接，并说明页面元素不可逐项编辑；不得虚构 Slidev 或其他链接。`;
+- 图片 PPT 的工具参数保持精简，每页只保留必要标题、要点、布局和简洁讲稿，避免在参数中重复文档全文或解释生成过程。
+- 图片 PPT 的单次工具调用会在每页视觉检查不通过时内部重试。生成失败后停止当前轮次并如实报告，等待用户决定是否再次生成。生成成功后，在最终回答中原样使用工具返回的 download_url 给出 Markdown 下载链接，并说明页面元素不可逐项编辑；不得虚构 Slidev 或其他链接。`;
 
 export interface ToolActivity { activity?: string; jobId?: string; artifactId?: string; version?: number; errorSummary?: string }
 export type PiRuntimeEvent =
@@ -200,7 +201,6 @@ interface ManagedSession {
   budget: ExecutionBudget;
   turnDeadline: TurnDeadlineBudget;
   fallbackBudget: SearchFallbackBudget;
-  pptBudget: SearchFallbackBudget;
   lastAccess: number;
   active?: {
     clientMessageId: string;
@@ -236,6 +236,38 @@ function textFromMessage(message: unknown): string {
     )
     .map((part) => part.text)
     .join("\n");
+}
+
+export function terminalPptFailureFrom(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  const record = message as {
+    role?: unknown;
+    toolName?: unknown;
+    details?: { errorSummary?: unknown };
+  };
+  if (record.role !== "toolResult" || record.toolName !== "tkb_generate_image_ppt") {
+    return undefined;
+  }
+  const detailSummary = record.details?.errorSummary;
+  let summary: string;
+  if (typeof detailSummary === "string" && detailSummary.trim()) {
+    summary = detailSummary.trim();
+  } else {
+    const toolText = textFromMessage(message);
+    if (!/output token limit|arguments may be truncated|was not executed/i.test(toolText)) {
+      return undefined;
+    }
+    summary = "模型输出达到长度上限，PPT 工具参数不完整，因此工具没有执行";
+  }
+  return `PPT 生成失败：${summary}\n\n本轮已正常结束，没有自动重复调用。你可以调整要求后再次生成。`;
+}
+
+export function terminalLengthFailureFrom(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  const record = message as { role?: unknown; stopReason?: unknown };
+  if (record.role !== "assistant" || record.stopReason !== "length") return undefined;
+  if (textFromMessage(message).trim()) return undefined;
+  return "本次模型输出达到长度上限，未能形成完整的 PPT 生成参数。本轮没有生成文件，请缩短页数或内容后再次生成。";
 }
 
 export function sessionTitleFrom(message: string): string | undefined {
@@ -493,7 +525,6 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     managed.budget.reset();
     managed.turnDeadline.reset();
     managed.fallbackBudget.reset();
-    managed.pptBudget.reset();
     managed.authoringBudget.reset();
     const acceptance = this.transcripts.accept(id, message, clientMessageId);
     managed.active = { clientMessageId, acceptance };
@@ -545,10 +576,17 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       if (managed.budget.limitReached) {
         throw new RuntimeLimitError("tool_calls", "agent exceeded its tool call limit");
       }
-      const answer = [...managed.session.messages]
+      const sessionMessages = [...managed.session.messages];
+      const terminalPptFailure = terminalPptFailureFrom(
+        sessionMessages[sessionMessages.length - 1],
+      );
+      const terminalLengthFailure = terminalLengthFailureFrom(
+        sessionMessages[sessionMessages.length - 1],
+      );
+      const answer = sessionMessages
         .reverse()
         .find((candidate) => (candidate as { role?: unknown }).role === "assistant");
-      const answerText = textFromMessage(answer).trim();
+      const answerText = terminalPptFailure ?? terminalLengthFailure ?? textFromMessage(answer).trim();
       if (!answerText) throw new Error("agent returned no answer");
       const assistantMessageId = randomUUID();
       await this.transcripts.append({
@@ -679,7 +717,6 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       this.config.turnReserveSeconds,
     );
     const fallbackBudget = new SearchFallbackBudget();
-    const pptBudget = new SearchFallbackBudget();
     const authoringBudget = new AuthoringBudget(this.config.maxCodeJobs, this.config.maxBuildAttempts);
     const tools = enforceToolBudget(
       [
@@ -688,7 +725,6 @@ export class PiAgentRuntime implements AgentRuntimeApi {
           config: this.adapterConfig,
           turnDeadline,
           fallbackBudget,
-          pptBudget,
         }),
         buildSkillReadTool(this.skillsDir),
         ...(this.library ? buildAuthoringTools(this.library, this.runner, authoringBudget) : []),
@@ -714,7 +750,6 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       authoringBudget,
       turnDeadline,
       fallbackBudget,
-      pptBudget,
       lastAccess: Date.now(),
     };
   }

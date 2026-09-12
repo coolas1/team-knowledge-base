@@ -42,7 +42,7 @@ describe("chat-native image PPT tool", () => {
     });
   });
 
-  it("allows only one PPT invocation per chat turn", async () => {
+  it("does not impose a PPT-specific per-turn invocation budget", async () => {
     const client = {
       callTool: vi.fn(async () => ({ text: "{}", isError: false })),
     } as unknown as TkbMcpClient;
@@ -58,10 +58,9 @@ describe("chat-native image PPT tool", () => {
     };
 
     await tool.execute("first", params, undefined, undefined, {} as never);
-    const repeated = await tool.execute("second", params, undefined, undefined, {} as never);
+    await tool.execute("second", params, undefined, undefined, {} as never);
 
-    expect(client.callTool).toHaveBeenCalledOnce();
-    expect(repeated).toMatchObject({ isError: true, terminate: true });
+    expect(client.callTool).toHaveBeenCalledTimes(2);
   });
 
   it("returns a visible terminal result when generation fails", async () => {
@@ -91,6 +90,7 @@ describe("chat-native image PPT tool", () => {
 
     expect(result).toMatchObject({
       isError: false,
+      terminate: true,
       details: { activity: "ppt", errorSummary: expect.stringContaining("visual_check_failed") },
     });
     expect(result.content[0]).toMatchObject({ text: expect.stringContaining("Do not call") });

@@ -75,6 +75,8 @@ services:
       # (verified with docker-compose 2.40), so ${VAR:-} alone would silently
       # send plain `compose build` installs back to upstream npmjs.
       args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-}
         PYPI_MIRROR: ${PYPI_MIRROR:-}
         GIT_COMMIT: ${GIT_COMMIT:-}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
