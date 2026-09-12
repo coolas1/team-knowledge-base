@@ -16,7 +16,9 @@ type PiToolResult = {
   details: {
     mcpTool: string;
     arguments: Record<string, unknown>;
-    activity?: "degraded" | "fallback";
+    activity?: "degraded" | "fallback" | "ppt";
+    artifactId?: string;
+    errorSummary?: string;
     searchId?: string;
     degraded?: boolean;
     fallback?: boolean;
@@ -34,16 +36,39 @@ async function executeMcpTool(
   args: Record<string, unknown>,
   signal: AbortSignal | undefined,
   timeoutMs: number,
+  reportFailureAsResult = false,
 ): Promise<PiToolResult> {
   try {
     const result = await client.callTool(mcpTool, args, { signal, timeoutMs });
-    if (result.isError) throw new Error(result.text || "MCP returned a tool error");
+    if (result.isError) {
+      if (!reportFailureAsResult) throw new Error(result.text || "MCP returned a tool error");
+      const summary = redact(result.text || "MCP returned a tool error");
+      return {
+        content: [{ type: "text", text: `PPT generation failed: ${summary}. Do not call this tool again in this turn; report this failure to the user.` }],
+        details: { mcpTool, arguments: args, activity: "ppt", errorSummary: summary },
+        isError: false,
+      };
+    }
+    const payload = parsedObject(result.text);
     return {
       content: [{ type: "text", text: result.text || "TKB image result." }, ...(result.images ?? [])],
-      details: { mcpTool, arguments: args },
+      details: {
+        mcpTool,
+        arguments: args,
+        ...(mcpTool === "generate_image_ppt" ? { activity: "ppt" as const } : {}),
+        ...(typeof payload?.id === "string" ? { artifactId: payload.id } : {}),
+      },
       isError: result.isError,
     };
   } catch (error) {
+    if (reportFailureAsResult) {
+      const summary = redact(errorMessage(error));
+      return {
+        content: [{ type: "text", text: `PPT generation failed: ${summary}. Do not call this tool again in this turn; report this failure to the user.` }],
+        details: { mcpTool, arguments: args, activity: "ppt", errorSummary: summary },
+        isError: false,
+      };
+    }
     throw new Error(redact(`TKB tool ${mcpTool} failed: ${errorMessage(error)}`));
   }
 }
@@ -90,8 +115,7 @@ const GENERATE_DOCUMENT_PARAMS = Type.Object({
   format: Type.Union([
     Type.Literal("docx"),
     Type.Literal("pdf"),
-    Type.Literal("pptx"),
-  ], { description: "Output format: Word, PDF, or PowerPoint" }),
+  ], { description: "Output format: Word or PDF" }),
   title: Type.String({ minLength: 1, description: "Document title" }),
   content: Type.String({
     minLength: 1,
@@ -107,6 +131,7 @@ export interface BuildToolsOptions {
   config?: TkbAdapterConfig;
   turnDeadline?: TurnDeadlineBudget;
   fallbackBudget?: SearchFallbackBudget;
+  pptBudget?: SearchFallbackBudget;
 }
 
 function parsedObject(text: string): Record<string, unknown> | undefined {
@@ -275,6 +300,8 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
   const client = options.client ?? new TkbMcpClient(config);
   const normal = config.defaultToolTimeoutMs;
   const deep = config.deepToolTimeoutMs;
+  const ppt = config.pptToolTimeoutMs;
+  const pptBudget = options.pptBudget ?? new SearchFallbackBudget();
 
   const tools = [
     defineTool({
@@ -386,7 +413,7 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
       name: "tkb_generate_document",
       label: "Generate Document",
       description:
-        "Generate a downloadable Word (.docx), PDF, or PowerPoint (.pptx). PowerPoint output also includes editable Slidev Markdown. Use after drafting complete content.",
+        "Generate a downloadable Word (.docx) or PDF. For every PowerPoint request, use tkb_generate_image_ppt instead.",
       parameters: GENERATE_DOCUMENT_PARAMS,
       execute: (_id, params, signal) =>
         executeMcpTool(
@@ -443,19 +470,33 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
     context: Type.Optional(Type.String()), source_document_ids: Type.Optional(Type.Array(Type.String())),
     pages: Type.Array(pptPage, { minItems: 1, maxItems: 20 }),
   });
-  const controls = [
-    { name: "create_ppt", description: "Create an image presentation draft and return its user review link. Read tkb-image-ppt skill first.", parameters: Type.Object({ spec: pptSpec, session_id: Type.Optional(Type.String()) }) },
-    { name: "get_ppt", description: "Read persistent PPT progress, approvals and usage.", parameters: Type.Object({ identifier: Type.String() }) },
-    { name: "approve_ppt", description: "Get the user approval link for a PPT revision; does not approve automatically.", parameters: Type.Object({ identifier: Type.String(), revision: Type.Integer() }) },
-    { name: "cancel_ppt", description: "Cancel further generation at the user's request.", parameters: Type.Object({ identifier: Type.String(), revision: Type.Integer() }) },
-    { name: "retry_ppt", description: "Get explicit retry review link for a failed page.", parameters: Type.Object({ identifier: Type.String(), revision: Type.Integer(), page: Type.Integer() }) },
-    { name: "preview_ppt", description: "Read an actual slide image into the model context for inspection.", parameters: Type.Object({ identifier: Type.String(), page: Type.Integer() }) },
-  ];
-  return [...tools, ...controls.map((control) => defineTool({
-    name: `tkb_${control.name}`, label: "Image PPT", description: control.description,
-    parameters: control.parameters,
-    execute: (_id, params, signal) => executeMcpTool(client, control.name, params, signal, normal),
-  }))] as ToolDefinition[];
+  return [...tools, defineTool({
+    name: "tkb_generate_image_ppt",
+    label: "生成图片式 PPT",
+    description: "Use the bundled tkb-image-ppt skill to generate, visually verify, assemble, and attach an image-based PPTX in this chat. The call is foreground and bounded; no review page or background job is created.",
+    parameters: Type.Object({
+      spec: pptSpec,
+      file_name: Type.Optional(Type.String()),
+    }),
+    execute: (_id, params, signal) => {
+      if (!pptBudget.claim()) {
+        return Promise.resolve({
+          content: [{ type: "text" as const, text: "PPT generation was already attempted in this turn. Report the first result without retrying." }],
+          details: { mcpTool: "generate_image_ppt", arguments: {}, activity: "ppt" as const },
+          isError: true,
+          terminate: true,
+        });
+      }
+      return executeMcpTool(
+        client,
+        "generate_image_ppt",
+        { spec: params.spec, file_name: params.file_name ?? null },
+        signal,
+        ppt,
+        true,
+      );
+    },
+  })] as ToolDefinition[];
 }
 
 export function enabledTkbTools(options: BuildToolsOptions = {}): ToolDefinition[] {

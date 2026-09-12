@@ -3,7 +3,7 @@
 Deep recall uses a 45-second service deadline by default. Query analysis,
 embedding, each retrieval arm, and neural reranking are capped at 8, 10, 5,
 and 12 seconds respectively. Pi allows 60 seconds for the MCP tool inside a
-180-second turn and preserves the final 60 seconds for fallback and answer
+1200-second turn and preserves the final 60 seconds for fallback and answer
 synthesis. Keep this ordering when tuning values:
 
 ```text

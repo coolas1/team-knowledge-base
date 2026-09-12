@@ -35,7 +35,11 @@ describe("TkbMcpClient", () => {
       [new URL(config.mcpUrl), { "X-TKB-Scope-Token": "B" }],
       [new URL(config.mcpUrl), undefined],
     ]);
-    expect(raw.callTool).toHaveBeenCalledWith({ name: "search", arguments: { query: "same" } });
+    expect(raw.callTool).toHaveBeenCalledWith(
+      { name: "search", arguments: { query: "same" } },
+      undefined,
+      expect.objectContaining({ timeout: 60_000, maxTotalTimeout: 60_000 }),
+    );
   });
   it("returns MCP text and closes the connection", async () => {
     const raw = fakeClient();
@@ -124,6 +128,8 @@ describe("TkbMcpClient", () => {
     expect(raw.callTool).toHaveBeenNthCalledWith(
       1,
       { name: "recall_conversation_memory", arguments: { query: "remember", top_k: 3, mode: "fast" } },
+      undefined,
+      expect.objectContaining({ timeout: 60_000, maxTotalTimeout: 60_000 }),
     );
     expect(raw.callTool).toHaveBeenNthCalledWith(
       2,
@@ -131,6 +137,21 @@ describe("TkbMcpClient", () => {
         name: "enqueue_conversation_turn",
         arguments: { session_id: "s1", turn_id: "t1", user_text: "question", assistant_text: "answer" },
       },
+      undefined,
+      expect.objectContaining({ timeout: 60_000, maxTotalTimeout: 60_000 }),
+    );
+  });
+
+  it("passes a long foreground tool budget through to the MCP SDK", async () => {
+    const raw = fakeClient();
+    const client = new TkbMcpClient(loadTkbAdapterConfig({}), dependencies(raw));
+
+    await client.callTool("generate_image_ppt", {}, { timeoutMs: 900_000 });
+
+    expect(raw.callTool).toHaveBeenCalledWith(
+      { name: "generate_image_ppt", arguments: {} },
+      undefined,
+      expect.objectContaining({ timeout: 900_000, maxTotalTimeout: 900_000 }),
     );
   });
 });

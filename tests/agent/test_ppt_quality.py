@@ -11,7 +11,7 @@ import pytest
 from config.settings import settings
 from src.agent.ppt.assembly import Assembler, validate_pptx
 from src.agent.ppt.quality import VisualReviewer, validate_review
-from src.agent.ppt.store import PPTStore
+from src.agent.ppt.generator import ExecutionStore
 from src.agent.ppt.composition import compose
 
 
@@ -67,7 +67,7 @@ async def test_qa_transmits_slide_and_required_asset(monkeypatch, tmp_path):
         )
 
     review = VisualReviewer(
-        PPTStore(None, tmp_path), transport=httpx.MockTransport(handle)
+        ExecutionStore(tmp_path), transport=httpx.MockTransport(handle)
     )
     result = await review(
         {
@@ -95,7 +95,7 @@ def test_assembly_preserves_pages_notes_and_refuses_unverified_image(
 ):
     from src.agent.ppt import assembly
 
-    store = PPTStore(None, tmp_path)
+    store = ExecutionStore(tmp_path)
     spec = {
         "title": "验收",
         "style": "navy",
@@ -136,7 +136,7 @@ def test_assembly_preserves_pages_notes_and_refuses_unverified_image(
     )
     result = Assembler(store)(job, pages)
     validate_pptx(store.path(result["path"]), pages, spec)
-    assert result["download_url"] == "/api/ppt/jobs/test-job/download"
+    assert "download_url" not in result
     pages[1].qa = {"passed": False}
     with pytest.raises(ValueError, match="visual QA"):
         Assembler(store)(job, pages)

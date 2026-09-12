@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from src.agent.artifacts import generate_artifact, resolve_artifact
+from src.agent.artifacts import generate_artifact, publish_pptx, resolve_artifact
 
 
 def test_artifact_download_checks_scope_and_preserves_legacy_metadata(
@@ -97,3 +97,17 @@ def test_resolve_artifact_rejects_invalid_id(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError):
         resolve_artifact("../../etc/passwd")
+
+
+def test_publish_preassembled_pptx_uses_normal_download_contract(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+    source = tmp_path / "assembled.pptx"
+    source.write_bytes(b"preassembled")
+
+    artifact = publish_pptx(source, title="图片式演示", file_name="visual-deck")
+    path, resolved = resolve_artifact(artifact.id)
+
+    assert resolved == artifact
+    assert path.name == "visual-deck.pptx"
+    assert path.read_bytes() == b"preassembled"
+    assert artifact.download_url == f"/api/artifacts/{artifact.id}/download"

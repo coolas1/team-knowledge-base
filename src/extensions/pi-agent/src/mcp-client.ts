@@ -52,10 +52,14 @@ export interface McpClientLike {
       inputSchema?: Record<string, unknown>;
     }>;
   }>;
-  callTool(request: {
-    name: string;
-    arguments: Record<string, unknown>;
-  }): Promise<{
+  callTool(
+    request: {
+      name: string;
+      arguments: Record<string, unknown>;
+    },
+    resultSchema?: unknown,
+    options?: { signal?: AbortSignal; timeout?: number; maxTotalTimeout?: number },
+  ): Promise<{
     content?: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
     structuredContent?: unknown;
     isError?: boolean;
@@ -165,7 +169,15 @@ export class TkbMcpClient {
       options.signal,
       options.timeoutMs ?? this.config.defaultToolTimeoutMs,
       async (client) => {
-        const result = await client.callTool({ name: toolName, arguments: args });
+        // The MCP SDK has its own 60-second request deadline. Keep that
+        // deadline aligned with our per-tool budget; the surrounding
+        // withDeadline remains responsible for closing the transport.
+        const timeoutMs = options.timeoutMs ?? this.config.defaultToolTimeoutMs;
+        const result = await client.callTool(
+          { name: toolName, arguments: args },
+          undefined,
+          { signal: options.signal, timeout: timeoutMs, maxTotalTimeout: timeoutMs },
+        );
         const images = (result.content ?? []).filter(
           (part): part is { type: "image"; data: string; mimeType: string } =>
             part.type === "image" && typeof part.data === "string" &&

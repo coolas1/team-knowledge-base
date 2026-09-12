@@ -14,14 +14,16 @@ runtime skill installation. The application adapter deliberately changes:
 |---|---|
 | Built-in/GPT Image/AtlasCloud CLI | Explicit Ark Agent Plan Seedream provider |
 | User home .env and dynamic runtime bootstrap | Server-only IMAGE_* and frozen image dependencies |
-| Per-slide subagents | Persistent application workers, initially serial; Pi has no subagent dispatcher |
-| JSON dispatch state files | Transactional job/page/event records with revision, leases and budgets; export compatible assembly files |
-| Chat-based approval | Explicit UI approval bound to revision for outline/style/backend and sample |
+| Per-slide subagents | One bounded foreground skill executor, initially serial; Pi has no subagent dispatcher |
+| JSON dispatch state files | Invocation-local temporary files; only the verified PPTX is published as a normal artifact |
+| Chat-based approval | The user's chat request authorizes one bounded generation call; missing inputs are clarified in chat |
 | Local paths as assets | Authorized document assets with checked content identity |
 
 Preserve source reading, per-page context and layout variation, unified visual
-style, required-image preservation, sample approval, page QA, speaker notes and
-full-image PPTX assembly. Never use local text screenshots as generated slides.
+style, required-image preservation, an internal style sample, page QA, speaker notes and
+full-image PPTX assembly. Seedream generates the visual background; the adapter
+rasterizes exact title and point text with a packaged CJK font before QA so that
+Chinese and numeric fidelity do not depend on image-model typography.
 The source skill's default provider scripts are retained for provenance only and
 must not be invoked by the application.
 
@@ -34,10 +36,16 @@ test retained Chinese text, numeric values and the bridge icon while adding the
 requested orange circle. These two probes do not constitute full PPT acceptance.
 
 Approved adaptation 2026-09-12: required figures are composited locally into
-versioned, approval-visible regions with aspect-preserving resize and no crop.
+versioned, recorded regions with aspect-preserving resize and no crop.
 Asset pages use text style and empty-region instructions without image input,
 preventing sample-layout copying. Other pages may send a style sample to Seedream;
 final-image QA receives original assets and the sample.
 Background bytes and embedded pixel/source hashes are retained. The isolated
 upstream assembly module disables optional JPEG compression, and the adapter
 verifies exact final PNG bytes inside the PPTX. Vendored source stays unchanged.
+
+Chat-native acceptance on 2026-09-12 used one foreground tool invocation for a
+three-page synthetic deck: three Seedream calls and three Turbo QA calls, 51,167
+reported tokens, no unknown usage. LibreOffice 25.2.3.2 rendered all three pages;
+speaker notes and the persisted artifact download were verified. AFP, plan
+deduction and currency cost remain unknown.

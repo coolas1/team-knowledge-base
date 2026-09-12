@@ -161,6 +161,5 @@ class Assembler:
             "path": str(path.relative_to(self.store.root)).replace("\\", "/"),
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "pages": len(pages),
-            "download_url": f"/api/ppt/jobs/{job.id}/download",
             "render": rendered,
         }

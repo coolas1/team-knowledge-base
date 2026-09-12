@@ -559,7 +559,7 @@ export function AskPage() {
                 </div>
                 <h2>从团队知识中找到答案</h2>
                 <div className="ask-suggestions">
-                  {['总结最近上传的文档', '比较两份方案的差异', '查找已有的项目决策'].map(
+                  {['总结最近上传的文档', '比较两份方案的差异', '根据项目资料生成一份 PPT'].map(
                     (suggestion) => (
                       <button
                         type="button"

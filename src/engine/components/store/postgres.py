@@ -99,10 +99,6 @@ async def init_db() -> None:
 
     await migrate_file_summaries(engine)
 
-    from src.agent.ppt.models import migrate as migrate_ppt
-
-    await migrate_ppt(engine)
-
     # Existing deployments need an online expansion because create_all does not
     # add columns or indexes to an already-present table.
     async with engine.connect() as conn:

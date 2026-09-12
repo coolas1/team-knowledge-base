@@ -17,7 +17,7 @@ function client() {
 describe("TKB Pi tools", () => {
   it("maps engine and image presentation MCP tools", () => {
     const tools = buildAllTkbTools({ client: client() });
-    expect(tools).toHaveLength(17);
+    expect(tools).toHaveLength(12);
     expect(tools.map((tool) => tool.name)).not.toEqual(
       expect.arrayContaining([
         "recall_conversation_memory",
@@ -40,7 +40,7 @@ describe("TKB Pi tools", () => {
       "tkb_query_graph",
       "tkb_list_documents",
       "tkb_generate_document",
-      "tkb_create_ppt", "tkb_get_ppt", "tkb_approve_ppt", "tkb_cancel_ppt", "tkb_retry_ppt", "tkb_preview_ppt",
+      "tkb_generate_image_ppt",
     ]);
   });
 
@@ -51,14 +51,14 @@ describe("TKB Pi tools", () => {
     )!;
     await tool.execute(
       "call-2",
-      { format: "pptx", title: "Roadmap", content: "# Q1", file_name: "roadmap" },
+      { format: "pdf", title: "Roadmap", content: "# Q1", file_name: "roadmap" },
       undefined,
       undefined,
       {} as never,
     );
     expect(fake.callTool).toHaveBeenCalledWith(
       "generate_document",
-      { format: "pptx", title: "Roadmap", content: "# Q1", file_name: "roadmap" },
+      { format: "pdf", title: "Roadmap", content: "# Q1", file_name: "roadmap" },
       expect.any(Object),
     );
   });

@@ -103,3 +103,25 @@
 - 私有证据目录 `output/ark-ppt-acceptance/composite/`：presentation.pptx、state.json、events.json、integrity.json、restart.json、full-cache.json、e2e-recovery-controls.json、data-comparison.json 和 artifacts/revision-1/rendered。最终提交与部署回执存 acceptance-receipt.json；这一批完成后全部 33 项任务完成。
 
 - 实际 Pi 图片链路补验：同一真实会话只调用一次 tkb_preview_ppt 查看第二页，回答白底、页脚单行横排、标题和120万元均与图像一致；证据 agent-preview-events.txt。该检查只读取既有图片，未调用生图。浏览器 DOM 仍未验收（无可用浏览器），真实 Agent/API 与逐页渲染验收已覆盖本变更要求的实际入口。
+
+## 第八批：迁移为聊天内 Skill 调用（2026-09-12）
+
+- 删除独立 `/ppt` 客户端路由、导航、审批/轮询/重试界面，以及 PPT create/status/approve/retry/cancel API、worker 和 job/page/event 运行时。历史三张表不再创建或读写，部署不破坏性删表。普通 DOCX/PDF 和通用 artifact 下载保持兼容；聊天中的 PPT 统一由图片式 skill 生成。
+- Pi Agent 打包固定 `tkb-image-ppt` skill，只暴露 `tkb_generate_image_ppt`。每个聊天 turn 最多一次真实工具调用；页数、串行执行和最多两次图片尝试/页由服务端限定。MCP SDK 的默认 60 秒 deadline 已显式提升为 PPT 的 900 秒预算，Agent 总运行预算为 1200 秒。
+- Seedream 生成无字风格底图，程序使用 Noto CJK 精确栅格化标题与要点并遮蔽底图伪文字；必需原图仍按 `reference-composite-v1` 等比无裁切嵌入。Turbo 对最终整页图检查 text/numbers/assets/style/layout，固定上游组装并由 LibreOffice 渲染后才发布普通 artifact。
+- 真实会话 `01a09486-9abb-7c9f-b6fe-7aa31a53fd21` 通过 `/ask` 使用的 `/api/agent/sessions/.../messages` SSE 链路：先读取 skill，再单次调用生成工具，返回 artifact `0b8d4708-b2d8-449f-9595-9d16790e5c21`。刷新会话后链接仍存在；旧 `/api/ppt/jobs` 为 404，全程没有访问 `/ppt`。
+- 成品 951,608 字节，python-pptx 检查 3 页且三页 notes 非空；LibreOffice 25.2.3.2 打开并渲染为 3 页 PDF。逐页人工检查通过，中文清晰，`≤ 30秒/页` 与 `≥ 95%` 数值正确，无截断、重叠或伪文字。
+- 真实用量为 3 次 Seedream、3 次 Turbo QA、51,167 tokens、unknown_usage=0；图片模型 `doubao-seedream-5.0-lite`，Turbo 实际版本 `doubao-seed-2-1-turbo-260628`。AFP、套餐抵扣和货币费用未知，没有写成零成本。
+- 验收中先发现 MCP SDK 内置 60 秒超时和 Agent 自行扩大/重试参数，均通过回归测试修复；失败 run 未冒充成功。最终成功 run 每页一次图片请求，无自动修复。临时渲染预览和探针只位于 `.test-tmp`，不进入 Git。
+- 最终检查：ruff 全库通过；Python 486 passed / 39 skipped；Pi 本地安全门禁、typecheck、107 tests 和 build 通过；SPA 63 tests 和生产 build 通过；OpenSpec strict validate 通过。保留既有 Starlette/Windows SSE 清理 warning 与 Vite chunk 提示。
+- 标准 Docker build 最初分别遇到 Debian 单包 502 和 npm 旧 audit endpoint 400，均未绕过门禁；重试后 webapp/pi-agent 构建成功并重建服务。最终 webapp/pi-agent 镜像 ID 为 `4f97a703fcfa` / `3a8aafcc5c32`；Webapp `/health` 为 ok，Pi health/MCP 为 ok，模型路由仍为 Agent Plan Turbo，MCP 含 `generate_image_ppt`。
+- 第八批提交为 `refactor(agent): run PPT skill in chat`；准确 SHA 在提交后由 `git rev-parse HEAD` 报告，避免在同一提交内形成自引用。未纳入 `.gitignore` 与三个既有 Hindsight 工作区改动，未提交 key、真实生成材料或临时目录。
+
+## 第八批现场修复与十页交付（2026-09-12）
+
+- 用户从 `/ask` 请求唯一知识库文件的精致 PPT。第一次图片工具调用在约 116 秒静默期被下游断开并取消；界面重试随后错误调用通用 `generate_document`，产出约 71 KB 的普通 PPTX，并虚构 Slidev 链接。该产物不计为图片 PPT 验收。
+- Pi SSE 在无模型/工具事件时每 15 秒发送 comment heartbeat；浏览器解析器忽略 comment，BFF 原样中继。通用文档工具的聊天 schema 收窄为 DOCX/PDF，所有 PPT/PowerPoint 请求只暴露 `tkb_generate_image_ppt`。
+- 修复后真实会话 `01a09495-f892-7074-91ad-3bf0df75e545` 连续运行约 7 分钟，收到 29 次 heartbeat，仅调用一次图片 PPT 工具，通用文档工具零调用；最终 message.completed=1、message.failed=0。
+- 成品 artifact `31083cc6-8ff6-4dc6-b4cc-8c66508ef8c8`，10 页、10 份演讲者备注。现场视觉抽查发现初版主体版式过于一致，随后在不新增图片模型请求的前提下按架构、流程、分层列表和总结卡片进行本地精排并清除旧文字底影；最终下载 1,811,192 字节，SHA-256 `8907c146a506223f907bd7335bc0c7ef267a7f8b973c000e90edba918f8e71a8`。
+- 定向检查：Pi server/tools/PPT-chat 20 tests 通过；PPT generator/quality 11 tests 通过。最终全量检查为 Python 486 passed / 39 skipped、ruff 全库通过；Pi 安全门禁/typecheck/108 tests/build 通过；SPA 63 tests/build 通过；OpenSpec strict validate 41/41。测试临时目录和本地验收副本在执行后删除。
+- 最终标准 compose build 与 recreate 成功；Webapp `/health` 为 ok，Pi health/MCP 为 ok，附件重建后仍以 HTTP 200 下载且大小为 1,811,192 字节。最终 webapp/pi-agent 镜像 ID 为 `3eca12696342` / `b56b7d5e2cc4`。

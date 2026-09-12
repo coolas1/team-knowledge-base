@@ -71,7 +71,6 @@ class PPTSettings(BaseSettings):
     enabled: bool = False
     max_pages: int = Field(default=20, ge=1, le=20)
     default_pages: int = Field(default=8, ge=1, le=20)
-    concurrency: int = Field(default=1, ge=1, le=4)
 
 
 class EmbeddingSettings(BaseSettings):

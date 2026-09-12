@@ -16,12 +16,7 @@ export const ENGINE_MCP_CONTRACT: Record<string, ToolContract> = {
   remove_document: { required: ["doc_id"] },
   get_full_graph: { required: [] },
   generate_document: { required: ["format", "title", "content"] },
-  create_ppt: { required: ["spec"] },
-  get_ppt: { required: ["identifier"] },
-  approve_ppt: { required: ["identifier", "revision"] },
-  cancel_ppt: { required: ["identifier", "revision"] },
-  retry_ppt: { required: ["identifier", "revision", "page"] },
-  preview_ppt: { required: ["identifier", "page"] },
+  generate_image_ppt: { required: ["spec"] },
 };
 
 export const CONVERSATION_MEMORY_MCP_CONTRACT: Record<string, ToolContract> = {

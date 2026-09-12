@@ -67,9 +67,8 @@ const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent
 - 知识库回答必须列出依据的文档标题和 doc_id；没有充分证据时明确说明“知识库中未找到充分依据”。
 - 达到调用限制时，停止探索并依据已经获得的证据作答；工具错误必须如实处理。
 - 深度检索返回 degraded 或 fallback 标记时，继续使用现有证据作答，并在答案中说明检索发生了降级或快速兜底。
-- 用户要求视觉统一的图片式 PPT 时，读取 tkb-image-ppt skill，使用 tkb_create_ppt 并给出真实审批链接；后台生成不阻塞聊天。明确需要普通可编辑 PPT、Word 或 PDF 时继续使用 tkb_generate_document。
-- PPT 内容用独占一行的 --- 分隔页面，每页以 Markdown 标题开头。工具会同时生成 PPTX 和 Slidev 源文件。
-- 生成成功后，在最终回答中使用工具返回的 download_url 给出 Markdown 下载链接；PPT 还要给出 slidev_url。`;
+- 用户提出任何 PPT、PPTX 或 PowerPoint 生成请求时，先读取 tkb-image-ppt skill，再使用 tkb_generate_image_ppt 在当前对话中直接生成；不得改用 tkb_generate_document。Word 或 PDF 才使用 tkb_generate_document。
+- 图片 PPT 只调用一次生成工具。生成成功后，在最终回答中原样使用工具返回的 download_url 给出 Markdown 下载链接，并说明页面元素不可逐项编辑；不得虚构 Slidev 或其他链接。`;
 
 export interface ToolActivity { activity?: string; jobId?: string; artifactId?: string; version?: number; errorSummary?: string }
 export type PiRuntimeEvent =
@@ -201,6 +200,7 @@ interface ManagedSession {
   budget: ExecutionBudget;
   turnDeadline: TurnDeadlineBudget;
   fallbackBudget: SearchFallbackBudget;
+  pptBudget: SearchFallbackBudget;
   lastAccess: number;
   active?: {
     clientMessageId: string;
@@ -493,6 +493,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     managed.budget.reset();
     managed.turnDeadline.reset();
     managed.fallbackBudget.reset();
+    managed.pptBudget.reset();
     managed.authoringBudget.reset();
     const acceptance = this.transcripts.accept(id, message, clientMessageId);
     managed.active = { clientMessageId, acceptance };
@@ -678,6 +679,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       this.config.turnReserveSeconds,
     );
     const fallbackBudget = new SearchFallbackBudget();
+    const pptBudget = new SearchFallbackBudget();
     const authoringBudget = new AuthoringBudget(this.config.maxCodeJobs, this.config.maxBuildAttempts);
     const tools = enforceToolBudget(
       [
@@ -686,6 +688,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
           config: this.adapterConfig,
           turnDeadline,
           fallbackBudget,
+          pptBudget,
         }),
         buildSkillReadTool(this.skillsDir),
         ...(this.library ? buildAuthoringTools(this.library, this.runner, authoringBudget) : []),
@@ -711,6 +714,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       authoringBudget,
       turnDeadline,
       fallbackBudget,
+      pptBudget,
       lastAccess: Date.now(),
     };
   }
@@ -891,7 +895,9 @@ export class PiAgentRuntime implements AgentRuntimeApi {
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         args: AUTHORING_NAMES.has(event.toolName) ? {} : event.args,
-        activity: authoringActivity(event.toolName),
+        activity: event.toolName === "tkb_generate_image_ppt"
+          ? "ppt"
+          : authoringActivity(event.toolName),
       });
       return;
     }
@@ -916,6 +922,10 @@ export class PiAgentRuntime implements AgentRuntimeApi {
           }
         ).details;
         if (details?.activity) toolResult.activity = details.activity;
+        if (
+          typeof details?.artifactId === "string" &&
+          /^[a-f0-9-]{36}$/.test(details.artifactId)
+        ) toolResult.artifactId = details.artifactId;
         if (details?.degraded && managed.active) managed.active.searchDegraded = true;
         if (details?.fallback && managed.active) managed.active.searchFallback = true;
         if (this.config.exposeToolResults) toolResult.result = safeResult(event.result);
