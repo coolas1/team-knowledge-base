@@ -59,7 +59,7 @@ export function PPTPage() {
         {job.status === 'awaiting_sample_approval' && <button disabled={busy || job.pages[0]?.status !== 'accepted'} onClick={() => void act('approve_sample')}>样张满意，批准生成剩余页面</button>}
         {!['generating', 'reviewing', 'assembling'].includes(job.status) && <button disabled={busy} onClick={() => { setDraft(structuredClone(job.spec)); setEditing(true) }}>修改内容或风格</button>}
         {!['completed', 'cancelled'].includes(job.status) && <button disabled={busy} onClick={() => void act('cancel')}>取消任务</button>}
-        {job.status === 'paused_budget' && <button disabled={busy} onClick={() => void act('budget', { budget: { image_attempts: 2 * job.pages.length } })}>按每页最多两次请求继续</button>}
+        {job.status === 'paused_budget' && <button disabled={busy} onClick={() => void act('budget', { budget: { image_attempts: 2 * job.pages.length } })}>取消 token / AFP / 金额限制，总生图上限设为页数 × 2</button>}
       </div>
       <section className="ppt-slides">{job.pages.map(p => <article key={p.number}><h3>第 {p.number} 页 · {states[p.status] || p.status}</h3>{p.preview_url && <img src={`${p.preview_url}?revision=${job.revision}&status=${p.status}`} alt={`第 ${p.number} 页预览`} />}<p>{p.error || p.qa?.reason}</p>{['failed', 'unknown'].includes(p.status) && <button disabled={busy} onClick={() => void act('retry', { page: p.number })}>确认重试本页（可能再次扣费）</button>}</article>)}</section>
       {job.status === 'completed' && job.artifact && <a className="ppt-download" href={job.artifact.download_url}>下载已检查的 PPTX（含讲稿备注）</a>}

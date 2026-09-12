@@ -61,3 +61,28 @@
 - 标准镜像首次因 npm 官方 audit 临时错误失败，未绕过门禁，重试后 webapp/pi-agent 成功。图片模型实际返回 JPEG 字节，按 MIME 组装 .jpg（不凭原探针 .png 文件名判格式）。
 - 本批提交 feat(agent): verify and assemble image decks。
 - 浏览器技能连接失败，list()=[]；第六批优先走实际 Agent/API 入口，不声称已完成浏览器 DOM 交互验收。
+
+## 第六批实施与部分验收（2026-09-12）
+
+- 第五批提交 fb77aee1b。操作手册见 `docs/ark-image-ppt.md`；compose 透传 PPT 并发和页数上限。补充修正：未知 QA 显式重试复用已保存图片；重试保留视觉失败原因；区分编号必需原图与样张风格图；预算切换按钮明确取消其他额度限制。实测多图 QA 达 4465 tokens，原 4096 预留偏小，提升至 20000；这仍是估算，不冒称供应商硬报价。
+- 本机已先验证 Turbo 文本链路，再启用 PPT；标准 compose build webapp/pi-agent 成功，验收镜像标记 fb77aee-ppt-acceptance-wip。最终提交后以该提交 SHA 重建并在本机 receipt 记录精确部署版本。`/health`、`/version`、`/api/graph/full`、`/api/memory/operations`、`/api/memory/facts`、`/ppt` 均 HTTP 200；Pi MCP ok，无缺失工具/schema 错误，默认记忆队列 pending/processing/failed 均 0。
+- 真实 Pi Agent 会话 `01a09404-ba4b-7d09-8ba2-2f3ab12fbe3e` 读取打包 skill，调用 create_ppt，原样保存 3 页大纲并返回审核链接。任务 `411f53a6-c4b0-4004-950e-9bad204094e1` 使用独立 bank `ark-ppt-e2e`、真实已生成参考图及实际大纲/样张 HTTP 审批；首张样张人工查看正确。未使用浏览器 DOM，运行时无可用浏览器。
+- **6.3 尚未完成**：总计 6/6 次真实生图、6 次真实 Turbo QA；生图 86400 tokens，QA 23977 tokens，合计 110377，held=0。该数字只覆盖 PPT worker，不包含 Agent/自动对话记忆调用；套餐抵扣、AFP、货币费用未知。第一页 accepted；第二页经修复和明确白底原图版式后，仍有标题丢失、原图重绘或多出信息框，最终 failed/visual_check_failed；第三页 pending。最终下载 HTTP 409，未生成或冒称三页成品，没有扩充预算。
+- 参考图输入 API 可用，但不能可靠原样保留素材。后续设计建议已写入操作手册：原图按已审核坐标由程序等比嵌入，模型生成其他区域，之后检查最终合成页。此设计调整及新一轮生图额度待用户确认，未擅自实现或降低验收标准。
+- **6.4 通过**：首张 accepted 后断开客户端并 restart webapp，hash 和 image_attempts=1 不变；新合成任务复用样张 image_attempts=0，改单页讲稿保留原样张，旧 revision HTTP 409。tokens=1 的任务 paused_budget 且零请求；两测试任务取消后保持 cancelled、无 artifact。跨 scope 状态/原图/预览/下载均 403，失败任务下载 409。真实证据 e2e-restart.json / e2e-recovery-controls.json；租约 fencing、在途取消和文件落盘恢复另有 mock 故障集成测试。
+- 将部署前 dump 恢复到新的独立 `tkb_ark_ppt_baseline`，与当前数据库逐行规范化 JSON 比对：原有 documents 12、chunks 14、memory_units 205、file_summaries 2 完全一致。新验收 bank 单独有 2 条 documents（参考图和真实 Agent 对话）、22 条 memory_units，未进入默认业务 bank。指纹算法重新统一计算，详见 data.final-comparison.json，不能与早期另一种序列化 hash 直接比较。
+- 验证：ruff 通过；Python 481 passed / 52 skipped，Hindsight 204 passed；隔离 PostgreSQL 13 passed；Pi 安全/typecheck/105 tests/build 通过；SPA 64 tests/build 通过；OpenSpec strict validate 通过。首次 Python 使用默认系统临时目录遇到权限错误，改用工作区 basetemp 后通过；跳过包括需额外环境的 integration 与 Windows symlink，保留既有 Starlette 弃用、Windows SSE 清理和 Vite 大包警告。
+- 第六批提交 `docs(agent): record Ark PPT acceptance` 只记录通过部分与失败证据，不将 6.3 勾为完成。当前功能分支 `feat/ppt-skill-upd`；未把原有 `.gitignore` 和三个 Hindsight 换行改动纳入提交，未提交 env、output、密钥或私有素材。
+
+## 最终审计索引
+
+| 批次 | 提交 | 验收依据 |
+| --- | --- | --- |
+| 1 | f434fd40b | memory-chain.json、probe-*.json、data.before/after-batch1.json |
+| 2 | 6b4cc162c | seedream-probe-1/2.json、固定 manifest、build-batch2.log |
+| 3 | 7b970ddc5 | PostgreSQL 租约/缓存/预算/权限集成测试 |
+| 4 | ba030441e | MCP/BFF/前端/Pi 契约测试 |
+| 5 | fb77aee1b | render-probe/revision-1/validation.json、两页真实渲染图 |
+| 6 | `docs(agent): record Ark PPT acceptance` | e2e-final.json、e2e-events.json、e2e-recovery-controls.json、data.final-comparison.json、最终测试与 build 日志 |
+
+私有证据统一位于 `output/ark-ppt-acceptance/`（Git 忽略）；第六批确切 SHA、六个待推送提交和部署 `/version` 保存为提交后生成的 acceptance-receipt.json。本轮交付本地待推送清单，不推送、不创建 PR、不自动合并。6.3 保持开放，未归档 change。

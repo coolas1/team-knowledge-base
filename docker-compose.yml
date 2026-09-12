@@ -114,6 +114,8 @@ services:
       # Reranker (search gatekeeper).
       LLM_MEMORY_THINKING: ${LLM_MEMORY_THINKING:-auto}
       PPT_ENABLED: ${PPT_ENABLED:-false}
+      PPT_CONCURRENCY: ${PPT_CONCURRENCY:-1}
+      PPT_MAX_PAGES: ${PPT_MAX_PAGES:-20}
       IMAGE_PROVIDER: ${IMAGE_PROVIDER:-ark}
       IMAGE_BASE_URL: ${IMAGE_BASE_URL:-}
       IMAGE_MODEL: ${IMAGE_MODEL:-}

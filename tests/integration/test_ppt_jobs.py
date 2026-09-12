@@ -94,6 +94,32 @@ async def accept_page(c):
     await c.worker.finish(qa, {"passed": True, "usage": {"total_tokens": 100}})
 
 
+async def test_explicit_unknown_review_retry_reuses_image(context):
+    c = context
+    await control(c, "approve_outline")
+    image = await c.worker.claim()
+    await c.worker.finish(
+        image,
+        {
+            "path": "persisted.jpg",
+            "sha256": "fixture",
+            "usage": {"total_tokens": 14400},
+        },
+    )
+    qa = await c.worker.claim()
+    async with c.sessions() as session, session.begin():
+        page = await session.get(PPTPage, (c.job, 1))
+        page.expires_at = now() - timedelta(seconds=1)
+    assert await c.worker.claim() is None
+    await control(c, "retry", page=1)
+    retried = await c.worker.claim()
+    assert retried["kind"] == "qa"
+    assert retried["lease"] != qa["lease"]
+    state = await c.store.get(c.job, c.binding, "test-authority")
+    assert state["accounting"]["image_attempts"] == 1
+    assert state["accounting"]["qa_attempts"] == 2
+
+
 async def test_approval_gates_and_stale_revision(context):
     c = context
     assert await c.worker.claim() is None

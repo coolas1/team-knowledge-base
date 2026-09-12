@@ -259,7 +259,19 @@ class PPTStore:
                     raise ValueError("Only failed/unknown pages can be retried")
                 if budget is not None:
                     self.set_budget(job, budget)
-                target.status, target.error, target.lease = "pending", None, None
+                # An unknown review does not invalidate the already persisted
+                # image. Explicit retry pays for QA, not another image.
+                target.status = (
+                    "generated"
+                    if target.error == "qa_outcome_unknown" and target.result
+                    else "pending"
+                )
+                target.error = (
+                    target.qa.get("reason")
+                    if target.status == "pending" and target.qa
+                    else None
+                )
+                target.lease = None
                 job.status = (
                     "queued"
                     if job.approvals.get("sample") == revision

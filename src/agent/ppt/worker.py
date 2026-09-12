@@ -17,6 +17,9 @@ from .store import backend_identity
 
 logger = logging.getLogger(__name__)
 LEASE_SECONDS = 90
+# Multi-image QA exceeded the former 4096-token estimate in live acceptance.
+# These are conservative reservations, not provider-guaranteed quotations.
+TOKEN_RESERVATIONS = {"image": 20000, "qa": 20000}
 
 
 def now():
@@ -188,7 +191,7 @@ class PPTWorker:
     @staticmethod
     def reserve(job, kind):
         account = dict(job.accounting)
-        hold = 20000 if kind == "image" else 4096
+        hold = TOKEN_RESERVATIONS[kind]
         if (
             kind == "image"
             and account.get("image_attempts", 0) >= job.budget["image_attempts"]
@@ -215,7 +218,7 @@ class PPTWorker:
     @staticmethod
     def settle(job, usage, kind):
         account = dict(job.accounting)
-        held = 20000 if kind == "image" else 4096
+        held = TOKEN_RESERVATIONS[kind]
         account["held_tokens"] = max(0, account.get("held_tokens", 0) - held)
         total = usage.get("total_tokens") if isinstance(usage, dict) else None
         if type(total) is int and total >= 0:
@@ -282,7 +285,7 @@ class PPTWorker:
                 page = claim["spec"]["pages"][claim["page"] - 1]
                 prompt = json.dumps(
                     {
-                        "task": "Generate one complete 16:9 slide. Render exact text. No page numbers. Required source images must retain labels and numerical data; final reference, if present, is style only. Vary layout by page role.",
+                        "task": "Generate one complete 16:9 slide. Render exact text. No page numbers. Vary layout by page role.",
                         "style": claim["spec"]["style"],
                         "context": claim["spec"]["context"],
                         "title": page["title"],
@@ -292,6 +295,21 @@ class PPTWorker:
                     },
                     ensure_ascii=False,
                 )
+                required = len(page["reference_document_ids"])
+                if required:
+                    prompt = (
+                        f"参考图片1到{required}是必须放入本页的真实素材，不是风格参考。"
+                        "按本页版式将素材作为完整矩形图片嵌入，等比缩小，保留原图全部内容、"
+                        "颜色、文字和数字；不要用重新绘制的卡片或文字替代原图。"
+                        "本页标题和要点放在素材图外，不能覆盖图内内容。\n"
+                        + prompt
+                    )
+                if len(references) > required:
+                    prompt = (
+                        f"参考图片{len(references)}仅供整页配色和字体风格参考，"
+                        "不要复制它的布局或内容，不要将它当成必需素材。\n"
+                        + prompt
+                    )
                 generated = await self.provider.generate(prompt, references=references)
                 folder = self.store.path(f"{claim['job']}/{claim['lease']}")
                 folder.mkdir(parents=True, exist_ok=True)
