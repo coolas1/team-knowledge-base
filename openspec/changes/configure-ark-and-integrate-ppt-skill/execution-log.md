@@ -133,4 +133,5 @@
 - 移除 PPT 专属“一轮一次”预算，仍使用 Agent 通用工具调用上限；单次 PPT 调用内部保持每页最多两次图片生成/视觉检查。整个 PPT 工具最终失败时返回 `terminate`，运行时把脱敏后的失败详情写成正常 `message.completed`；模型工具参数或空回答达到输出长度上限时也转换为明确的正常终态，避免 `agent run failed`。系统提示同时要求精简页面参数，用户可在下一条消息中再次发起生成。
 - 验证：PPT 定向 Python 13 passed；Pi 定向 8 passed；Python 全库 488 passed / 39 skipped；Pi 安全门禁、typecheck、110 tests 和 build 通过。保留既有 Starlette 与 Windows SSE 清理 warning。本次没有调用文本或图片模型，也没有新增付费 usage。
 - 标准 Webapp 镜像重建暴露出 LibreOffice 系统依赖层位于源码 COPY 之后：任何业务改动都会重新下载全部系统包。将 LibreOffice、Poppler 与 Noto CJK 移入源码无关的固定系统层，并增加可选 Debian/安全镜像构建参数；运行时仍保留真实 PPTX 渲染校验。
-- 上游 Debian 首次构建先后出现单包 502 和整体连接超时；未删除渲染依赖或跳过检查，改用显式阿里云 Debian/安全镜像参数后标准 Webapp 构建成功。相同配置二次构建确认系统依赖层命中缓存。Pi 构建成功，两个服务 force-recreate 后均运行；Webapp `/health=ok`，Pi health/MCP 均 ok。部署镜像 ID 为 webapp `e137f4470380`、pi-agent `75e81281e5ee`。
+- 上游 Debian 首次构建先后出现单包 502 和整体连接超时；未删除渲染依赖或跳过检查，改用显式阿里云 Debian/安全镜像参数后标准 Webapp 构建成功。相同配置二次构建确认系统依赖层命中缓存。Pi 构建成功，两个服务 force-recreate 后均运行；Webapp `/health=ok`，Pi health/MCP 均 ok。最终部署镜像 ID 为 webapp `e137f4470380`、pi-agent `c57b4b47f7ca`。
+- 现场再次出现可读的“模型输出达到长度上限”：这说明失败终态已生效，但 Pi 注册模型的 8192 输出 tokens 不足以容纳长文档的 10 页工具 JSON。用当前 Agent Plan endpoint 对 `max_tokens=16384` 做最小真实探针返回 HTTP 200，usage 为 prompt 48/completion 1/reasoning 0；本机显式配置 `PI_AGENT_CONTEXT_WINDOW=65536`、`PI_AGENT_MAX_OUTPUT_TOKENS=16384`，不减少用户要求的页数或内容。该探针是本修复唯一新增模型调用，共 49 tokens。

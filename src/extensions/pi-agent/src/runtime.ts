@@ -267,7 +267,7 @@ export function terminalLengthFailureFrom(message: unknown): string | undefined 
   const record = message as { role?: unknown; stopReason?: unknown };
   if (record.role !== "assistant" || record.stopReason !== "length") return undefined;
   if (textFromMessage(message).trim()) return undefined;
-  return "本次模型输出达到长度上限，未能形成完整的 PPT 生成参数。本轮没有生成文件，请缩短页数或内容后再次生成。";
+  return "本次模型输出达到长度上限，未能形成完整的 PPT 生成参数。本轮没有生成文件。请重新发起生成；服务端不会把未执行的工具调用计为已生成文件。";
 }
 
 export function sessionTitleFrom(message: string): string | undefined {
