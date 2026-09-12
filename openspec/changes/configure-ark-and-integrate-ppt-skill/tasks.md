@@ -8,11 +8,11 @@
 
 ## 2. 第二批：固定 PPT skill 与 Seedream 适配
 
-- [ ] 2.1 读取并固定上游 f47bd3e54e49d14d51807692694e2d5619a8e298 的必要 skill/scripts/references，保留 license 和 manifest，记录串行 worker 替代子 agent 等差异；验收：固定文件 checksum 可复核，构建不下载浮动 main。
-- [ ] 2.2 添加独立 IMAGE_* 和 PPT 开关配置；验收：缺少模型/key、未知 provider、错误计费路由明确报错，文本和图片凭据不隐式互用，不影响旧文本接口。
-- [ ] 2.3 实现 Seedream 文生图/参考图 provider 及受限下载，按实际模型能力映射尺寸、格式等参数；验收：契约覆盖 URL/base64、重定向/超限拒绝、429/超时、缺失图片和不兼容 GPT 参数。
-- [ ] 2.4 使用专门配置的套餐图片 key 验证候选 Seedream 名称，最多生成 2 张合成图（文生图和参考图）；验收：实际图像可打开、参考内容可核对，记录耗时/request id/usage/套餐证据，权限或能力不足时明确保持未完成。
-- [ ] 2.5 执行 provider 测试与标准镜像构建检查，提交 feat(agent): add Seedream PPT backend；验收：上游归属、适配说明、模型能力报告和本批 SHA 齐全。
+- [x] 2.1 读取并固定上游 f47bd3e54e49d14d51807692694e2d5619a8e298 的必要 skill/scripts/references，保留 license 和 manifest，记录串行 worker 替代子 agent 等差异；验收：固定文件 checksum 可复核，构建不下载浮动 main。
+- [x] 2.2 添加独立 IMAGE_* 和 PPT 开关配置；验收：缺少模型/key、未知 provider、错误计费路由明确报错，文本和图片凭据不隐式互用，不影响旧文本接口。
+- [x] 2.3 实现 Seedream 文生图/参考图 provider 及受限下载，按实际模型能力映射尺寸、格式等参数；验收：契约覆盖 URL/base64、重定向/超限拒绝、429/超时、缺失图片和不兼容 GPT 参数。
+- [x] 2.4 使用专门配置的套餐图片 key 验证候选 Seedream 名称，最多生成 2 张合成图（文生图和参考图）；验收：实际图像可打开、参考内容可核对，记录耗时/request id/usage/套餐证据，权限或能力不足时明确保持未完成。
+- [x] 2.5 执行 provider 测试与标准镜像构建检查，提交 feat(agent): add Seedream PPT backend；验收：上游归属、适配说明、模型能力报告和本批 SHA 齐全。
 
 ## 3. 第三批：持久化 PPT 任务、预算和续跑
 

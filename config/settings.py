@@ -38,6 +38,42 @@ class LLMSettings(BaseSettings):
         return self.model
 
 
+class ImageSettings(BaseSettings):
+    """Explicit Agent Plan image route; never inherits text credentials."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_prefix="IMAGE_", extra="ignore"
+    )
+    provider: str = "ark"
+    base_url: str = ""
+    model: str = ""
+    api_key: str = Field(default="", repr=False)
+
+    def require_ready(self) -> None:
+        if self.provider != "ark":
+            raise ValueError("Unsupported IMAGE_PROVIDER")
+        if not self.api_key or not self.model or not self.base_url:
+            raise ValueError(
+                "IMAGE_BASE_URL, IMAGE_MODEL and IMAGE_API_KEY are required"
+            )
+        if self.base_url.rstrip("/") != "https://ark.cn-beijing.volces.com/api/plan/v3":
+            raise ValueError(
+                "IMAGE_BASE_URL must use the approved Ark Agent Plan route"
+            )
+        if self.model != "doubao-seedream-5.0-lite":
+            raise ValueError("IMAGE_MODEL has no verified Seedream capability profile")
+
+
+class PPTSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", env_prefix="PPT_", extra="ignore"
+    )
+    enabled: bool = False
+    max_pages: int = Field(default=20, ge=1, le=20)
+    default_pages: int = Field(default=8, ge=1, le=20)
+    concurrency: int = Field(default=1, ge=1, le=4)
+
+
 class EmbeddingSettings(BaseSettings):
     """Embeddings — any OpenAI-compatible /v1/embeddings API.
 
@@ -149,6 +185,8 @@ class InfraSettings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     reranker: RerankerSettings = Field(default_factory=RerankerSettings)
+    image: ImageSettings = Field(default_factory=ImageSettings)
+    ppt: PPTSettings = Field(default_factory=PPTSettings)
 
     @property
     def postgres_dsn(self) -> str:

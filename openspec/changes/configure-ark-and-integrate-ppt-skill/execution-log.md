@@ -23,3 +23,13 @@
 - 测试：pytest 默认全库 456 passed / 39 skipped；Hindsight 204 passed；最终新增策略测试 8 passed；隔离 PostgreSQL 摘要迁移/缓存测试 1 passed；ruff check 通过。默认全库出现现有 Starlette 弃用及 Windows SSE 清理 warning，退出码 0。
 - 标准 compose build webapp/pi-agent 成功；仅 recreate 两服务，health/MCP 均正常。初次验收镜像标记 86a9ba12e-ark-memory-wip，提交后用本批 SHA 重建标记。
 - 完成提交使用 feat(engine): configure Ark memory reasoning；SHA 在后续执行记录追加（避免提交自身 SHA 循环）。
+
+## 第二批实施与验收（2026-09-12）
+
+- 第一批提交 f434fd40bba4069d2ccd347fe4185e78046794cc。
+- 用户明确授权将现有 Agent Plan LLM_API_KEY 显式配置到独立 IMAGE_API_KEY；本机已写入独立 IMAGE_*，PPT_ENABLED=false。密钥不进入 Git、不进入 Pi/前端。
+- 固定上游 41 个文件，Git blob hash 全量比对通过，SHA-256 manifest 和 MIT 保留；镜像构建增加离线校验，差异见 src/agent/ppt/UPSTREAM.md。raw 下载曾有 TLS 中断，大归档下载取消，最终只补取缺失 blob，未换版本。
+- Seedream 请求白名单、真实参考图 data URI、单图 2560x1440、URL/base64、安全限额下载、IP pinning/SNI、无自动重试已实现；13 项 provider 测试通过，ruff 通过。
+- 第二批 2/2 张真实探针成功，用时 23.92s/22.44s，每张 usage generated_images=1, output_tokens=14400, total_tokens=14400。返回模型别名 doubao-seedream-5.0-lite，日期版本未知；AFP/套餐抵扣/金额未知。
+- 人工可视核对两张原图：星桥项目、林青、2026年10月15日、120万元均正确，参考图保留原文字/桥图标并增加橙色圆点；保存于 output/ark-ppt-acceptance/seedream-*.png 与 probe JSON。不将 provider 实测冒称整套 PPT 验收。
+- 标准 webapp build 成功，构建期固定源校验通过；PPT 仍未开启。本批提交 feat(agent): add Seedream PPT backend，SHA 下一批记录。

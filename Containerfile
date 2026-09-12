@@ -103,6 +103,7 @@ RUN cd src/frontend/webapp/client \
 # App source + config: the most frequently changed inputs, last.
 COPY src/ ./src/
 COPY config/ ./config/
+RUN /app/.venv/bin/python /app/src/agent/ppt/verify_vendor.py
 # The runtime semantic version (see src/frontend/webapp/server/version.py).
 COPY VERSION ./
 
