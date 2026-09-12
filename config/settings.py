@@ -139,6 +139,16 @@ class InfraSettings(BaseSettings):
     # body beyond the cap is never buffered. Env: KB_MAX_UPLOAD_BYTES.
     kb_max_upload_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
 
+    # tkb_* MCP tool payload bounds (documented in config/app.yaml; the
+    # app.yaml engine section is comment-only for these). Windowed document
+    # reads, clamped list pages, and budgeted deep-search evidence keep one
+    # tool response bounded so a single agent turn cannot assemble an
+    # unbounded context. Env: ENGINE_TOOLS_*.
+    engine_tools_window_chars: int = Field(default=8_000, ge=1)
+    engine_tools_list_page_max: int = Field(default=50, ge=1)
+    engine_tools_deep_excerpt_chars: int = Field(default=2_000, ge=1)
+    engine_tools_deep_total_chars: int = Field(default=12_000, ge=1)
+
     # Model config groups (OpenAI-compatible endpoints). Sub-models each
     # read their own env prefix from .env; see the classes above.
     llm: LLMSettings = Field(default_factory=LLMSettings)

@@ -1,6 +1,12 @@
 engine:
   impl: graphrag
   config: config/engine/graphrag
+  # tkb_* 工具负载上限（经 .env / config.settings 提供，env 前缀 ENGINE_TOOLS_，
+  # 本节仅作文档；Rest API 不受限，只有 MCP 工具层读取这些值）：
+  #   window_chars        tkb_get_document 单次正文窗口（默认 8000 字符）
+  #   list_page_max       tkb_list_documents page_size 封顶（默认 50）
+  #   deep_excerpt_chars  deep 检索单条证据摘录上限（默认 2000 字符）
+  #   deep_total_chars    deep 检索证据总预算（默认 12000 字符）
   ingest:
     vector_only: true
     chunk_concurrency: 4

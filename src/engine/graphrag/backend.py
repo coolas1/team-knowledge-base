@@ -951,22 +951,59 @@ class GraphRAGBackend:
             count_stmt = select(func.count(Chunk.id)).where(Chunk.doc_id == uid)
             chunk_count = (await session.execute(count_stmt)).scalar() or 0
             result: dict[str, Any] = {
-                "id": str(doc.id),
-                "title": doc.title,
-                "file_type": doc.file_type,
+                **self._document_meta(doc, chunk_count),
                 "raw_text": doc.raw_text,
-                "overview": doc.overview,
-                "file_path": doc.file_path,
-                "content_hash": doc.content_hash,
-                "status": doc.status,
-                "error_msg": doc.error_msg,
-                "chunk_count": chunk_count,
-                "created_at": doc.created_at.isoformat() if doc.created_at else None,
-                "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
             }
         if self._enricher is not None:
             await self._enricher.enrich_dict(result)
         return result
+
+    async def get_document_window(
+        self, doc_id: str, offset: int = 0, limit: int | None = None
+    ) -> dict[str, Any] | None:
+        """Windowed raw_text read for bounded tool payloads (MCP layer);
+
+        REST keeps get_document's full-text shape. The Python slice is
+        deliberate — the row (and its raw_text column) is already loaded.
+        """
+        uid = uuid.UUID(doc_id)
+        async with async_session_factory() as session:
+            doc = await session.get(Document, uid)
+            if not doc or not is_public_document(doc):
+                return None
+            count_stmt = select(func.count(Chunk.id)).where(Chunk.doc_id == uid)
+            chunk_count = (await session.execute(count_stmt)).scalar() or 0
+            text = doc.raw_text or ""
+            total_chars = len(text)
+            end = offset + limit if limit is not None else None
+            window = text[offset:end]
+            result: dict[str, Any] = {
+                **self._document_meta(doc, chunk_count),
+                "text_window": window,
+                "offset": offset,
+                "total_chars": total_chars,
+                "has_more": offset + len(window) < total_chars,
+            }
+        if self._enricher is not None:
+            await self._enricher.enrich_dict(result)
+        return result
+
+    @staticmethod
+    def _document_meta(doc: Any, chunk_count: int) -> dict[str, Any]:
+        """Shared metadata block so get_document/window stay shape-compatible."""
+        return {
+            "id": str(doc.id),
+            "title": doc.title,
+            "file_type": doc.file_type,
+            "overview": doc.overview,
+            "file_path": doc.file_path,
+            "content_hash": doc.content_hash,
+            "status": doc.status,
+            "error_msg": doc.error_msg,
+            "chunk_count": chunk_count,
+            "created_at": doc.created_at.isoformat() if doc.created_at else None,
+            "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
+        }
 
 
 def build(config: EngineConfig) -> GraphRAGBackend:

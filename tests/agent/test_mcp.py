@@ -438,6 +438,66 @@ async def test_get_document_missing_returns_error(fake_kb):
     assert "error" in res
 
 
+async def test_get_document_short_doc_returns_full_text(fake_kb):
+    uploaded = await fake_kb.ingest(IngestSource(name="note.md", data=b"short note"))
+
+    res = await mcp_mod.get_document(uploaded.id)
+
+    assert res["text_window"] == "short note"
+    assert res["total_chars"] == len("short note")
+    assert res["has_more"] is False
+    assert "next_offset" not in res
+    assert "raw_text" not in res
+
+
+async def test_get_document_long_doc_returns_bounded_window(fake_kb, monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "engine_tools_window_chars", 100)
+    uploaded = await fake_kb.ingest(IngestSource(name="paper.md", data=b"x" * 250))
+
+    first = await mcp_mod.get_document(uploaded.id)
+
+    assert len(first["text_window"]) == 100  # default limit = window_chars
+    assert first["offset"] == 0
+    assert first["total_chars"] == 250
+    assert first["has_more"] is True
+    assert first["next_offset"] == 100
+
+    # follow-up offset returns the next window (self-describing continuation)
+    follow = await mcp_mod.get_document(uploaded.id, offset=100)
+    assert follow["offset"] == 100
+    assert len(follow["text_window"]) == 100
+    assert follow["has_more"] is True
+    assert follow["next_offset"] == 200
+
+    tail = await mcp_mod.get_document(uploaded.id, offset=200)
+    assert len(tail["text_window"]) == 50
+    assert tail["has_more"] is False
+    assert "next_offset" not in tail
+
+
+async def test_get_document_honors_explicit_limit(fake_kb, monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "engine_tools_window_chars", 8000)
+    uploaded = await fake_kb.ingest(IngestSource(name="paper.md", data=b"y" * 500))
+
+    res = await mcp_mod.get_document(uploaded.id, limit=50)
+
+    assert len(res["text_window"]) == 50
+    assert res["has_more"] is True
+
+
+async def test_get_document_rejects_invalid_window_params(fake_kb):
+    uploaded = await fake_kb.ingest(IngestSource(name="a.md", data=b"abc"))
+
+    with pytest.raises(ValueError, match="offset"):
+        await mcp_mod.get_document(uploaded.id, offset=-1)
+    with pytest.raises(ValueError, match="limit"):
+        await mcp_mod.get_document(uploaded.id, limit=0)
+
+
 async def test_query_graph_missing_returns_error(fake_kb):
     res = await mcp_mod.query_graph("ghost")
     assert "error" in res
@@ -532,6 +592,30 @@ async def test_reingest_document(fake_kb):
 async def test_list_documents_tool(fake_kb):
     res = await mcp_mod.list_documents()
     assert {"total", "items"} <= set(res)
+
+
+async def test_list_documents_clamps_page_size_to_server_max(fake_kb, monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "engine_tools_list_page_max", 50)
+    calls = {}
+
+    async def list_documents(page=1, page_size=20, file_type=None, status=None):
+        calls["page_size"] = page_size
+        return {
+            "total": 120,
+            "page": page,
+            "page_size": page_size,
+            "items": [{"id": str(i)} for i in range(min(page_size, 120))],
+        }
+
+    fake_kb.list_documents = list_documents
+
+    res = await mcp_mod.list_documents(page_size=100)
+
+    assert calls["page_size"] == 50  # clamped before hitting the engine
+    assert res["page_size"] == 50  # response reports the effective size
+    assert len(res["items"]) <= 50
 
 
 async def test_remove_document_unapproved_needs_approval(fake_kb):

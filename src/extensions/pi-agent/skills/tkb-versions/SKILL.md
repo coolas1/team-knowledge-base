@@ -19,8 +19,9 @@ with the same title as a current document, or editing one through
   between v1 and v3", "what was removed in v2", "why did the fee change".
   Returns structured changes: name, description, status
   (added/removed/modified).
-- **tkb_get_document(doc_id)** - read a specific version's full text; the
-  doc_id of each version comes from tkb_list_versions.
+- **tkb_get_document(doc_id)** - read a specific version's text in bounded
+  windows (`text_window` + `has_more`/`next_offset` for paging); the doc_id of
+  each version comes from tkb_list_versions.
 
 ## Answering strategy
 

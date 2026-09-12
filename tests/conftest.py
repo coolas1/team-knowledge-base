@@ -136,3 +136,25 @@ class FakeKnowledgeBase:
             raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else ""
         )
         return out
+
+    async def get_document_window(
+        self, doc_id: str, offset: int = 0, limit: int | None = None
+    ) -> dict | None:
+        base = await self.get_document(doc_id)
+        if base is None:
+            return None
+        # get_document hands back the live ref dict; copy before shaping so
+        # the window fields never leak into the ref.
+        text = base.get("raw_text") or ""
+        out = {key: value for key, value in base.items() if key != "raw_text"}
+        end = offset + limit if limit is not None else None
+        window = text[offset:end]
+        out.update(
+            {
+                "text_window": window,
+                "offset": offset,
+                "total_chars": len(text),
+                "has_more": offset + len(window) < len(text),
+            }
+        )
+        return out

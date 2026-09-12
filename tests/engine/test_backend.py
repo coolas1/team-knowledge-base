@@ -117,6 +117,7 @@ def test_backend_implements_protocol_methods():
         "get_neighbors",
         "list_documents",
         "get_document",
+        "get_document_window",
     ]:
         assert hasattr(GraphRAGBackend, name), f"missing {name}"
 
@@ -158,6 +159,62 @@ async def test_document_browse_filters_internal_conversation_sources(monkeypatch
     assert all("documents.file_type not in" in statement for statement in statements)
     assert result["total"] == 1
     assert [item["id"] for item in result["items"]] == [str(visible.id)]
+
+
+async def test_get_document_window_returns_bounded_slice(monkeypatch):
+    """窗口化读取：offset/limit 切片 + total_chars/has_more，不返回 raw_text。"""
+    doc = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="paper.md",
+        file_type="markdown",
+        status="indexed",
+        overview="long paper",
+        error_msg=None,
+        file_path="/uploads/paper.md",
+        content_hash="hash",
+        raw_text="x" * 25_000,
+        created_at=None,
+        updated_at=None,
+    )
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _model, _uid):
+            return doc
+
+        async def execute(self, _statement):
+            return _QueryResult(scalar_value=7)
+
+    monkeypatch.setattr(backend_mod, "async_session_factory", Session)
+    backend = GraphRAGBackend(SimpleNamespace(), SimpleNamespace())
+
+    first = await backend.get_document_window(str(doc.id), offset=0, limit=10_000)
+    assert first is not None
+    assert "raw_text" not in first
+    assert len(first["text_window"]) == 10_000
+    assert first["offset"] == 0
+    assert first["total_chars"] == 25_000
+    assert first["has_more"] is True
+    assert first["chunk_count"] == 7
+
+    follow = await backend.get_document_window(str(doc.id), offset=10_000, limit=10_000)
+    assert follow["offset"] == 10_000
+    assert len(follow["text_window"]) == 10_000
+    assert follow["has_more"] is True
+
+    tail = await backend.get_document_window(str(doc.id), offset=20_000, limit=10_000)
+    assert len(tail["text_window"]) == 5_000
+    assert tail["has_more"] is False
+
+    # get_document（REST 契约）保持全量原文返回，不受窗口化影响。
+    full = await backend.get_document(str(doc.id))
+    assert full["raw_text"] == "x" * 25_000
+    assert "text_window" not in full
 
 
 async def test_internal_conversation_document_is_not_read_editable_or_removable(

@@ -493,11 +493,28 @@ async def search_knowledge_deep(
         return error.as_payload()
 
 
-async def get_document(doc_id: str) -> dict[str, Any]:
-    """获取文件详情。"""
-    result = await _get_kb().get_document(doc_id)
+async def get_document(
+    doc_id: str,
+    offset: int = 0,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """获取文件详情（正文窗口化）。返回元数据 + text_window/offset/
+    total_chars/has_more；has_more=true 时用响应中的 next_offset 作为下一次
+    的 offset 继续读取，不要从 0 重复读。limit 不传时使用服务端默认窗口。"""
+    from config.settings import settings
+
+    if offset < 0:
+        raise ValueError("offset must be zero or greater")
+    effective_limit = settings.engine_tools_window_chars if limit is None else limit
+    if effective_limit < 1:
+        raise ValueError("limit must be greater than zero")
+    result = await _get_kb().get_document_window(
+        doc_id, offset=offset, limit=effective_limit
+    )
     if not result:
         return {"error": f"文档不存在: {doc_id}"}
+    if result.get("has_more"):
+        result["next_offset"] = offset + len(result["text_window"])
     return result
 
 
@@ -576,8 +593,14 @@ async def list_documents(
     file_type: str | None = None,
     status: str | None = None,
 ) -> dict[str, Any]:
-    """文件列表（分页，按 type/status 筛选）。"""
-    return await _get_kb().list_documents(page, page_size, file_type, status)
+    """文件列表（分页，按 type/status 筛选）。page_size 服务端封顶，
+    响应中的 page_size 为实际生效值。"""
+    from config.settings import settings
+
+    effective_page_size = min(page_size, settings.engine_tools_list_page_max)
+    return await _get_kb().list_documents(
+        page, effective_page_size, file_type, status
+    )
 
 
 async def remove_document(doc_id: str, approved: bool = False) -> dict[str, Any]:
