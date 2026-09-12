@@ -33,3 +33,12 @@
 - 第二批 2/2 张真实探针成功，用时 23.92s/22.44s，每张 usage generated_images=1, output_tokens=14400, total_tokens=14400。返回模型别名 doubao-seedream-5.0-lite，日期版本未知；AFP/套餐抵扣/金额未知。
 - 人工可视核对两张原图：星桥项目、林青、2026年10月15日、120万元均正确，参考图保留原文字/桥图标并增加橙色圆点；保存于 output/ark-ppt-acceptance/seedream-*.png 与 probe JSON。不将 provider 实测冒称整套 PPT 验收。
 - 标准 webapp build 成功，构建期固定源校验通过；PPT 仍未开启。本批提交 feat(agent): add Seedream PPT backend，SHA 下一批记录。
+
+## 第三批实施与验收（2026-09-12）
+
+- 第二批提交 6b4cc16；新增 ppt_jobs/ppt_pages/ppt_events，幂等 additive migration 集成 init_db。
+- 大纲/样张 revision 审批、按页 lease/heartbeat/fencing、原子预算预留、未知付费结果暂停、取消晚到结果结算、来源与 bank policy/凭据撤销校验已实现。
+- 缓存绑定来源/内容/风格/backend/scope；单页变更保留其他成功页，风格变更全部失效。文件成功而数据库未提交时从 immutable attempt manifest 恢复，不重新生图。
+- AFP/金额无供应商报价时不允许声称可满足该预算；token 有保守预留，未知 usage 阻止有 token 上限的后续请求。请求数硬限制始终生效。
+- 隔离 PostgreSQL 11 passed，覆盖重复升级、审批、过期审批、双 worker 竞争、取消在途请求、重启复用、文件发布后恢复、未知结果 fencing、预算暂停、跨 bank、凭据/银行策略撤销、来源变化、单页/风格失效、跨任务授权缓存零新请求。所有故障测试为 mock provider，未新增付费调用。
+- ruff check 通过；本批提交 feat(agent): persist PPT generation jobs，尚未启动生产 PPT worker。
