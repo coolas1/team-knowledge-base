@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 import yaml
-from .llm_options import bounded_json_options
+from .llm_options import bounded_json_options, memory_options, log_completion
 
 from config.settings import settings
 
@@ -292,6 +292,7 @@ class Analyzer:
             "Return JSON with only an overview string, at most 2000 characters.\n"
             f"Title: {title[:500]}\nDocument:\n{excerpt}",
             max_tokens=2048,
+            memory_task=True,
         )
         data = json.loads(raw)
         overview = data.get("overview")
@@ -438,6 +439,7 @@ class Analyzer:
         *,
         reject_truncated: bool = False,
         max_tokens: int | None = None,
+        memory_task: bool = False,
     ) -> str:
         """通过 OpenAI 兼容 API 调用。
 
@@ -447,6 +449,18 @@ class Analyzer:
         base_url = settings.llm.base_url.rstrip("/")
         model = settings.llm.require_model()
         api_key = settings.llm.api_key
+        options = (
+            memory_options(
+                model,
+                base_url,
+                settings.llm.memory_thinking,
+                bounded=max_tokens is not None,
+            )
+            if memory_task
+            else bounded_json_options(model)
+            if max_tokens is not None
+            else {}
+        )
 
         content = ""
         for attempt in range(1 if max_tokens is not None else 3):
@@ -464,15 +478,12 @@ class Analyzer:
                         # 推理型模型（如 glm-5.3）会先消耗输出预算做思考，
                         # 不设上限时 JSON 正文可能被截断。
                         "max_tokens": max_tokens if max_tokens is not None else 8192,
-                        **(
-                            bounded_json_options(model)
-                            if max_tokens is not None
-                            else {}
-                        ),
+                        **options,
                     },
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                log_completion(logger, {"model": model, **options}, data)
                 choice = data["choices"][0]
                 if reject_truncated and choice.get("finish_reason") == "length":
                     raise RuntimeError(

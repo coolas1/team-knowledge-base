@@ -10,6 +10,7 @@ from sqlalchemy import select
 from config.settings import settings
 from src.engine.scope import MemoryScope, TagFilter
 from .analyzer import Analyzer
+from .llm_options import memory_identity
 from .store.file_summary import FileSummaryStore, SummaryIdentity
 from .store.models import Document
 from .store.scope import scope_predicate
@@ -47,7 +48,12 @@ class FileSummaryManager:
                 visibility=TagFilter(tuple(owner.tags or ()), "exact"),
             )
         model = settings.llm.require_model() if settings.llm.enabled else "extractive"
-        identity = SummaryIdentity.for_text(source, title, model)
+        policy = (
+            "file-summary-v2:" + memory_identity(settings.llm, bounded=True)
+            if settings.llm.enabled
+            else "file-summary-v1"
+        )
+        identity = SummaryIdentity.for_text(source, title, model, policy_version=policy)
         store = FileSummaryStore(self.sessions, scope=scope)
         cached = await store.get(document_id, identity)
         if cached is not None:

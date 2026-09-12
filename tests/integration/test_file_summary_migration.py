@@ -70,14 +70,19 @@ async def test_file_summary_upgrade_reuse_scope_and_original_preservation(monkey
             )
         from types import SimpleNamespace
         from unittest.mock import AsyncMock
-        from config.settings import settings
+        from config.settings import LLMSettings, settings
         from src.engine.components.analyzer import AnalysisResult
         from src.engine.components.file_summary import FileSummaryManager
 
         monkeypatch.setattr(
             settings,
             "llm",
-            SimpleNamespace(enabled=True, require_model=lambda: "summary-model"),
+            LLMSettings(
+                _env_file=None,
+                base_url="https://test.example/v1",
+                model="summary-model",
+                memory_thinking="auto",
+            ),
         )
         analyzer = SimpleNamespace(
             summarize_document=AsyncMock(

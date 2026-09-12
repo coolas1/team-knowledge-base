@@ -112,6 +112,7 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       # Reranker (search gatekeeper).
+      LLM_MEMORY_THINKING: ${LLM_MEMORY_THINKING:-auto}
       RERANKER_PROVIDER: ${RERANKER_PROVIDER:-none}
       RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
       RERANKER_BASE_URL: ${RERANKER_BASE_URL:-}

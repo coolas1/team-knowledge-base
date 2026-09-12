@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from typing import Any, Protocol
 
@@ -11,7 +12,11 @@ import httpx
 
 from config.settings import settings
 from src.engine.components.embedder import embedder
-from src.engine.components.llm_options import bounded_json_options
+from src.engine.components.llm_options import (
+    memory_options,
+    memory_identity,
+    log_completion,
+)
 
 
 class EmbeddingProvider(Protocol):
@@ -39,6 +44,10 @@ class ProjectHindsightProviders:
 
     def __init__(self, embedding_provider: EmbeddingProvider = embedder) -> None:
         self._embedding_provider = embedding_provider
+
+    @property
+    def extraction_identity(self) -> str:
+        return memory_identity(settings.llm)
 
     async def embed(
         self, texts: list[str], *, timeout: float | None = None
@@ -146,8 +155,14 @@ class ProjectHindsightProviders:
             payload["response_format"] = {"type": "json_object"}
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
-            if json_mode:
-                payload.update(bounded_json_options(payload["model"]))
+        payload.update(
+            memory_options(
+                payload["model"],
+                settings.llm.base_url,
+                settings.llm.memory_thinking,
+                bounded=json_mode and max_tokens is not None,
+            )
+        )
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{settings.llm.base_url.rstrip('/')}/chat/completions",
@@ -158,4 +173,5 @@ class ProjectHindsightProviders:
             value = response.json()
             if not isinstance(value, dict):
                 raise ValueError("LLM response is not a JSON object")
+            log_completion(logging.getLogger(__name__), payload, value)
             return value
