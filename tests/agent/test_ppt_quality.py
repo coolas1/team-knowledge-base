@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import random
 from types import SimpleNamespace
 
 import httpx
@@ -11,6 +12,7 @@ from config.settings import settings
 from src.agent.ppt.assembly import Assembler, validate_pptx
 from src.agent.ppt.quality import VisualReviewer, validate_review
 from src.agent.ppt.store import PPTStore
+from src.agent.ppt.composition import compose
 
 
 @pytest.mark.parametrize("field", ["text", "numbers", "assets", "style", "layout"])
@@ -28,7 +30,8 @@ def test_any_failed_visual_check_prevents_acceptance(field):
 async def test_qa_transmits_slide_and_required_asset(monkeypatch, tmp_path):
     out = io.BytesIO()
     Image.new("RGB", (2560, 1440), "red").save(out, format="PNG")
-    (tmp_path / "slide.png").write_bytes(out.getvalue())
+    data, embedded = compose(out.getvalue(), ["ref"], (out.getvalue(),))
+    (tmp_path / "slide.png").write_bytes(data)
     monkeypatch.setattr(
         settings.llm, "base_url", "https://ark.cn-beijing.volces.com/api/plan/v3"
     )
@@ -68,7 +71,7 @@ async def test_qa_transmits_slide_and_required_asset(monkeypatch, tmp_path):
     )
     result = await review(
         {
-            "result": {"path": "slide.png"},
+            "result": {"path": "slide.png", "embedded": embedded},
             "spec": {
                 "style": "red",
                 "pages": [
@@ -86,8 +89,9 @@ async def test_qa_transmits_slide_and_required_asset(monkeypatch, tmp_path):
     assert result["passed"] is False and result["reason"] == "金额错误"
 
 
+@pytest.mark.parametrize("large_image", [False, True])
 def test_assembly_preserves_pages_notes_and_refuses_unverified_image(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, large_image
 ):
     from src.agent.ppt import assembly
 
@@ -103,7 +107,14 @@ def test_assembly_preserves_pages_notes_and_refuses_unverified_image(
     pages = []
     for i, color in enumerate(["navy", "teal"], 1):
         out = io.BytesIO()
-        Image.new("RGB", (2560, 1440), color).save(out, format="PNG")
+        image = Image.new("RGB", (2560, 1440), color)
+        if large_image and i == 1:
+            image = Image.frombytes(
+                "RGB", (2560, 1440), random.Random(42).randbytes(2560 * 1440 * 3)
+            )
+        image.save(out, format="PNG")
+        if large_image and i == 1:
+            assert len(out.getvalue()) > 2 * 1024 * 1024
         path = tmp_path / f"{i}.png"
         path.write_bytes(out.getvalue())
         pages.append(

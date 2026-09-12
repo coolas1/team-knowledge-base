@@ -14,6 +14,10 @@ editable PPT, DOCX and PDF on `tkb_generate_document`.
    Fill source_document_ids and each page's reference_document_ids using actual
    authorized document UUIDs. Required images must be uploaded image documents;
    do not silently replace a required figure with a text-only approximation.
+   Required figures are embedded intact by the server in a fixed central region
+   (x=15%, y=20%, width=70%, height=60%; multiple assets split horizontally).
+   Keep titles above and points below it. Review shows the exact region mapping.
+   The image model generates surrounding content, not copies of required figures.
 3. Call tkb_create_ppt with the full spec and return the actual review_url.
    The user reviews the outline, style, backend and source-image mapping there.
    Do not say generation has finished. The background task survives chat timeout.

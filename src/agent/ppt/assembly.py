@@ -13,6 +13,7 @@ from pypdf import PdfReader
 
 from .provider import validate_image
 from .verify_vendor import verify
+from .composition import verify_pixels
 
 
 def validate_pptx(path: Path, pages: list, spec: dict):
@@ -23,6 +24,8 @@ def validate_pptx(path: Path, pages: list, spec: dict):
         if len(slide.shapes) != 1 or not hasattr(slide.shapes[0], "image"):
             raise ValueError("PPTX image missing")
         shape = slide.shapes[0]
+        if hashlib.sha256(shape.image.blob).hexdigest() != pages[n].result["sha256"]:
+            raise ValueError("PPTX must preserve exact final image bytes")
         if (shape.left, shape.top, shape.width, shape.height) != (
             0,
             0,
@@ -98,6 +101,7 @@ class Assembler:
             if hashlib.sha256(data).hexdigest() != p.result["sha256"]:
                 raise ValueError("Source image checksum mismatch")
             mime = validate_image(data, slide=True)
+            verify_pixels(data, p.result.get("embedded", []))
             destination = (
                 originals
                 / f"slide_{p.number:02d}.{'png' if mime == 'image/png' else 'jpg'}"
@@ -139,6 +143,9 @@ class Assembler:
         )
         module = importlib.util.module_from_spec(loader)
         loader.loader.exec_module(module)
+        # Keep upstream files unchanged; disable its optional lossy image
+        # compression in this isolated module instance, then verify PPTX bytes.
+        module.compress_image_if_needed = lambda *args, **kwargs: None
         path = folder / "presentation.pptx"
         if not module.create_presentation(
             images,

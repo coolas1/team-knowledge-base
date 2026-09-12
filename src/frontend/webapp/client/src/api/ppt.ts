@@ -9,7 +9,7 @@ export interface PPTJob {
   backend: { model: string }; budget: { image_attempts: number; tokens?: number }
   accounting: { image_attempts?: number; tokens?: number; unknown_usage?: number }
   error?: string; artifact?: { download_url: string }
-  pages: { number: number; status: string; error?: string; preview_url?: string; qa?: { passed: boolean; reason?: string } }[]
+  pages: { number: number; status: string; error?: string; preview_url?: string; reference_regions?: { document_id: string; box: number[] }[]; qa?: { passed: boolean; reason?: string } }[]
 }
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api/ppt/jobs${url}`, options)

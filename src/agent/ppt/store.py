@@ -15,6 +15,7 @@ from src.engine.trusted_scope import ScopeBinding
 from .contracts import Budget, DeckSpec
 from .models import PPTEvent, PPTJob, PPTPage
 from .provider import validate_image
+from .composition import POLICY, regions
 
 UPSTREAM = "f47bd3e54e49d14d51807692694e2d5619a8e298"
 
@@ -32,6 +33,7 @@ def backend_identity():
         "base_url": settings.image.base_url.rstrip("/"),
         "size": "2560x1440",
         "upstream": UPSTREAM,
+        "composition": POLICY,
     }
 
 
@@ -76,6 +78,8 @@ class PPTStore:
                 validate_image(data)
                 record.update(image_hash=hashlib.sha256(data).hexdigest())
             result.append(record)
+        for page in spec["pages"]:
+            regions(page["reference_document_ids"])
         return result
 
     async def authorized(self, session, job, *, binding=None, authority=None):
@@ -196,6 +200,11 @@ class PPTStore:
                         "error": p.error,
                         "attempts": p.attempt,
                         "qa": p.qa,
+                        "reference_regions": regions(
+                            job.spec["pages"][p.number - 1]["reference_document_ids"]
+                        )
+                        if job.backend.get("composition") == POLICY
+                        else [],
                         "preview_url": f"/api/ppt/jobs/{job.id}/pages/{p.number}"
                         if p.result
                         else None,

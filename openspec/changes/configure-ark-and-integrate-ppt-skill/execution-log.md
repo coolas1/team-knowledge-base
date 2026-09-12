@@ -74,7 +74,7 @@
 - 验证：ruff 通过；Python 481 passed / 52 skipped，Hindsight 204 passed；隔离 PostgreSQL 13 passed；Pi 安全/typecheck/105 tests/build 通过；SPA 64 tests/build 通过；OpenSpec strict validate 通过。首次 Python 使用默认系统临时目录遇到权限错误，改用工作区 basetemp 后通过；跳过包括需额外环境的 integration 与 Windows symlink，保留既有 Starlette 弃用、Windows SSE 清理和 Vite 大包警告。
 - 第六批提交 `docs(agent): record Ark PPT acceptance` 只记录通过部分与失败证据，不将 6.3 勾为完成。当前功能分支 `feat/ppt-skill-upd`；未把原有 `.gitignore` 和三个 Hindsight 换行改动纳入提交，未提交 env、output、密钥或私有素材。
 
-## 最终审计索引
+## 第六批审计索引（历史）
 
 | 批次 | 提交 | 验收依据 |
 | --- | --- | --- |
@@ -83,6 +83,23 @@
 | 3 | 7b970ddc5 | PostgreSQL 租约/缓存/预算/权限集成测试 |
 | 4 | ba030441e | MCP/BFF/前端/Pi 契约测试 |
 | 5 | fb77aee1b | render-probe/revision-1/validation.json、两页真实渲染图 |
-| 6 | `docs(agent): record Ark PPT acceptance` | e2e-final.json、e2e-events.json、e2e-recovery-controls.json、data.final-comparison.json、最终测试与 build 日志 |
+| 6 | 37f7c1dbe | e2e-final.json、e2e-events.json、e2e-recovery-controls.json、data.final-comparison.json、最终测试与 build 日志 |
 
-私有证据统一位于 `output/ark-ppt-acceptance/`（Git 忽略）；第六批确切 SHA、六个待推送提交和部署 `/version` 保存为提交后生成的 acceptance-receipt.json。本轮交付本地待推送清单，不推送、不创建 PR、不自动合并。6.3 保持开放，未归档 change。
+私有证据统一位于 `output/ark-ppt-acceptance/`（Git 忽略）；第六批确切 SHA、六个待推送提交和部署 `/version` 保存为提交后生成的 acceptance-receipt.json。本轮交付本地待推送清单，不推送、不创建 PR、不自动合并。第六批结束时 6.3 保持开放；后续完成情况见补充批次，未归档 change。
+
+
+## 第七批：已授权的原图保真合成与完整交付（2026-09-12）
+
+- 用户确认程序原样嵌入原图的方案，并明确授权新一轮最多 6 次生图。proposal/design/ppt-generation spec 同步更新，原六批失败记录和旧任务预算保持不变。
+- 实现 `reference-composite-v1`：审批页面显示固定原图区域；原图按顺序等比居中、无裁切合成，记录原图 hash/实际矩形/缩放后像素 hash。生成背景、最终 PNG 和 result manifest 独立保存；恢复、QA 和 PPTX 组装进行像素与文件校验。区域策略进入 backend/cache 身份，旧策略审批与执行均拒绝，必须 revision 更新。透明原图采用白底，遵循 EXIF 方向。
+- 固定上游源未修改。适配层禁用可选有损 JPEG 压缩，并直接验证 PPTX 内嵌图片字节与最终 PNG 一致；随机噪声大于 2MB fixture 也通过，避免只用小纯色图掩盖压缩问题。
+- 真实 Agent 新会话 `01a09423-2adf-7568-90c1-d2762a1941e5` 创建任务 `6200a5b7-eb0b-41ae-92be-9072879e814e`，独立 6 次请求上限。首张样张确认后 restart webapp，image_attempts=1 和样张 hash 均不变，再批准剩余页。
+- 本轮前两次第二页尝试受样张布局影响，原图像素完整但遮挡了生成文字，被 QA 拦截；改用无图片输入的固定上下条带提示后，仍有多行页脚重叠，继续拦截。最终将要点明确为底边单行，用实际第 5 次生图完成第二页，第 6 次完成第三页；未降低 QA 标准、未重置预算、未额外生图。最终生成器对原图页只接收文字风格和标题/单行要点，其他页面可接收样张风格参考；QA 始终检查最终图、原图及样张。
+- **6.3 / 7.3 已通过**：三页均 accepted，任务 completed、下载 HTTP 200。逐页查看 LibreOffice 25.2.3.2 520(Build:2) 实际渲染 PNG，标题、中文、2026年10月15日、120万元正确，原图与页外文字无裁切/遮挡，三页讲稿准确。PPTX 内三张图片与下载 PNG 字节完全一致；原图嵌入实际矩形 [512,288,1536,864]，缩放后像素核对通过。成品 SHA-256 `365f581fbac926d20506d570b2ae445c3f03e33cb728031138b7a01bd1a59a2e`。
+- 真实 worker 用量：6/6 次生图，86400 tokens；6 次 Turbo QA，23046 tokens；合计 109446，held=0，无未知 usage。这里只统计 PPT worker；Agent/对话记忆另计，AFP、套餐抵扣、货币费用仍未知。所有失败与成功尝试保留 request ID 和 usage，不把失败消耗扣除。
+- 缓存/预算/取消/权限真实 API 检查再次通过；整套三页复用以 tokens=1 阻止意外付费回退，最终 completed，三页字节一致，image_attempts=0、qa_attempts=0。改动单页保留其他成功页、旧 revision=409、越权=403、取消无假完成。scope 基线逐行比对仍为原 documents 12/chunks 14/memory_units 205/file_summaries 2 完全一致；合成 bank 的新增数据单列，不修改原有业务记录。
+- 检查：ruff、OpenSpec strict 通过；Python 485 passed / 54 skipped；PPT PostgreSQL 15 passed；Pi 105 tests/typecheck/security/build 通过；SPA 64 tests/build 通过。54 skips 包含默认不运行的外部集成测试及 Windows symlink；保留既有 Starlette/Windows SSE 清理/Vite chunk 警告。新增数据库测试最初期望晚于实际审批门禁的拒绝，修正为同时覆盖审批和执行两个拒绝阶段后通过。
+- 标准 Docker 构建完成并部署验收版本；最终提交后再以准确 SHA 构建和核对 `/version`。新增代码、规划和验收记录作为补充批次提交当前 `feat/ppt-skill-upd`，不纳入原有 `.gitignore`/Hindsight 换行修改，不推送、不自动合并、不归档。
+- 私有证据目录 `output/ark-ppt-acceptance/composite/`：presentation.pptx、state.json、events.json、integrity.json、restart.json、full-cache.json、e2e-recovery-controls.json、data-comparison.json 和 artifacts/revision-1/rendered。最终提交与部署回执存 acceptance-receipt.json；这一批完成后全部 33 项任务完成。
+
+- 实际 Pi 图片链路补验：同一真实会话只调用一次 tkb_preview_ppt 查看第二页，回答白底、页脚单行横排、标题和120万元均与图像一致；证据 agent-preview-events.txt。该检查只读取既有图片，未调用生图。浏览器 DOM 仍未验收（无可用浏览器），真实 Agent/API 与逐页渲染验收已覆盖本变更要求的实际入口。

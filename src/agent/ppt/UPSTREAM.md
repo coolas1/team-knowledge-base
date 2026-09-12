@@ -20,7 +20,7 @@ runtime skill installation. The application adapter deliberately changes:
 | Local paths as assets | Authorized document assets with checked content identity |
 
 Preserve source reading, per-page context and layout variation, unified visual
-style, required-image transmission, sample approval, page QA, speaker notes and
+style, required-image preservation, sample approval, page QA, speaker notes and
 full-image PPTX assembly. Never use local text screenshots as generated slides.
 The source skill's default provider scripts are retained for provenance only and
 must not be invoked by the application.
@@ -32,3 +32,12 @@ succeeded, returning 14400 output tokens each. Exact dated model version and
 subscription deduction were not supplied; they remain unknown. The reference
 test retained Chinese text, numeric values and the bridge icon while adding the
 requested orange circle. These two probes do not constitute full PPT acceptance.
+
+Approved adaptation 2026-09-12: required figures are composited locally into
+versioned, approval-visible regions with aspect-preserving resize and no crop.
+Asset pages use text style and empty-region instructions without image input,
+preventing sample-layout copying. Other pages may send a style sample to Seedream;
+final-image QA receives original assets and the sample.
+Background bytes and embedded pixel/source hashes are retained. The isolated
+upstream assembly module disables optional JPEG compression, and the adapter
+verifies exact final PNG bytes inside the PPTX. Vendored source stays unchanged.

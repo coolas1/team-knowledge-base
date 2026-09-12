@@ -2,12 +2,14 @@
 
 from datetime import timedelta
 import hashlib
+import io
 import json
 import os
 from types import SimpleNamespace
 import uuid
 
 import pytest
+from PIL import Image
 from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
@@ -272,7 +274,9 @@ async def test_full_worker_restart_and_cross_job_cache(context):
     class Provider:
         async def generate(self, prompt, *, references):
             calls.append(prompt)
-            data = prompt.encode()
+            output = io.BytesIO()
+            Image.new("RGB", (2560, 1440), "navy").save(output, "PNG")
+            data = output.getvalue()
             return SimpleNamespace(
                 data=data,
                 mime="image/png",
@@ -317,6 +321,91 @@ async def test_bank_policy_revocation_blocks_preview(context):
         (await s.get(MemoryBank, "test-bank")).policy_version = 2
     with pytest.raises(PermissionError, match="policy"):
         await c.store.file(c.job, c.binding, "test-authority", page=1)
+
+
+async def test_required_asset_is_local_and_reviewed_after_restart(context, monkeypatch):
+    from src.agent.ppt.composition import verify_composite
+
+    c = context
+    output = io.BytesIO()
+    Image.new("RGB", (400, 200), "red").save(output, "PNG")
+    original = output.getvalue()
+    path = c.store.root / "original.png"
+    path.write_bytes(original)
+    monkeypatch.setattr(settings, "uploads_dir", str(c.store.root))
+    docid = uuid.uuid4()
+    async with c.sessions() as s, s.begin():
+        s.add(
+            Document(
+                id=docid,
+                bank_id="test-bank",
+                title="original",
+                file_type="image",
+                file_path=str(path),
+            )
+        )
+    spec = c.spec.model_copy(deep=True)
+    spec.pages[1].reference_document_ids = [str(docid)]
+    await control(c, "revise", spec=spec)
+    calls = []
+
+    class Provider:
+        async def generate(self, prompt, *, references):
+            calls.append(references)
+            assert original not in references
+            stream = io.BytesIO()
+            Image.new("RGB", (2560, 1440), "navy").save(stream, "PNG")
+            data = stream.getvalue()
+            return SimpleNamespace(
+                data=data,
+                mime="image/png",
+                sha256=hashlib.sha256(data).hexdigest(),
+                requested_model="fixture",
+                actual_model="fixture",
+                request_id="fixture",
+                usage={"total_tokens": 14400},
+            )
+
+    async def review(claim, references):
+        if claim["page"] == 2:
+            assert references[0] == original and len(references) == 2
+            verify_composite(
+                c.store.path(claim["result"]["path"]).read_bytes(),
+                [str(docid)],
+                references[:1],
+                claim["result"]["embedded"],
+            )
+        return {"passed": True, "usage": {"total_tokens": 100}}
+
+    worker = PPTWorker(c.store, Provider(), review, None)
+    await control(c, "approve_outline", revision=2)
+    await worker.run_once()
+    await worker.run_once()
+    await control(c, "approve_sample", revision=2)
+    await worker.run_once()
+    # Final PNG and manifest have been saved; fresh worker resumes QA only.
+    await PPTWorker(c.store, Provider(), review, None).run_once()
+    state = await c.store.get(c.job, c.binding, "test-authority")
+    assert state["pages"][1]["status"] == "accepted"
+    assert state["pages"][1]["reference_regions"][0]["document_id"] == str(docid)
+    assert len(calls) == 2 and len(calls[1]) == 0
+
+
+async def test_composition_policy_change_requires_new_approval(context):
+    c = context
+    async with c.sessions() as session, session.begin():
+        job = await session.get(PPTJob, c.job)
+        job.backend = {**job.backend, "composition": "obsolete"}
+    with pytest.raises(ValueError, match="Backend changed"):
+        await control(c, "approve_outline")
+    await control(c, "revise", spec=c.spec)
+    await control(c, "approve_outline", revision=2)
+    async with c.sessions() as session, session.begin():
+        job = await session.get(PPTJob, c.job)
+        job.backend = {**job.backend, "composition": "obsolete"}
+    assert await c.worker.claim() is None
+    state = await c.store.get(c.job, c.binding, "test-authority")
+    assert state["status"] == "failed" and not state["accounting"]
 
 
 async def test_visual_failure_gets_only_one_automatic_repair(context):

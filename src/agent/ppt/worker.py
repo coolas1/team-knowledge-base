@@ -14,6 +14,7 @@ from sqlalchemy import select
 from .models import PPTJob, PPTPage
 from .provider import ImageProviderError
 from .store import backend_identity
+from .composition import compose, regions
 
 logger = logging.getLogger(__name__)
 LEASE_SECONDS = 90
@@ -298,28 +299,60 @@ class PPTWorker:
                 required = len(page["reference_document_ids"])
                 if required:
                     prompt = (
-                        f"参考图片1到{required}是必须放入本页的真实素材，不是风格参考。"
-                        "按本页版式将素材作为完整矩形图片嵌入，等比缩小，保留原图全部内容、"
-                        "颜色、文字和数字；不要用重新绘制的卡片或文字替代原图。"
-                        "本页标题和要点放在素材图外，不能覆盖图内内容。\n"
-                        + prompt
+                        "生成16:9演示文稿底图，2560×1440。中间绝大部分留空，"
+                        "这是供程序随后嵌入真实原图的底图，不是完整成品。"
+                        "中央从y=216到1224的全部区域只填纯背景色，禁止图形、文字、"
+                        "卡片、装饰、边框或占位提示。最上方12%以内写标题，基线y=150。"
+                        "最底边只写一行小号文字，字号约48px、基线y=1360，"
+                        "所有要点用竖线连接成同一行居中。禁止列表、换行和分栏卡片。"
+                        "不要重复。所有字形不得越出这两个条带。"
+                        "不要生成页码。\n"
+                        + json.dumps(
+                            {
+                                "style": claim["spec"]["style"],
+                                "top_strip_title": page["title"],
+                                "bottom_single_line": "  |  ".join(page["points"]),
+                                "empty_reference_regions": regions(
+                                    page["reference_document_ids"]
+                                ),
+                            },
+                            ensure_ascii=False,
+                        )
                     )
-                if len(references) > required:
+                elif references:
                     prompt = (
-                        f"参考图片{len(references)}仅供整页配色和字体风格参考，"
-                        "不要复制它的布局或内容，不要将它当成必需素材。\n"
-                        + prompt
+                        "唯一参考图片仅供整页配色和字体风格参考，"
+                        "不要复制它的布局或内容，不要将它当成必需素材。\n" + prompt
                     )
-                generated = await self.provider.generate(prompt, references=references)
+                generated = await self.provider.generate(
+                    prompt, references=() if required else references
+                )
+                # Local composition failures must not discard known billing.
+                result = {"usage": generated.usage, "request_id": generated.request_id}
                 folder = self.store.path(f"{claim['job']}/{claim['lease']}")
                 folder.mkdir(parents=True, exist_ok=True)
                 suffix = "png" if generated.mime == "image/png" else "jpg"
-                path = folder / f"slide.{suffix}"
-                path.write_bytes(generated.data)
+                background = folder / f"background.{suffix}"
+                background.write_bytes(generated.data)
+                data, embedded = await asyncio.to_thread(
+                    compose,
+                    generated.data,
+                    page["reference_document_ids"],
+                    references[:required],
+                )
+                path = folder / "slide.png"
+                path.write_bytes(data)
                 result = {
                     "path": str(path.relative_to(self.store.root)).replace("\\", "/"),
-                    "sha256": generated.sha256,
-                    "mime": generated.mime,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "mime": "image/png",
+                    "background": {
+                        "path": str(background.relative_to(self.store.root)).replace(
+                            "\\", "/"
+                        ),
+                        "sha256": generated.sha256,
+                    },
+                    "embedded": embedded,
                     "requested_model": generated.requested_model,
                     "actual_model": generated.actual_model,
                     "request_id": generated.request_id,
