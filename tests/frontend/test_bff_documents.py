@@ -27,6 +27,25 @@ def test_list_documents(client):
     assert "items" in res.json()
 
 
+def test_list_documents_rest_keeps_full_page_size(client):
+    # The MCP tool layer clamps page_size for the agent; the REST contract
+    # must keep serving the requested size (bounds are MCP-only by design).
+    c, kb = client
+    calls = {}
+
+    async def list_documents(page=1, page_size=20, file_type=None, status=None):
+        calls["page_size"] = page_size
+        return {"total": 0, "page": page, "page_size": page_size, "items": []}
+
+    kb.list_documents = list_documents
+
+    res = c.get("/api/documents", params={"page_size": 100})
+
+    assert res.status_code == 200
+    assert calls["page_size"] == 100
+    assert res.json()["page_size"] == 100
+
+
 def test_list_documents_hides_internal_conversation_sources(client):
     c, kb = client
     from src.engine.interface import DocumentRef

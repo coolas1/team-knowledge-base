@@ -200,18 +200,23 @@ class HindsightQueryService:
                 top_k=request.top_k,
                 **({"filters": filters} if filters is not None else {}),
             )
+            kept, texts, evidence_trace = self._bound_evidence(recalled)
             grouped: defaultdict[str, list[dict]] = defaultdict(list)
-            for item in recalled.results:
-                grouped[item.memory_type].append(item.as_evidence())
+            for item in kept:
+                evidence = item.as_evidence()
+                evidence["text"] = texts[item.id]
+                grouped[item.memory_type].append(evidence)
+            trace = dict(recalled.trace)
+            trace.update(evidence_trace)
             return KnowledgeQueryResult(
                 strategy_used="recall",
                 sources=[
-                    self._source_from_candidate(item, recalled)
-                    for item in recalled.results
+                    self._source_from_candidate(item, recalled, texts[item.id])
+                    for item in kept
                 ],
                 related_entities=self._related_entities(recalled.entities),
                 based_on=dict(grouped),
-                trace=dict(recalled.trace),
+                trace=trace,
             )
 
         filters = self._filters(request)
@@ -239,6 +244,50 @@ class HindsightQueryService:
             raise ValueError(f"unsupported retrieval mode: {request.mode}")
         if request.top_k < 1:
             raise ValueError("top_k must be greater than zero")
+
+    @staticmethod
+    def _bound_evidence(
+        recalled: RecallResult,
+    ) -> tuple[list[RecallCandidate], dict[str, str], dict]:
+        """Cap per-excerpt and total evidence chars for recall payloads.
+
+        Results arrive ranked best-first, so the walk keeps a ranked prefix
+        and drops the lowest-ranked evidence first. The trim lands in the
+        trace (beside `degraded`) so telemetry stays truthful while the
+        payload stays bounded.
+        """
+        from config.settings import settings
+
+        excerpt_cap = settings.engine_tools_deep_excerpt_chars
+        total_budget = settings.engine_tools_deep_total_chars
+        kept: list[RecallCandidate] = []
+        texts: dict[str, str] = {}
+        original_chars = 0
+        used = 0
+        for item in recalled.results:
+            chunk_id = f"{item.document_id}_{item.chunk_index}"
+            raw = str(
+                recalled.chunks.get(chunk_id, {}).get("text")
+                or item.source_text
+                or item.text
+                or ""
+            )
+            original_chars += len(raw)
+            text = raw[:excerpt_cap]
+            if kept and used + len(text) > total_budget:
+                break  # budget exhausted: lower-ranked evidence drops first
+            if not kept and len(text) > total_budget:
+                text = text[:total_budget]
+            kept.append(item)
+            texts[item.id] = text
+            used += len(text)
+        trace = {
+            "evidence_trimmed": used < original_chars,
+            "evidence_kept": len(kept),
+            "evidence_dropped": len(recalled.results) - len(kept),
+            "evidence_chars": used,
+        }
+        return kept, texts, trace
 
     @staticmethod
     def _resolve_strategy(request: KnowledgeQueryRequest) -> str:
@@ -282,16 +331,14 @@ class HindsightQueryService:
 
     @staticmethod
     def _source_from_candidate(
-        item: RecallCandidate, recalled: RecallResult
+        item: RecallCandidate, recalled: RecallResult, chunk_text: str
     ) -> KnowledgeSource:
-        chunk_id = f"{item.document_id}_{item.chunk_index}"
-        chunk = recalled.chunks.get(chunk_id, {})
         return KnowledgeSource(
             memory_id=item.id,
             memory_type=item.memory_type,
             doc_id=item.document_id,
             title=item.title,
-            chunk_text=str(chunk.get("text") or item.text),
+            chunk_text=chunk_text,
             score=item.final_score,
             metadata={
                 **dict(item.metadata),

@@ -65,6 +65,15 @@ const QUERY_PARAMS = Type.Object({
 
 const GET_DOCUMENT_PARAMS = Type.Object({
   doc_id: Type.String({ description: "Document UUID" }),
+  offset: Type.Optional(
+    Type.Integer({
+      minimum: 0,
+      description: "Character offset of the window to read; continue from the response's next_offset",
+    }),
+  ),
+  limit: Type.Optional(
+    Type.Integer({ minimum: 1, description: "Window size in characters (server default is bounded)" }),
+  ),
 });
 
 const QUERY_GRAPH_PARAMS = Type.Object({
@@ -340,10 +349,21 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
     defineTool({
       name: "tkb_get_document",
       label: "TKB Document",
-      description: "Read a knowledge-base document by UUID after search identifies it.",
+      description:
+        "Read a knowledge-base document by UUID after search identifies it. Long documents return one bounded text window with offset/total_chars/has_more/next_offset; when has_more is true, call again with offset=next_offset to page through instead of re-reading from the start.",
       parameters: GET_DOCUMENT_PARAMS,
       execute: (_id, params, signal) =>
-        executeMcpTool(client, "get_document", { doc_id: params.doc_id }, signal, normal),
+        executeMcpTool(
+          client,
+          "get_document",
+          {
+            doc_id: params.doc_id,
+            offset: params.offset ?? 0,
+            limit: params.limit ?? null,
+          },
+          signal,
+          normal,
+        ),
     }),
     defineTool({
       name: "tkb_query_graph",

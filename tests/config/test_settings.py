@@ -77,6 +77,29 @@ def test_infra_settings_uploads_dir_default_and_env_override(monkeypatch, tmp_pa
     assert InfraSettings(_env_file=None).uploads_dir == str(absolute)
 
 
+def test_infra_settings_tool_payload_bounds_default_and_env(monkeypatch):
+    # engine.tools payload bounds: defaults keep tkb_* tool responses bounded;
+    # env overrides carry deployment-specific budgets (ENGINE_TOOLS_*).
+    for var in (
+        "ENGINE_TOOLS_WINDOW_CHARS",
+        "ENGINE_TOOLS_LIST_PAGE_MAX",
+        "ENGINE_TOOLS_DEEP_EXCERPT_CHARS",
+        "ENGINE_TOOLS_DEEP_TOTAL_CHARS",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    s = InfraSettings(_env_file=None)
+    assert s.engine_tools_window_chars == 8_000
+    assert s.engine_tools_list_page_max == 50
+    assert s.engine_tools_deep_excerpt_chars == 2_000
+    assert s.engine_tools_deep_total_chars == 12_000
+
+    monkeypatch.setenv("ENGINE_TOOLS_WINDOW_CHARS", "1000")
+    monkeypatch.setenv("ENGINE_TOOLS_DEEP_TOTAL_CHARS", "6000")
+    overridden = InfraSettings(_env_file=None)
+    assert overridden.engine_tools_window_chars == 1000
+    assert overridden.engine_tools_deep_total_chars == 6000
+
+
 def test_submodels_are_mutable_for_monkeypatch():
     s = LLMSettings(_env_file=None)
     s.base_url = "http://x/v1"
