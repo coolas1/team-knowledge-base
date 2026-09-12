@@ -293,6 +293,25 @@ async def test_bank_policy_revocation_blocks_preview(context):
         await c.store.file(c.job, c.binding, "test-authority", page=1)
 
 
+async def test_visual_failure_gets_only_one_automatic_repair(context):
+    c = context
+    await control(c, "approve_outline")
+    for _ in range(2):
+        image = await c.worker.claim()
+        await c.worker.finish(
+            image,
+            {"path": "unused", "sha256": "fixture", "usage": {"total_tokens": 14400}},
+        )
+        qa = await c.worker.claim()
+        await c.worker.finish(
+            qa, {"passed": False, "reason": "金额错误", "usage": {"total_tokens": 100}}
+        )
+    assert await c.worker.claim() is None
+    state = await c.store.get(c.job, c.binding, "test-authority")
+    assert state["status"] == "failed" and state["artifact"] is None
+    assert state["accounting"]["image_attempts"] == 2
+
+
 async def test_cancel_during_provider_call_stops_remaining_pages(context):
     c = context
     calls = []

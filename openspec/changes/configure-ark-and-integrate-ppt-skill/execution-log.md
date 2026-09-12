@@ -51,3 +51,13 @@
 - 预览、来源原图与下载重新检查权限并禁止公共缓存；前端不接收凭据。MCP approve 测试断言不触发 store.control，图片返回测试断言真实 image content。
 - Python frontend+agent 159 passed（修复既有 test_deps 的 singleton hooks 泄漏，使反向测试顺序也通过）；Pi check 包含安全本地门禁/typecheck/105 tests/build 全通过；SPA 64 tests 与构建通过；ruff 通过。
 - 本批提交 feat(webapp): review image presentation jobs。真实 UI 生图与下载验收留在第六批，不把 mock 契约当作端到端证明。
+
+## 第五批实施与验收（2026-09-12）
+
+- 第四批提交 ba03044。Turbo 视觉 QA 接收实际幻灯片与必需原图，严格检查 text/numbers/assets/style/layout 五项；每页最多自动修复一次，QA 与图片调用均纳入预算与 usage。
+- 固定上游 create_presentation 组装整页图片与备注；独立检查图片数/摆放/16:9/备注，再用容器内 LibreOffice 与 pdftoppm 实际渲染。未通过不会发布成功下载。
+- 真实无网络渲染验收：复用第二批两张已人工检查的 Seedream 图，生成 2 页 / 2 页备注，LibreOffice 25.2.3.2 520(Build:2) 成功打开；逐页查看渲染 PNG，中文、日期、金额正确，无缺图裁切。证据 output/ark-ppt-acceptance/render-probe/revision-1/，未新增生图调用。
+- 单元 QA/组装 + deps 11 passed；隔离 PG 增加自动修复上限测试后 12 passed；ruff 通过。生产 worker 已有生命周期接线，但本机 PPT flag 仍 false。
+- 标准镜像首次因 npm 官方 audit 临时错误失败，未绕过门禁，重试后 webapp/pi-agent 成功。图片模型实际返回 JPEG 字节，按 MIME 组装 .jpg（不凭原探针 .png 文件名判格式）。
+- 本批提交 feat(agent): verify and assemble image decks。
+- 浏览器技能连接失败，list()=[]；第六批优先走实际 Agent/API 入口，不声称已完成浏览器 DOM 交互验收。

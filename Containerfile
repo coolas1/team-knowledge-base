@@ -104,6 +104,10 @@ RUN cd src/frontend/webapp/client \
 COPY src/ ./src/
 COPY config/ ./config/
 RUN /app/.venv/bin/python /app/src/agent/ppt/verify_vendor.py
+# Image decks must actually open and render before publication.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libreoffice-impress poppler-utils fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
 # The runtime semantic version (see src/frontend/webapp/server/version.py).
 COPY VERSION ./
 

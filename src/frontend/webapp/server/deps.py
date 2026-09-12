@@ -43,6 +43,9 @@ async def startup() -> None:
     from src.engine.components.store.postgres import init_db
 
     await init_db()
+    from src.agent.ppt.runtime import start as start_ppt
+
+    await start_ppt()
     _kb = build_engine(engine_config_from_app(cfg))
 
     if cfg.engine.memory.enabled:
@@ -176,6 +179,9 @@ async def startup() -> None:
 
 
 async def shutdown() -> None:
+    from src.agent.ppt.runtime import stop as stop_ppt
+
+    await stop_ppt()
     global _graph_worker, _conversation_worker, _consolidation_worker
     global _mental_model_worker, _query
     try:
