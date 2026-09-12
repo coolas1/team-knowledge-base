@@ -15,6 +15,7 @@ import pytest
 from src.engine.components.analyzer import Analyzer, ChangeAnalysisResult
 from src.engine.components.store.models import DocumentChange
 from src.engine.components.store.neo4j import Neo4jClient
+from src.engine.components.store.source_graph import SourceNeo4jClient
 from src.engine.graphrag.pipeline import Pipeline, VersionParent
 from src.engine.graphrag._version_match import (
     SIMILARITY_THRESHOLD,
@@ -163,6 +164,35 @@ async def test_upsert_document_node_includes_version_properties():
     query = session.queries[0]
     assert "d.version_number = $version_number" in query
     assert "d.is_current = $is_current" in query
+    assert session.parameters[0]["version_number"] == 3
+    assert session.parameters[0]["is_current"] is False
+
+
+async def test_source_upsert_document_node_preserves_scope_and_version_properties():
+    client = SourceNeo4jClient.__new__(SourceNeo4jClient)
+    client._driver = Driver()
+
+    async def owner(_doc_id):
+        return "team-a", ["private"]
+
+    client._owner = owner
+
+    await client.upsert_document_node(
+        doc_id="d1",
+        title="t",
+        file_type="markdown",
+        overview="o",
+        version_number=3,
+        is_current=False,
+    )
+
+    session = client._driver.value
+    query = session.queries[0]
+    assert "d.bank_id=$bank" in query
+    assert "d.version_number=$version_number" in query
+    assert "d.is_current=$is_current" in query
+    assert session.parameters[0]["bank"] == "team-a"
+    assert session.parameters[0]["tags"] == ["private"]
     assert session.parameters[0]["version_number"] == 3
     assert session.parameters[0]["is_current"] is False
 
