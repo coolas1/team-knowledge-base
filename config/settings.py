@@ -131,6 +131,10 @@ class InfraSettings(BaseSettings):
     # unrelated memories.
     hindsight_recall_min_semantic: float = Field(default=0.45, ge=0.0, le=1.0)
     hindsight_recall_min_score: float = Field(default=0.4, ge=0.0, le=1.0)
+    # Keyword-only candidates must cover this fraction of the query's salient
+    # terms, with at least this many matching terms, to clear the gate.
+    hindsight_recall_min_term_coverage: float = Field(default=0.5, gt=0.0, le=1.0)
+    hindsight_recall_min_term_count: int = Field(default=2, ge=1)
     # Conversation-memory recall uses its own, lower semantic floor so the
     # public-corpus gate does not determine what memories are recalled.
     hindsight_conversation_recall_min_semantic: float = Field(
@@ -188,6 +192,12 @@ class InfraSettings(BaseSettings):
     engine_tools_list_page_max: int = Field(default=50, ge=1)
     engine_tools_deep_excerpt_chars: int = Field(default=2_000, ge=1)
     engine_tools_deep_total_chars: int = Field(default=12_000, ge=1)
+    engine_tools_entities_max: int = Field(default=10, ge=1)
+    # Whole-response cap for every search tool: the entire serialized payload
+    # (evidence + metadata + entities + trace) stays within this many
+    # characters; the lowest-ranked sources drop first and the trim is
+    # reported in the trace.
+    engine_tools_response_max_chars: int = Field(default=24_000, ge=1)
 
     # Model config groups (OpenAI-compatible endpoints). Sub-models each
     # read their own env prefix from .env; see the classes above.

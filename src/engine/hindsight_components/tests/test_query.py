@@ -16,7 +16,12 @@ class FakeCore:
         self.item.final_score = 0.9
 
     async def recall(
-        self, query: str, *, mode: str = "deep", top_k: int | None = None
+        self,
+        query: str,
+        *,
+        mode: str = "deep",
+        top_k: int | None = None,
+        filters=None,
     ) -> RecallResult:
         self.calls.append(("recall", query, mode, top_k))
         return RecallResult(
@@ -100,12 +105,21 @@ async def test_query_serializes_conversation_provenance_in_source_metadata() -> 
     )
 
     result = await HindsightQueryService(core).query(
-        KnowledgeQueryRequest(query="remembered preference", strategy="recall")
+        KnowledgeQueryRequest(
+            query="remembered preference",
+            strategy="recall",
+            include=("chunks", "entities", "based_on"),
+        )
     )
 
     assert result.sources[0].metadata["source_type"] == "conversation"
     assert result.sources[0].metadata["session_id"] == "session-1"
-    assert result.based_on["world"][0]["turn_id"] == "turn-1"
+    # based_on is opt-in and compact; provenance survives, evidence text does
+    # not repeat.
+    grouped = result.based_on["world"][0]
+    assert grouped["turn_id"] == "turn-1"
+    assert grouped["session_id"] == "session-1"
+    assert "text" not in grouped
 
 
 async def test_explicit_strategy_overrides_answer_purpose() -> None:
