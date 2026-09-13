@@ -10,6 +10,7 @@ from .retention_context import extraction_context, fact_datetime
 
 from src.engine.components.chunker import Chunk, chunk_text
 
+from src.engine.retrieval_view import retrieval_view_prefix
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.protocols import (
     HindsightProviders,
@@ -555,6 +556,16 @@ class RetainEngine:
             "policy_version": retain_input.policy_version,
         }
         metadata.pop("resolved_entities", None)
+        # Retrieval view: embeddings and lexical tokens see the document's
+        # clean metadata ahead of the text so OCR-noisy bodies stay findable.
+        # Conversation turns carry no filename/overview and keep plain text.
+        view_prefix = (
+            retrieval_view_prefix(
+                retain_input.title, retain_input.filename, retain_input.overview
+            )
+            if (retain_input.filename or retain_input.overview)
+            else ""
+        )
 
         for chunk, chunk_facts in zip(chunks, facts_by_chunk, strict=True):
             specs.append((chunk, 0, ExtractedFact(text=chunk.text), True, None))
@@ -568,7 +579,9 @@ class RetainEngine:
                         causal_indexes.append((flat_index, chunk_offset + target))
                 flat_index += 1
 
-        embeddings = await self._providers.embed(texts)
+        embeddings = await self._providers.embed(
+            [view_prefix + text for text in texts]
+        )
         if len(embeddings) != len(specs):
             raise ValueError("embedding provider returned an unexpected row count")
 
@@ -669,6 +682,7 @@ class RetainEngine:
                 source_text=chunk.text,
                 context=source.context or f"Knowledge-base document: {source.title}",
                 embedding=embedding,
+                **({"retrieval_text": view_prefix + fact.text} if view_prefix else {}),
                 entities=list(fact.entities),
                 occurred_start=fact.occurred_start,
                 occurred_end=fact.occurred_end,
@@ -751,7 +765,9 @@ class RetainEngine:
             )
 
         observation_texts = [str(item["text"]) for item in observations]
-        observation_embeddings = await self._providers.embed(observation_texts)
+        observation_embeddings = await self._providers.embed(
+            [view_prefix + text for text in observation_texts]
+        )
         if len(observation_embeddings) != len(observations):
             raise ValueError(
                 "embedding provider returned an unexpected observation row count"
@@ -789,6 +805,11 @@ class RetainEngine:
                 source_text="\n".join(source.text for source in sources),
                 context=f"Consolidated observation; {context}",
                 embedding=embedding,
+                **(
+                    {"retrieval_text": view_prefix + str(raw["text"])}
+                    if view_prefix
+                    else {}
+                ),
                 entities=[str(item) for item in raw.get("entities", [])],
                 confidence=float(raw.get("confidence", 1.0)),
                 source_memory_ids=[source.id for source in sources],

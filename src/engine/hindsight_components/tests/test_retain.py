@@ -96,6 +96,80 @@ async def test_retain_builds_atomic_memories_observation_and_links() -> None:
     )
 
 
+async def test_document_retain_embeds_metadata_prefixed_retrieval_view() -> None:
+    """A document with clean metadata and an OCR-noisy body: embeddings and
+    lexical tokens see title|filename|overview + text; the stored text stays
+    the original extraction."""
+
+    class RecordingProviders(FakeProviders):
+        def __init__(self) -> None:
+            super().__init__()
+            self.embedded: list[str] = []
+
+        async def embed(self, texts, *, timeout=None):
+            self.embedded.extend(texts)
+            return await super().embed(texts, timeout=timeout)
+
+    providers = RecordingProviders()
+    repository = FakeRepository()
+    engine = RetainEngine(repository, providers, HindsightOptions())
+    noisy = "锟斤拷烫烫烫 屯屯屯 屯屯屯"
+
+    await engine.retain(
+        RetainInput(
+            document_id="document-noisy",
+            title="自动驾驶论文二",
+            content=noisy,
+            file_type="pdf",
+            filename="autopaper2.pdf",
+            overview="关于自动驾驶控制理论的综述论文",
+        )
+    )
+
+    assert repository.plan is not None
+    prefix = "自动驾驶论文二 | autopaper2.pdf | 关于自动驾驶控制理论的综述论文\n"
+    assert providers.embedded
+    assert all(text.startswith(prefix) for text in providers.embedded)
+    source_chunks = [
+        memory for memory in repository.plan.memories if memory.is_source_chunk
+    ]
+    assert source_chunks  # displayed/evidence text stays the original extraction
+    assert all(memory.text == noisy for memory in source_chunks)
+    for memory in repository.plan.memories:
+        assert memory.retrieval_text == prefix + memory.text
+        assert memory.embedding is not None
+
+
+async def test_conversation_retain_keeps_plain_text_without_document_metadata() -> None:
+    class RecordingProviders(FakeProviders):
+        def __init__(self) -> None:
+            super().__init__()
+            self.embedded: list[str] = []
+
+        async def embed(self, texts, *, timeout=None):
+            self.embedded.extend(texts)
+            return await super().embed(texts, timeout=timeout)
+
+    providers = RecordingProviders()
+    repository = FakeRepository()
+    engine = RetainEngine(repository, providers, HindsightOptions())
+
+    await engine.retain(
+        RetainInput(
+            document_id="conversation-doc",
+            title="Conversation turn",
+            content="[user]\nhello\n\n[assistant]\nhi",
+            file_type="conversation",
+            source_type="conversation",
+        )
+    )
+
+    assert repository.plan is not None
+    assert providers.embedded
+    assert all(not text.startswith("Conversation turn") for text in providers.embedded)
+    assert all(memory.retrieval_text is None for memory in repository.plan.memories)
+
+
 async def test_background_consolidation_disables_legacy_same_retain_observation():
     repository = FakeRepository()
     providers = FakeProviders()

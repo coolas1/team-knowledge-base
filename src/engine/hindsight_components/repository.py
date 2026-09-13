@@ -177,7 +177,28 @@ class PostgresMemoryRepository:
                         "assistant": self.scope.agent_name,
                     },
                 ),
+                **self._retrieval_view_fields(document),
             )
+
+    @staticmethod
+    def _retrieval_view_fields(document) -> dict[str, str | None]:
+        """Filename/overview for retrieval-view composition off a Document row."""
+        file_path = getattr(document, "file_path", None) or ""
+        filename = file_path.rsplit("/", 1)[-1] or None
+        overview = (getattr(document, "overview", None) or "").strip() or None
+        return {"filename": filename, "overview": overview}
+
+    async def document_retrieval_context(self, document_id: str) -> dict[str, str | None]:
+        """Best-effort retrieval-view metadata for a retained document."""
+        async with self._session_factory() as session:
+            document = await session.scalar(
+                select(Document).where(
+                    Document.id == uuid.UUID(document_id), self._document_scope()
+                )
+            )
+        if document is None:
+            return {}
+        return self._retrieval_view_fields(document)
 
     async def _check_retention_lease(self, session, document_id):
         if self._retention_lease is None:
@@ -943,7 +964,7 @@ class PostgresMemoryRepository:
                 memory_index=draft.memory_index,
                 memory_type=draft.memory_type,
                 text=draft.text,
-                lexical_tokens=lexical_tokens(draft.text),
+                lexical_tokens=lexical_tokens(draft.retrieval_text or draft.text),
                 source_text=draft.source_text,
                 context=draft.context,
                 embedding=draft.embedding,
@@ -1647,6 +1668,7 @@ class PostgresMemoryRepository:
                 )
                 base = (
                     base.add_columns(overlap_score.label("lexical_overlap"))
+                    .add_columns(MemoryUnit.lexical_tokens)
                     .where(
                         MemoryUnit.lexical_tokens.is_not(None),
                         MemoryUnit.lexical_tokens.overlap(query_tokens),
@@ -1661,7 +1683,17 @@ class PostgresMemoryRepository:
                 else await session.execute(base)
             )
             raw_rows = list(result.all())
-            scores = self._bm25(query, [str(row[1]) for row in raw_rows])
+            if self._keyword_index_enabled:
+                # Score the stored retrieval view: lexical_tokens are built
+                # from title|filename|overview + text, so a document whose
+                # body is OCR noise still ranks when its metadata matches.
+                # " ".join round-trips lexical_tokens losslessly.
+                scoring_texts = [
+                    " ".join(row[3] or []) for row in raw_rows
+                ]
+            else:
+                scoring_texts = [str(row[1]) for row in raw_rows]
+            scores = self._bm25(query, scoring_texts)
             ranked_ids = sorted(
                 (
                     (memory_id, score)

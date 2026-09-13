@@ -9,7 +9,9 @@ from typing import Any
 from src.engine.scope import MemoryScope as MemoryScope
 from src.engine.scope import TagExpression as TagExpression
 
-RECALL_INCLUDES = frozenset({"chunks", "documents", "source_facts", "entities"})
+RECALL_INCLUDES = frozenset(
+    {"chunks", "documents", "source_facts", "entities", "based_on"}
+)
 RECALL_SCORE_NAMES = frozenset(
     {"final", "semantic", "keyword", "graph", "temporal", "reranker"}
 )
@@ -132,6 +134,10 @@ class RetainInput:
     request_id: str | None = None
     force_extraction: bool = False
     update_mode: str = "replace"
+    # Document metadata for retrieval-view composition. Absent (conversation
+    # turns, legacy callers) → embeddings/lexical tokens use the plain text.
+    filename: str | None = None
+    overview: str | None = None
 
     def __post_init__(self):
         from zoneinfo import ZoneInfo
@@ -186,6 +192,9 @@ class MemoryDraft:
     context: str
     embedding: list[float]
     entities: list[str] = field(default_factory=list)
+    # Retrieval representation (metadata prefix + text) used for lexical
+    # tokens; the stored `text` stays the original extraction.
+    retrieval_text: str | None = None
     occurred_start: datetime | None = None
     occurred_end: datetime | None = None
     confidence: float = 1.0
