@@ -74,6 +74,7 @@ class HindsightRetainHook:
                         file_type=file_type,
                         source_type="graphrag-pipeline",
                         tags=self._write_tags,
+                        **await self._retrieval_view_fields(document_id),
                     )
                 )
         except RetentionRevisionConflict:
@@ -83,6 +84,24 @@ class HindsightRetainHook:
             await self._repository.set_document_state(
                 document_id, "failed", error_msg=str(error)
             )
+
+    async def _retrieval_view_fields(self, document_id: str) -> dict:
+        """Filename/overview so retention embeds the metadata-prefixed view.
+
+        Best-effort: the secondary index must not fail because the lookup
+        did; without the fields retention falls back to plain text.
+        """
+        loader = getattr(self._repository, "document_retrieval_context", None)
+        if loader is None:
+            return {}
+        try:
+            return dict(await loader(document_id))
+        except Exception:
+            logger.exception(
+                "Retrieval-view lookup failed for %s; retaining plain text",
+                document_id,
+            )
+            return {}
 
     async def before_remove(self, document_id: str) -> None:
         try:

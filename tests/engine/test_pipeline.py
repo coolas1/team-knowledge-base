@@ -144,9 +144,11 @@ class _RecordingAnalyzer:
 class _FakeEmbedder:
     def __init__(self):
         self.calls = 0
+        self.texts: list[list[str]] = []
 
     async def embed_batch(self, texts):
         self.calls += 1
+        self.texts.append(list(texts))
         await asyncio.sleep(0.02)
         return [[0.0] for _ in texts]
 
@@ -174,6 +176,27 @@ async def test_analyze_document_runs_chunks_parallel_and_bounded(monkeypatch):
     assert 1 < analyzer.peak <= 3  # 并行但受信号量限流
     assert embed.calls == 1
     assert len(embeddings) == len(chunk_results)
+
+
+async def test_analyze_document_embeds_retrieval_view(monkeypatch):
+    """Chunk embeddings see title|filename|overview + text; the stored
+    chunk_text stays the original extraction."""
+    from src.engine.graphrag import pipeline as pipeline_mod
+
+    analyzer = _RecordingAnalyzer()
+    embed = _FakeEmbedder()
+    monkeypatch.setattr(pipeline_mod, "embedder", embed)
+    pipe = pipeline_mod.Pipeline(object(), analyzer=analyzer)
+
+    noisy = "扫描噪声 乱码 乱码 乱码"
+    doc_analysis, chunks, _results, _embeddings = await pipe._analyze_document(
+        noisy, "自动驾驶综述.pdf", uuid4(), filename="scan-42.pdf"
+    )
+
+    assert doc_analysis.overview == "ov"
+    prefix = "自动驾驶综述.pdf | scan-42.pdf | ov\n"
+    assert embed.texts == [[prefix + chunk.text for chunk in chunks]]
+    assert all(chunk.text == noisy or noisy in chunk.text for chunk in chunks)
 
 
 async def test_analyze_document_failure_propagates(monkeypatch):

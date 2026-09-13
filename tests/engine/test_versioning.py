@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -195,6 +196,83 @@ async def test_source_upsert_document_node_preserves_scope_and_version_propertie
     assert session.parameters[0]["tags"] == ["private"]
     assert session.parameters[0]["version_number"] == 3
     assert session.parameters[0]["is_current"] is False
+
+
+class OwnerSession:
+    """伪造 Postgres 会话：_owner 经 session.get 查 Document 的 bank/tags。"""
+
+    def __init__(self, doc):
+        self._doc = doc
+
+    async def get(self, _model, _pk):
+        return self._doc
+
+
+class OwnerSessionFactory:
+    def __init__(self, doc):
+        self._doc = doc
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        return OwnerSession(self._doc)
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+async def test_source_upsert_document_node_pipeline_fresh_ingest_shape():
+    # 复刻 pipeline.py 新鲜入库的调用形态：生产总是装配 SourceNeo4jClient，
+    # 若 override 缺 version_number/is_current 形参，此处即 TypeError。
+    doc = SimpleNamespace(bank_id="default-team", tags=["kb", "autopilot"])
+    client = SourceNeo4jClient(
+        driver=Driver(), session_factory=OwnerSessionFactory(doc)
+    )
+
+    await client.upsert_document_node(
+        doc_id="588bd22f-ec98-40af-826f-f5d605d0cebc",
+        title="飞行手册 v2",
+        file_type="pdf",
+        overview="自动巡航",
+        version_number=2,
+        is_current=True,
+    )
+
+    session = client._driver.value
+    query = session.queries[0]
+    assert "MERGE (d:Document {doc_id: $id})" in query
+    assert "d.version_number=$version_number" in query
+    assert "d.is_current=$is_current" in query
+    assert "d.bank_id=$bank" in query
+    assert "d.tags=$tags" in query
+    assert session.parameters[0]["version_number"] == 2
+    assert session.parameters[0]["is_current"] is True
+    assert session.parameters[0]["bank"] == "default-team"
+    assert session.parameters[0]["tags"] == ["kb", "autopilot"]
+
+
+async def test_source_upsert_document_node_backend_superseded_shape():
+    # 复刻 backend.py 旧版本回写形态（is_current=False），tags=None 归一为空表。
+    doc = SimpleNamespace(bank_id="team-a", tags=None)
+    client = SourceNeo4jClient(
+        driver=Driver(), session_factory=OwnerSessionFactory(doc)
+    )
+
+    await client.upsert_document_node(
+        doc_id="0e2f6a1c-3b4d-4e5f-8a9b-1c2d3e4f5a6b",
+        title="旧版",
+        file_type="markdown",
+        overview="o",
+        version_number=1,
+        is_current=False,
+    )
+
+    session = client._driver.value
+    assert session.parameters[0]["version_number"] == 1
+    assert session.parameters[0]["is_current"] is False
+    assert session.parameters[0]["bank"] == "team-a"
+    assert session.parameters[0]["tags"] == []
 
 
 async def test_link_next_version_merges_directed_edge():

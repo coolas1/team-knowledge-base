@@ -433,6 +433,172 @@ async def test_deep_search_returns_typed_timeout_payload():
     }
 
 
+async def test_search_tool_returns_only_gated_sources_and_reports_filtering(fake_kb):
+    """End to end through the MCP layer: a mixed corpus (matching doc chunk,
+    matching conversation turn, single-term noise) returns exactly the two
+    relevant sources even though top_k allows more, with filtered_count in
+    the trace."""
+    from src.engine.hindsight_components.config import HindsightOptions
+    from src.engine.hindsight_components.query import HindsightQueryService
+    from src.engine.hindsight_components.recall import RecallEngine
+    from src.engine.hindsight_components.tests.fakes import (
+        FakeProviders,
+        FakeRepository,
+        candidate,
+    )
+
+    class MixedCorpusRepository(FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.doc = candidate(
+                "doc-chunk",
+                "autonomous driving control theory survey",
+                semantic=0.1,
+                keyword=0.5,
+            )
+            self.turn = candidate(
+                "conversation-turn",
+                "we discussed autonomous driving control theory",
+                semantic=0.1,
+                keyword=0.4,
+            )
+            self.turn.source_type = "conversation"
+            self.noise = candidate(
+                "doc-noise",
+                "fermentation recipe with planning notes",
+                semantic=0.1,
+                keyword=0.9,
+            )
+
+        async def semantic_search(
+            self, embedding, limit, *, source_type=None, filters=None
+        ):
+            self.calls["semantic"] += 1
+            self.source_filters.append(source_type)
+            return [self.doc, self.turn, self.noise]
+
+        async def keyword_search(self, query, limit, *, source_type=None, filters=None):
+            self.calls["keyword"] += 1
+            self.source_filters.append(source_type)
+            return [self.noise, self.doc, self.turn]
+
+        async def graph_search(self, entities, limit, *, source_type=None, filters=None):
+            self.calls["graph"] += 1
+            self.source_filters.append(source_type)
+            return []
+
+        async def temporal_search(
+            self, start, end, limit, *, source_type=None, filters=None
+        ):
+            self.calls["temporal"] += 1
+            self.source_filters.append(source_type)
+            return []
+
+    class RecallCore:
+        def __init__(self, repository: MixedCorpusRepository) -> None:
+            self.engine = RecallEngine(
+                repository, FakeProviders(), HindsightOptions()
+            )
+
+        async def recall(self, query, *, mode="deep", top_k=None):
+            return await self.engine.recall(query, mode=mode, top_k=top_k)
+
+        async def reflect(self, query, *, mode="deep", top_k=None):  # pragma: no cover
+            raise AssertionError("recall strategy must not reflect")
+
+    mcp_mod.set_query_service(HindsightQueryService(RecallCore(MixedCorpusRepository())))
+    try:
+        out = await mcp_mod.search_knowledge_fast(
+            "autonomous driving control theory trajectory planning prediction", top_k=5
+        )
+    finally:
+        mcp_mod._query_service = None
+
+    assert [source["memory_id"] for source in out["sources"]] == [
+        "doc-chunk",
+        "conversation-turn",
+    ]
+    assert out["trace"]["filtered_count"] == 1
+
+
+async def test_search_response_stays_within_whole_response_budget(monkeypatch):
+    """A tiny budget forces dropping the lowest-ranked sources first; the
+    serialized response stays within budget and the trim is reported."""
+    import json
+
+    from config.settings import settings
+
+    class FakeQueryService:
+        async def query(self, request):
+            return KnowledgeQueryResult(
+                strategy_used="recall",
+                sources=[
+                    KnowledgeSource(
+                        memory_id=f"m{i}",
+                        memory_type="chunk",
+                        doc_id=f"d{i}",
+                        title=f"doc-{i}",
+                        chunk_text="evidence text " * 40,
+                        score=1.0 / (i + 1),
+                    )
+                    for i in range(4)
+                ],
+                related_entities=[
+                    {"name": f"entity-{i}", "observations": ["x" * 50]}
+                    for i in range(5)
+                ],
+                trace={"outcome": "success"},
+            )
+
+    mcp_mod.set_query_service(FakeQueryService())
+    monkeypatch.setattr(settings, "engine_tools_response_max_chars", 1_500)
+    try:
+        out = await mcp_mod.search_knowledge_fast("acme", top_k=4)
+    finally:
+        mcp_mod._query_service = None
+
+    serialized = json.dumps(out, ensure_ascii=False, default=str)
+    assert len(serialized) <= 1_500
+    assert out["trace"]["payload_trimmed"] is True
+    assert out["trace"]["payload_kept"] < 4
+    assert out["trace"]["payload_dropped"] == 4 - out["trace"]["payload_kept"]
+    # ranked best-first: the survivors are the top-ranked sources
+    assert [source["memory_id"] for source in out["sources"]] == [
+        f"m{i}" for i in range(out["trace"]["payload_kept"])
+    ]
+
+
+async def test_search_response_within_budget_reports_no_trimming(monkeypatch):
+    from config.settings import settings
+
+    class FakeQueryService:
+        async def query(self, request):
+            return KnowledgeQueryResult(
+                strategy_used="recall",
+                sources=[
+                    KnowledgeSource(
+                        memory_id="m0",
+                        memory_type="chunk",
+                        doc_id="d0",
+                        title="doc",
+                        chunk_text="short evidence",
+                    )
+                ],
+                trace={"outcome": "success"},
+            )
+
+    mcp_mod.set_query_service(FakeQueryService())
+    monkeypatch.setattr(settings, "engine_tools_response_max_chars", 24_000)
+    try:
+        out = await mcp_mod.search_knowledge_deep("acme")
+    finally:
+        mcp_mod._query_service = None
+
+    assert out["trace"]["payload_trimmed"] is False
+    assert out["trace"]["payload_kept"] == 1
+    assert out["trace"]["payload_dropped"] == 0
+
+
 async def test_get_document_missing_returns_error(fake_kb):
     res = await mcp_mod.get_document("nope")
     assert "error" in res

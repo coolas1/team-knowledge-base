@@ -43,6 +43,11 @@ class HindsightOptions:
     # neural-rerank path (deep mode).
     recall_min_semantic: float = 0.45
     recall_min_score: float = 0.4
+    # Keyword-arm escape hatch: a candidate held only by a keyword match must
+    # cover at least this fraction of the query's salient terms, with at
+    # least this many matching terms, to clear the relevance gate.
+    recall_min_term_coverage: float = 0.5
+    recall_min_term_count: int = 2
     # Conversation-memory recall applies its own, lower semantic floor instead
     # of the public-corpus floor, so memory recall is not governed by the
     # public gate.
@@ -93,3 +98,7 @@ class HindsightOptions:
             raise ValueError(
                 f"Hindsight timeout and bound settings must be positive: {', '.join(invalid)}"
             )
+        if not 0 < self.recall_min_term_coverage <= 1:
+            raise ValueError("recall_min_term_coverage must be in (0, 1]")
+        if self.recall_min_term_count < 1:
+            raise ValueError("recall_min_term_count must be at least 1")

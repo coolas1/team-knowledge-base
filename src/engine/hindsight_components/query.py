@@ -201,18 +201,35 @@ class HindsightQueryService:
                 **({"filters": filters} if filters is not None else {}),
             )
             kept, texts, evidence_trace = self._bound_evidence(recalled)
+            # based_on duplicates the per-source evidence; it is opt-in and
+            # compact (ids and scores, no repeated evidence text).
+            include_based_on = "based_on" in request.include
             grouped: defaultdict[str, list[dict]] = defaultdict(list)
-            for item in kept:
-                evidence = item.as_evidence()
-                evidence["text"] = texts[item.id]
-                grouped[item.memory_type].append(evidence)
+            for item in kept if include_based_on else ():
+                grouped[item.memory_type].append(
+                    {
+                        "id": item.id,
+                        "type": item.memory_type,
+                        "document_id": item.document_id,
+                        "freshness": item.freshness,
+                        **({"session_id": item.session_id} if item.session_id else {}),
+                        **({"turn_id": item.turn_id} if item.turn_id else {}),
+                        "scores": {
+                            "final": item.final_score,
+                            "reranker": item.reranker_score,
+                            "semantic": item.semantic_score,
+                            "keyword": item.keyword_score,
+                            "graph": item.graph_score,
+                            "temporal": item.temporal_score,
+                        },
+                    }
+                )
             trace = dict(recalled.trace)
             trace.update(evidence_trace)
             return KnowledgeQueryResult(
                 strategy_used="recall",
                 sources=[
-                    self._source_from_candidate(item, recalled, texts[item.id])
-                    for item in kept
+                    self._source_from_candidate(item, texts[item.id]) for item in kept
                 ],
                 related_entities=self._related_entities(recalled.entities),
                 based_on=dict(grouped),
@@ -230,7 +247,7 @@ class HindsightQueryService:
             strategy_used="reflect",
             answer=reflected.text,
             sources=self._sources_from_reflection(reflected),
-            based_on=reflected.based_on,
+            based_on=self._compact_based_on(reflected.based_on),
             trace={"tool_trace": list(reflected.tool_trace)},
         )
 
@@ -331,8 +348,10 @@ class HindsightQueryService:
 
     @staticmethod
     def _source_from_candidate(
-        item: RecallCandidate, recalled: RecallResult, chunk_text: str
+        item: RecallCandidate, chunk_text: str
     ) -> KnowledgeSource:
+        # Identifying fields only — the full document record stays behind
+        # `tkb_get_document`; a response must not embed it per source.
         return KnowledgeSource(
             memory_id=item.id,
             memory_type=item.memory_type,
@@ -349,11 +368,6 @@ class HindsightQueryService:
                 "occurred_end": item.occurred_end,
                 "freshness": item.freshness,
                 "stale_reason": item.stale_reason,
-                **(
-                    {"document": recalled.documents[item.document_id]}
-                    if item.document_id in recalled.documents
-                    else {}
-                ),
                 **({"session_id": item.session_id} if item.session_id else {}),
                 **({"turn_id": item.turn_id} if item.turn_id else {}),
                 "scores": {
@@ -369,13 +383,43 @@ class HindsightQueryService:
 
     @staticmethod
     def _related_entities(entities: Mapping[str, object]) -> list[dict]:
+        from config.settings import settings
+
+        limit = settings.engine_tools_entities_max
         output = []
-        for name, state in entities.items():
+        for name, state in list(entities.items())[:limit]:
             if isinstance(state, Mapping):
                 output.append({"name": name, **dict(state)})
             else:
                 output.append({"name": name, "state": state})
         return output
+
+    @staticmethod
+    def _compact_based_on(
+        based_on: Mapping[str, list[dict]],
+    ) -> dict[str, list[dict]]:
+        """Grouped provenance without repeating the per-source evidence.
+
+        Memory groups duplicate what `sources` already carries excerpt-by-
+        excerpt; they keep identity and scores. Model/directive/citation
+        groups never appear in sources and pass through unchanged.
+        """
+        passthrough = {
+            "directives",
+            "mental_models",
+            "retrieved_mental_models",
+            "actual_citations",
+        }
+        compact: dict[str, list[dict]] = {}
+        for group, items in based_on.items():
+            if group in passthrough:
+                compact[group] = list(items)
+                continue
+            compact[group] = [
+                {key: value for key, value in item.items() if key != "text"}
+                for item in items
+            ]
+        return compact
 
     @staticmethod
     def _sources_from_reflection(reflected: ReflectResult) -> list[KnowledgeSource]:
@@ -456,6 +500,8 @@ def build_query_service(
         reflect_total_timeout_seconds=memory_config.reflect_total_timeout_seconds,
         recall_min_semantic=settings.hindsight_recall_min_semantic,
         recall_min_score=settings.hindsight_recall_min_score,
+        recall_min_term_coverage=settings.hindsight_recall_min_term_coverage,
+        recall_min_term_count=settings.hindsight_recall_min_term_count,
         conversation_recall_min_semantic=(
             settings.hindsight_conversation_recall_min_semantic
         ),

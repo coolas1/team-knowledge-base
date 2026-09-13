@@ -7,6 +7,11 @@ engine:
   #   list_page_max       tkb_list_documents page_size 封顶（默认 50）
   #   deep_excerpt_chars  deep 检索单条证据摘录上限（默认 2000 字符）
   #   deep_total_chars    deep 检索证据总预算（默认 12000 字符）
+  #   entities_max        检索响应 related_entities 条数上限（默认 10）
+  #   response_max_chars  检索工具整个序列化响应的字符预算
+  #                       （默认 24000；超出时先丢弃排名最低的 sources，
+  #                       并在 trace 中以 payload_trimmed/payload_kept/
+  #                       payload_dropped 报告裁剪）
   ingest:
     vector_only: true
     chunk_concurrency: 4

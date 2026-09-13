@@ -152,11 +152,38 @@ def _build_parser() -> argparse.ArgumentParser:
     ):
         s = sub.add_parser(name)
         s.add_argument("--operation-id", required=True)
+    s = sub.add_parser("backfill-retrieval-views")
+    s.add_argument("--bank", default=None)
+    s.add_argument("--document-id", default=None)
+    s.add_argument("--batch-size", type=int, default=32)
     return p
+
+
+async def _backfill_retrieval_views(args: argparse.Namespace) -> int:
+    """一次性重建检索视图：按 title|filename|overview 前缀重嵌入全部
+    chunk 与当前记忆并重建 lexical tokens（不需要原始文件）。"""
+    from src.engine.components.embedder import embedder
+    from src.engine.components.store.postgres import async_session_factory, engine
+    from src.engine.retrieval_view_backfill import backfill_retrieval_views
+
+    try:
+        stats = await backfill_retrieval_views(
+            async_session_factory,
+            embedder.embed_batch,
+            bank_id=args.bank,
+            document_id=args.document_id,
+            batch_size=args.batch_size,
+        )
+        _print(stats)
+        return 0
+    finally:
+        await engine.dispose()
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    if args.command == "backfill-retrieval-views":
+        return asyncio.run(_backfill_retrieval_views(args))
     ecfg = engine_config_from_app(load_config())
     if args.engine_impl:
         ecfg.impl = args.engine_impl

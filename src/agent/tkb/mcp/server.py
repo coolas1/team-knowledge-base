@@ -124,6 +124,53 @@ def _request_binding():
     )
 
 
+def _payload_size(payload: dict[str, Any]) -> int:
+    import json
+
+    return len(json.dumps(payload, ensure_ascii=False, default=str))
+
+
+def _bound_search_payload(
+    payload: dict[str, Any], *, source_key: str = "sources"
+) -> dict[str, Any]:
+    """Cap the whole serialized search response (evidence + metadata +
+    entities + trace) at ``engine_tools_response_max_chars``.
+
+    Results are ranked best-first, so the lowest-ranked sources drop first;
+    entities and the grouped ``based_on`` view follow. The trim is reported
+    in the trace (``payload_trimmed`` / ``payload_kept`` /
+    ``payload_dropped``) beside ``evidence_trimmed``.
+    """
+    from config.settings import settings
+
+    budget = settings.engine_tools_response_max_chars
+    sources = payload.get(source_key)
+    sources = sources if isinstance(sources, list) else []
+    trace = payload.get("trace")
+    trace = dict(trace) if isinstance(trace, dict) else {}
+    dropped_sources = 0
+    while sources and _payload_size(payload) > budget:
+        sources.pop()
+        dropped_sources += 1
+    trimmed = dropped_sources > 0
+    if _payload_size(payload) > budget:
+        # The skeleton still exceeds the budget: shed secondary groups,
+        # keeping the per-source evidence that already passed the gates.
+        for key in ("related_entities", "based_on"):
+            values = payload.get(key)
+            if isinstance(values, (list, dict)) and values:
+                payload[key] = [] if isinstance(values, list) else {}
+                trimmed = True
+    trace.update(
+        payload_trimmed=trimmed,
+        payload_kept=len(sources),
+        payload_dropped=dropped_sources,
+        payload_chars=min(_payload_size(payload), budget),
+    )
+    payload["trace"] = trace
+    return payload
+
+
 def _conversation_operation_failed(operation: str, error: Exception) -> RuntimeError:
     # 类型在前地带出底层错误：调用方需要区分"服务不可用"与"这次调用
     # 为什么失败"，无消息异常也能标识原因（design D9）。
@@ -300,7 +347,7 @@ async def search(
     payload = asdict(result)
     for chunk in payload["chunks"]:
         chunk["chunk_text"] = chunk["chunk_text"][:1000]
-    return payload
+    return _bound_search_payload(payload, source_key="chunks")
 
 
 async def query_knowledge(
@@ -350,7 +397,7 @@ async def query_knowledge(
             max_candidates=max_candidates,
         )
     )
-    return asdict(result)
+    return _bound_search_payload(asdict(result))
 
 
 async def expand_memory(
@@ -476,8 +523,8 @@ async def search_knowledge_deep(
 ) -> dict[str, Any]:
     """深度知识检索。用于跨文档比较、多跳关系、时间线、原因分析和综合总结。
 
-    只返回检索证据，不在服务端生成最终答案；调用此工具的模型应综合 sources、
-    related_entities 和 based_on 回答。简单事实查询应优先使用 search_knowledge_fast。
+    只返回检索证据，不在服务端生成最终答案；调用此工具的模型应综合 sources
+    和 related_entities 回答。简单事实查询应优先使用 search_knowledge_fast。
     """
     from src.engine.hindsight_components.errors import DeepSearchError
 

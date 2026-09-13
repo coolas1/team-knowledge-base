@@ -17,7 +17,7 @@ from .deadlines import DeadlineBudget, PhaseStatus
 from .errors import DeepSearchTimeoutError, DeepSearchUnavailableError
 from .protocols import HindsightProviders, MemoryRepository
 from .types import RecallCandidate, RecallFilter, RecallResult
-from .utils import cosine, estimate_tokens, parse_datetime
+from .utils import cosine, estimate_tokens, lexical_tokens, parse_datetime
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -187,7 +187,9 @@ class RecallEngine:
                 phase_outcomes,
                 phase_ms,
             )
-            ordered, filtered_count = self._filter_by_relevance(ordered, mode, filters)
+            ordered, filtered_count = self._filter_by_relevance(
+                ordered, mode, filters, query
+            )
             if filters.prefer_observations:
                 for item in ordered:
                     if item.memory_type == "observation":
@@ -723,7 +725,11 @@ class RecallEngine:
         return float(value or 0.0)
 
     def _filter_by_relevance(
-        self, ordered: list[RecallCandidate], mode: str, filters: RecallFilter
+        self,
+        ordered: list[RecallCandidate],
+        mode: str,
+        filters: RecallFilter,
+        query: str,
     ) -> tuple[list[RecallCandidate], int]:
         # Conversation-memory recall uses its own, lower semantic floor so the
         # public-corpus gate does not determine what memories are recalled.
@@ -732,6 +738,7 @@ class RecallEngine:
             if filters.source_types == ("conversation",)
             else self._options.recall_min_semantic
         )
+        query_terms = list(dict.fromkeys(lexical_tokens(query)))
         kept: list[RecallCandidate] = []
         for item in ordered:
             score_values = {
@@ -747,7 +754,9 @@ class RecallEngine:
                 for name, threshold in filters.min_scores.items()
             ):
                 continue
-            if (item.keyword_score or 0.0) > 0:
+            if (item.keyword_score or 0.0) > 0 and self._passes_term_coverage(
+                item.title, item.text, query_terms
+            ):
                 kept.append(item)
                 continue
             # Semantic floor applies in every mode; the deep-mode rerank-score
@@ -759,6 +768,23 @@ class RecallEngine:
                     continue
             kept.append(item)
         return kept, len(ordered) - len(kept)
+
+    def _passes_term_coverage(
+        self, title: str, text: str, query_terms: list[str]
+    ) -> bool:
+        # A keyword-only candidate must cover a fraction of the query's
+        # salient terms — a single shared token (a stopword, a surname) is
+        # not evidence of relevance. The candidate's title counts as covered
+        # text so a document is findable by its metadata when its body is
+        # low quality. Single-term queries carry no coverage signal and fall
+        # back to the semantic floor.
+        if len(query_terms) < 2:
+            return False
+        candidate_tokens = set(lexical_tokens(f"{title}\n{text}"))
+        matched = sum(1 for term in query_terms if term in candidate_tokens)
+        if matched < self._options.recall_min_term_count:
+            return False
+        return matched / len(query_terms) >= self._options.recall_min_term_coverage
 
     def _select(
         self, ordered: list[RecallCandidate], limit: int, token_limit: int | None = None

@@ -463,6 +463,7 @@ class FileRebuildRunner:
                     tags=tuple(document.tags or ()),
                     expected_revision=target["revision"] + 1,
                     request_id=f"file-rebuild:{run_id}:{identity}",
+                    **self.rebuild.repository._retrieval_view_fields(document),
                 )
                 await self._check_retired(target, value)
                 result = await RetainEngine(

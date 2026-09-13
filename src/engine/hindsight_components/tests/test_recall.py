@@ -333,3 +333,141 @@ def test_recall_filter_rejects_invalid_budget_score_and_time() -> None:
         RecallFilter(reference_time=datetime(2026, 9, 9))
     with pytest.raises(ValueError, match="max_tokens"):
         RecallFilter(max_tokens=0)
+
+
+class CoverageGateRepository(FakeRepository):
+    """Fixed candidate rows: semantic arm serves the semantic matches,
+    keyword arm serves the keyword matches."""
+
+    def __init__(self, *rows) -> None:
+        super().__init__()
+        self.rows = list(rows)
+
+    async def semantic_search(
+        self, embedding, limit, *, source_type=None, filters=None
+    ):
+        self.calls["semantic"] += 1
+        self.source_filters.append(source_type)
+        return [row for row in self.rows if (row.semantic_score or 0) > 0]
+
+    async def keyword_search(self, query, limit, *, source_type=None, filters=None):
+        self.calls["keyword"] += 1
+        self.source_filters.append(source_type)
+        return [row for row in self.rows if (row.keyword_score or 0) > 0]
+
+
+async def test_keyword_only_candidate_with_poor_term_coverage_is_filtered() -> None:
+    # One term of seven (planning) is not relevance: a fermentation recipe
+    # must not ride a single shared token past the gate.
+    query = "autonomous driving control theory trajectory planning prediction"
+    noise = candidate(
+        "memory-noise", "fermentation recipe with planning notes", semantic=0.1, keyword=0.9
+    )
+    engine = RecallEngine(CoverageGateRepository(noise), FakeProviders(), HindsightOptions())
+
+    result = await engine.recall(query, mode="fast")
+
+    assert result.results == []
+    assert result.trace["filtered_count"] == 1
+
+
+async def test_keyword_only_candidate_with_term_coverage_passes_gate() -> None:
+    query = "autonomous driving control theory trajectory planning prediction"
+    hit = candidate(
+        "memory-hit", "autonomous driving control theory survey", semantic=0.1, keyword=0.5
+    )
+    engine = RecallEngine(CoverageGateRepository(hit), FakeProviders(), HindsightOptions())
+
+    result = await engine.recall(query, mode="fast")
+
+    assert [item.id for item in result.results] == ["memory-hit"]
+    assert result.trace["filtered_count"] == 0
+
+
+async def test_semantic_match_without_keyword_hits_still_passes() -> None:
+    query = "autonomous driving control theory trajectory planning prediction"
+    semantic = candidate(
+        "memory-semantic", "self-driving vehicle stability analysis", semantic=0.6
+    )
+    engine = RecallEngine(
+        CoverageGateRepository(semantic), FakeProviders(), HindsightOptions()
+    )
+
+    result = await engine.recall(query, mode="fast")
+
+    assert [item.id for item in result.results] == ["memory-semantic"]
+    assert result.trace["filtered_count"] == 0
+
+
+async def test_conversation_memory_passes_the_same_coverage_gate() -> None:
+    query = "autonomous driving control theory trajectory planning prediction"
+    relevant = candidate(
+        "conversation-hit",
+        "we discussed autonomous driving control theory",
+        semantic=0.1,
+        keyword=0.4,
+    )
+    relevant.source_type = "conversation"
+    noise = candidate(
+        "conversation-noise", "fermentation recipe with planning notes", semantic=0.1, keyword=0.9
+    )
+    noise.source_type = "conversation"
+    engine = RecallEngine(
+        CoverageGateRepository(relevant, noise), FakeProviders(), HindsightOptions()
+    )
+
+    result = await engine.recall(query, mode="fast", source_type="conversation")
+
+    assert [item.id for item in result.results] == ["conversation-hit"]
+    assert result.trace["filtered_count"] == 1
+
+
+async def test_single_term_query_keyword_hit_falls_back_to_semantic_floor() -> None:
+    # A single salient term carries no coverage signal; the semantic floor
+    # decides, and 0.1 is below it.
+    hit = candidate("memory-single", "fermentation recipe", semantic=0.1, keyword=0.9)
+    engine = RecallEngine(CoverageGateRepository(hit), FakeProviders(), HindsightOptions())
+
+    result = await engine.recall("fermentation", mode="fast")
+
+    assert result.results == []
+    assert result.trace["filtered_count"] == 1
+
+
+async def test_coverage_floor_knobs_are_configurable() -> None:
+    query = "autonomous driving control theory trajectory planning prediction"
+    # 2 of 7 terms: fails the default 0.5 coverage, passes a lowered floor.
+    partial = candidate(
+        "memory-partial", "notes on autonomous driving", semantic=0.1, keyword=0.7
+    )
+    strict = RecallEngine(
+        CoverageGateRepository(partial), FakeProviders(), HindsightOptions()
+    )
+    loose = RecallEngine(
+        CoverageGateRepository(partial),
+        FakeProviders(),
+        HindsightOptions(recall_min_term_coverage=0.25),
+    )
+
+    strict_result = await strict.recall(query, mode="fast")
+    loose_result = await loose.recall(query, mode="fast")
+
+    assert strict_result.results == []
+    assert [item.id for item in loose_result.results] == ["memory-partial"]
+
+
+async def test_keyword_match_on_title_passes_coverage_with_noisy_body() -> None:
+    # The scanned-paper case: the body is OCR noise, the query matches the
+    # document's title. The title counts as covered text.
+    query = "autonomous driving control theory trajectory planning prediction"
+    scanned = candidate(
+        "memory-scanned", "锟斤拷烫烫烫 屯屯屯 屯屯屯", semantic=0.1, keyword=0.6
+    )
+    scanned.title = "autonomous driving control theory survey"
+    engine = RecallEngine(
+        CoverageGateRepository(scanned), FakeProviders(), HindsightOptions()
+    )
+
+    result = await engine.recall(query, mode="fast")
+
+    assert [item.id for item in result.results] == ["memory-scanned"]

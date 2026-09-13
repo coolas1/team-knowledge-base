@@ -29,6 +29,7 @@ from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
 from src.engine.components.retry import retry_transient
 from src.engine.graphrag.progress import clear_progress, set_progress
+from src.engine.retrieval_view import retrieval_view_prefix
 from src.engine.interface import DocumentIndexHook
 from src.engine.scope import MemoryScope, TagFilter
 
@@ -40,6 +41,13 @@ def _unwrap_exception_group(exc: BaseException) -> BaseException:
     if isinstance(exc, ExceptionGroup) and len(exc.exceptions) == 1:
         return exc.exceptions[0]
     return exc
+
+
+def _filename_of(file_path: str | None) -> str | None:
+    """文档存储路径 → 检索视图用的文件名（无路径时为 None）。"""
+    if not file_path:
+        return None
+    return file_path.rsplit("/", 1)[-1] or None
 
 
 def format_error(exc: BaseException) -> str:
@@ -93,12 +101,19 @@ class Pipeline:
         )
 
     async def _analyze_document(
-        self, raw_text: str, title: str, doc_id: UUID
+        self,
+        raw_text: str,
+        title: str,
+        doc_id: UUID,
+        filename: str | None = None,
     ) -> tuple[AnalysisResult, list, list[ChunkAnalysisResult], list[list[float]]]:
         """分块后并行执行：overview ∥ 逐 chunk 分析（信号量限流）∥ embedding。
 
         返回 (doc_analysis, chunks, chunk_analyses, embeddings)；
         chunk_analyses 按 chunk 顺序排列，写入顺序确定。
+        embedding 输入是检索视图（标题/文件名/overview 前缀 + 原文），
+        正文抽取质量差的文档（扫描件 OCR 噪声）仍可经干净元数据被检索；
+        存储的 chunk_text 始终是原始抽取文本。
         """
         chunks = await asyncio.to_thread(chunk_text, raw_text)
         total = len(chunks)
@@ -126,6 +141,16 @@ class Pipeline:
         async def _no_embeddings() -> list[list[float]]:
             return []
 
+        async def _embed_chunks() -> list[list[float]]:
+            if not chunks:
+                return []
+            overview = (await overview_task).overview
+            prefix = retrieval_view_prefix(title, filename, overview)
+            return await self._with_retry(
+                lambda: embedder.embed_batch([prefix + c.text for c in chunks]),
+                description="embedding 批量生成",
+            )
+
         async with asyncio.TaskGroup() as tg:
             overview_task = tg.create_task(
                 self._summary_overview(raw_text, title, doc_id)
@@ -135,16 +160,7 @@ class Pipeline:
                     description="document overview",
                 )
             )
-            embed_task = tg.create_task(
-                self._with_retry(
-                    lambda: (
-                        embedder.embed_batch([c.text for c in chunks])
-                        if chunks
-                        else _no_embeddings()
-                    ),
-                    description="embedding 批量生成",
-                )
-            )
+            embed_task = tg.create_task(_embed_chunks())
             for i, chunk in enumerate(chunks if not self._vector_only else []):
                 tg.create_task(analyze_one(i, chunk.text))
 
@@ -203,7 +219,9 @@ class Pipeline:
                     chunks,
                     chunk_analyses,
                     embeddings,
-                ) = await self._analyze_document(raw_text, title, doc_id)
+                ) = await self._analyze_document(
+                    raw_text, title, doc_id, filename=file_path.name
+                )
             logger.info(
                 f"文档 {doc_id} 分析完成: {len(chunks)} chunks, "
                 f"{len(doc_analysis.file_relations)} file_relations"
@@ -367,7 +385,12 @@ class Pipeline:
                     chunks,
                     chunk_analyses,
                     embeddings,
-                ) = await self._analyze_document(new_text, title, doc_id)
+                ) = await self._analyze_document(
+                    new_text,
+                    title,
+                    doc_id,
+                    filename=_filename_of(getattr(doc, "file_path", None)),
+                )
 
             async with async_session_factory() as session:
                 await self._persist_chunks(
