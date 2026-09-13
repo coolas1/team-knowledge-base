@@ -16,4 +16,4 @@
 ## 4. Verification
 
 - [x] 4.1 Full gate: `uv run ruff check` and `uv run pytest` green; hindsight tests run explicitly (`uv run pytest src/engine/hindsight_components/tests`); `cd src/extensions/pi-agent && npm test` green if skill docs changed (update `skills/tkb-search/SKILL.md` et al. if they reference dropped response fields).
-- [ ] 4.2 Post-release (LAN): run the backfill once, then replay the 2026-09-12 conversation (看看有哪些和自动驾驶相关的论文 + 总结第一篇文章) — both papers surface, no unrelated or single-term-match sources, conversation memories present only when relevant, each search response within the whole-response budget, both turns well under 300s; record evidence under `bench/`.
+- [x] 4.2 Post-release (LAN): run the backfill once, then replay the 2026-09-12 conversation (看看有哪些和自动驾驶相关的论文 + 总结第一篇文章) — both papers surface, no unrelated or single-term-match sources, conversation memories present only when relevant, each search response within the whole-response budget, both turns well under 300s; record evidence under `bench/`.
