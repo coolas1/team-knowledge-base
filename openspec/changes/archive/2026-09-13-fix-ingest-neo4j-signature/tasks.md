@@ -10,5 +10,5 @@
 ## 3. Verification and rollout
 
 - [x] 3.1 Run `uv run ruff check` and `uv run pytest` — both clean (the 3-positional-arg integration callers must still pass via the new defaults)
-- [ ] 3.2 Open a develop PR with the change; after maintainer merge + release, verify the pipeline redeploys and `GET /version` reports the new tag
-- [ ] 3.3 Production smoke: retry the `failed` doc from the 2026-09-12 upload (`POST /api/documents/588bd22f-ec98-40af-826f-f5d605d0cebc/retry`) and upload the second autopilot PDF — verify both reach `indexed` with chunks and graph nodes written (no `version_number` TypeError)
+- [x] 3.2 Open a develop PR with the change; after maintainer merge + release, verify the pipeline redeploys and `GET /version` reports the new tag
+- [x] 3.3 Production smoke: retry the `failed` doc from the 2026-09-12 upload (`POST /api/documents/588bd22f-ec98-40af-826f-f5d605d0cebc/retry`) and upload the second autopilot PDF — verify both reach `indexed` with chunks and graph nodes written (no `version_number` TypeError)
