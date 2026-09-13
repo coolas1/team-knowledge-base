@@ -79,6 +79,11 @@ class FakeRepository:
     ) -> list[RecallCandidate]:
         self.calls["keyword"] += 1
         self.source_filters.append(source_type)
+        # A BM25 hit matches the query terms by construction; echo the query
+        # into the hit's text so the fake stays honest under the coverage
+        # floor. The semantic arm shares this object, and arms complete
+        # before candidates are merged, so the echoed text is the one gated.
+        self.b.text = f"bm25 match: {query}"
         return [self.b, self.a]
 
     async def graph_search(
