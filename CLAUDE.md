@@ -30,9 +30,10 @@ Run from the repo root unless noted. Python tooling uses `uv`.
 
 Two long-lived branches on `origin`:
 
-- `main` — the stable, versioned branch the LAN pipeline watches and deploys.
-  Nothing lands here except via a maintainer-owned release.
-- `develop` — the integration branch every collaborator branches from.
+- `main` — the stable, versioned branch the production LAN pipeline watches
+  and deploys. Nothing lands here except via a maintainer-owned release.
+- `develop` — the integration branch every collaborator branches from; the
+  staging LAN pipeline deploys it continuously.
 
 A change is a feature branch off `develop`; its PR carries the spec delta plus
 the code. After a PR merges to `develop`, the maintainer archives the change —
@@ -73,12 +74,15 @@ git push origin develop
 ### Day-to-day
 
 1. Run `uv run ruff check` and `uv run pytest` before pushing.
-2. **The LAN deployment is pipeline-managed** (`cicd/`): a systemd user timer
-   polls `origin/main` every 5 min, gates on lint + tests, builds SHA-tagged
-   images, and redeploys via `podman compose`. Do NOT run
-   `docker/podman compose up` by hand — the pipeline is the sole operator of
-   the `team-kb` compose project; use the published ports (5433/7687/8000)
-   as a client instead. Runbook, rollback, and install steps: `cicd/README.md`.
+2. **The LAN deployment is pipeline-managed** (`cicd/`): two independent
+   pipeline instances — a systemd user timer each — poll `origin/main`
+   (production, :8000) and `origin/develop` (staging, :8001) every 5 min,
+   gate on lint + tests, build SHA-tagged images, and redeploy their own
+   stack via `podman compose`. Do NOT run `docker/podman compose up` by
+   hand — each pipeline is the sole operator of its compose project
+   (`team-kb` / `team-kb-dev`); use the published ports as a client instead
+   (production 5433/7687/8000, staging 5434/7688/8001). Runbook, rollback,
+   and install steps: `cicd/README.md`.
 3. Local dev backing services (`docker compose up -d` in the dev checkout)
    are separate from the LAN deployment; copy `.env.example` to `.env` and
    set `EMBEDDING_BASE_URL` and `LLM_BASE_URL` first.

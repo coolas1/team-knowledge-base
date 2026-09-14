@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Team KB staging CI/CD pipeline every 5 minutes
+
+[Timer]
+# Staggered against team-kb-cicd.timer (OnBootSec=2min): the two stacks
+# interleave (2min, 4min30s, 7min, 9min30s, ...) instead of racing for
+# podman's storage locks on every tick. Same 5-min cadence per stack.
+OnBootSec=4min30s
+OnUnitActiveSec=5min
+AccuracySec=30s
+# Catch up on a missed activation window after resume/boot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

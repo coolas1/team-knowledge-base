@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Local CI/CD pipeline for the LAN deployment of team-knowledge-base.
 #
-# Invoked every 5 minutes by the systemd user timer (team-kb-cicd.timer) via
-# the static bootstrap run.sh in the stable dir (<repo>/.deploy/). Stages:
+# Invoked every 5 minutes by a systemd user timer (team-kb-cicd.timer for
+# production, team-kb-cicd-dev.timer for staging) via the static bootstrap
+# run.sh in the stack's stable dir (<repo>/.deploy/main/ or .deploy/develop/).
+# One pipeline instance per stable dir; the watched branch, stack namespace,
+# and gate venv all come from that stable dir's deploy.env. Stages:
 #
-#   watch  - compare git ls-remote origin/main against the last deployed SHA;
-#            exit 0 without doing anything when unchanged
+#   watch  - compare git ls-remote origin/$TKB_CICD_BRANCH against the last
+#            deployed SHA; exit 0 without doing anything when unchanged
 #   sync   - git fetch + reset --hard (disposable clone under the stable dir)
 #   gate   - ruff check, uv run pytest, SPA npm test (Node 22)
 #   build  - podman compose build; tag images :<short-sha> alongside :latest
@@ -32,8 +35,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TKB_CICD_HOME="${TKB_CICD_HOME:-$(cd "$script_dir/../.." && pwd)}"
 export TKB_CICD_HOME
 TKB_CICD_REMOTE="${TKB_CICD_REMOTE:-https://github.com/coolas1/team-knowledge-base.git}"
+# TKB_CICD_BRANCH/COMPOSE_PROJECT_NAME/TKB_CICD_VENV: the branch, stack
+# namespace, and gate venv come from the stable dir's deploy.env (read below,
+# non-exported — same discipline as APP_PORT) so the two pipeline instances
+# differ only by their stable dir. Environment overrides still win for sandbox
+# testing.
 TKB_CICD_BRANCH="${TKB_CICD_BRANCH:-main}"
-TKB_CICD_VENV="${TKB_CICD_VENV:-/var/tmp/tkb-venvs/cicd}"
+TKB_CICD_VENV="${TKB_CICD_VENV:-}"
 TKB_NODE22_BIN="${TKB_NODE22_BIN:-/var/tmp/node22/bin}"
 # SPA tests need Node 22 (system Node is 18 and fails 3 upload tests).
 TKB_HEALTH_TIMEOUT="${TKB_HEALTH_TIMEOUT:-180}"
@@ -50,16 +58,15 @@ NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 NPM_AUDIT_REGISTRY="${NPM_AUDIT_REGISTRY:-https://registry.npmjs.org}"
 # Backups: how many dated backup sets to keep in <stable-dir>/backups/.
 TKB_BACKUP_KEEP="${TKB_BACKUP_KEEP:-5}"
+# Bounded image retention: how many of the most recent :<short-sha> image
+# tags to keep per stack (0 disables pruning). Every build tags :<short-sha>,
+# so two stacks would accumulate unbounded without this.
+TKB_IMAGE_KEEP="${TKB_IMAGE_KEEP:-10}"
 
 repo_dir="$TKB_CICD_HOME/repo"
 deploy_env="$TKB_CICD_HOME/deploy.env"
 state_file="$TKB_CICD_HOME/last-deployed"
 history_file="$TKB_CICD_HOME/deployed-shas"
-# Images with fixed names in docker-compose.yml; each is tagged :<short-sha>
-# at build time so any deployed SHA stays available for rollback. Includes the
-# profile-gated tool images: the build stage activates their profiles so they
-# exist for deployments that enable tool-authoring (harmless to build otherwise).
-compose_images=(team-kb-webapp team-kb-pi-agent team-kb-tool-job team-kb-tool-runner)
 
 DRY_RUN=0
 FORCE=0
@@ -95,17 +102,55 @@ if [[ -f "$deploy_env" ]]; then
   done < "$deploy_env"
 fi
 
-# Health-check port comes from deploy.env too, read without exporting.
+# Health-check port, watched branch, stack namespace, and gate venv come from
+# deploy.env too, read without exporting (app config must not leak into the
+# gate's test environment).
 app_port=""
+cicd_branch=""
+project_name=""
+venv_from_env=""
+image_keep=""
 if [[ -f "$deploy_env" ]]; then
-  app_port="$(grep -E '^APP_PORT=' "$deploy_env" | tail -1 | cut -d= -f2-)"
+  # `|| true`: with pipefail, a key absent from deploy.env makes the grep
+  # pipeline fail the assignment and set -e kills the run (backup.sh guards
+  # the way). Optional keys rely on it.
+  app_port="$(grep -E '^APP_PORT=' "$deploy_env" | tail -1 | cut -d= -f2- || true)"
+  cicd_branch="$(grep -E '^TKB_CICD_BRANCH=' "$deploy_env" | tail -1 | cut -d= -f2- || true)"
+  project_name="$(grep -E '^COMPOSE_PROJECT_NAME=' "$deploy_env" | tail -1 | cut -d= -f2- || true)"
+  venv_from_env="$(grep -E '^TKB_CICD_VENV=' "$deploy_env" | tail -1 | cut -d= -f2- || true)"
+  image_keep="$(grep -E '^TKB_IMAGE_KEEP=' "$deploy_env" | tail -1 | cut -d= -f2- || true)"
 fi
+TKB_CICD_BRANCH="${cicd_branch:-$TKB_CICD_BRANCH}"
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-${project_name:-team-kb}}"
+TKB_IMAGE_KEEP="${image_keep:-$TKB_IMAGE_KEEP}"
 health_url="http://127.0.0.1:${app_port:-8000}/health"
+# Images with names fixed in docker-compose.yml; each is tagged :<short-sha>
+# at build time so any deployed SHA stays available for rollback. Includes the
+# profile-gated tool images: the build stage activates their profiles so they
+# exist for deployments that enable tool-authoring (harmless to build otherwise).
+# Names derive from the stack's COMPOSE_PROJECT_NAME, mirroring the compose
+# file's ${COMPOSE_PROJECT_NAME:-team-kb}-<service> image names.
+compose_images=("${COMPOSE_PROJECT_NAME}-webapp" "${COMPOSE_PROJECT_NAME}-pi-agent"
+  "${COMPOSE_PROJECT_NAME}-tool-job" "${COMPOSE_PROJECT_NAME}-tool-runner")
+# Per-stack gate venv: the two stacks' lockfiles diverge freely, and a shared
+# venv would uv-sync-thrash between two heads every 5 minutes (develop's
+# default sibling is cicd-dev). deploy.env or the environment can override.
+if [[ -z "$TKB_CICD_VENV" ]]; then
+  if [[ -n "$venv_from_env" ]]; then
+    TKB_CICD_VENV="$venv_from_env"
+  elif [[ "$TKB_CICD_BRANCH" == "develop" ]]; then
+    TKB_CICD_VENV="/var/tmp/tkb-venvs/cicd-dev"
+  else
+    TKB_CICD_VENV="/var/tmp/tkb-venvs/cicd"
+  fi
+fi
 
 for tool in git uv podman curl npm node; do
   command -v "$tool" >/dev/null 2>&1 || die "required tool not found: $tool"
 done
 [[ -x "$TKB_NODE22_BIN/node" ]] || die "Node 22 not found at $TKB_NODE22_BIN"
+
+log "pipeline: branch=$TKB_CICD_BRANCH project=$COMPOSE_PROJECT_NAME venv=$TKB_CICD_VENV"
 
 mkdir -p "$TKB_CICD_HOME"
 
@@ -163,6 +208,7 @@ stage_gate() {
   cd "$repo_dir"
   export UV_PROJECT_ENVIRONMENT="$TKB_CICD_VENV" # keep the venv off cephfs
 
+  log "gate: venv=$TKB_CICD_VENV"
   log "gate: ruff check"
   uv run ruff check || die "ruff check failed"
 
@@ -239,6 +285,51 @@ stage_record() {
   printf '%s %s\n' "$(date --iso-8601=seconds)" "$HEAD_SHA" >> "$history_file"
 }
 
+stage_prune() {
+  # Bounded per-stack image retention: every build tags :<short-sha>, so two
+  # stacks would double the accumulation. Drop SHA-tagged images older than
+  # the newest TKB_IMAGE_KEEP entries of this stack's deploy history. :latest
+  # is never SHA-like, so the tag the running containers use is untouched.
+  # Unrecorded SHA tags (built but never deployed) are pruned too — they are
+  # not rollback paths. TKB_IMAGE_KEEP=0 disables pruning.
+  cd "$repo_dir"
+  if [[ ! "$TKB_IMAGE_KEEP" =~ ^[0-9]+$ ]]; then
+    log "prune: invalid TKB_IMAGE_KEEP='$TKB_IMAGE_KEEP'; skipping"
+    return 0
+  fi
+  if (( TKB_IMAGE_KEEP == 0 )); then
+    log "prune: TKB_IMAGE_KEEP=0; retention disabled"
+    return 0
+  fi
+
+  # Protected shorts: the newest keep-set from deployed-shas plus the SHA this
+  # run just deployed (stage_record appended it, so it is in the keep-set; the
+  # explicit entry guards a truncated/missing history file).
+  local -A protected=()
+  if [[ -f "$history_file" ]]; then
+    while read -r _ts sha _rest; do
+      if [[ -n "$sha" ]]; then
+        protected["${sha:0:7}"]=1
+      fi
+    done < <(tail -n "$TKB_IMAGE_KEEP" "$history_file")
+  fi
+  protected["$SHORT_SHA"]=1
+
+  local image tag
+  for image in "${compose_images[@]}"; do
+    while IFS= read -r tag; do
+      if [[ ! "$tag" =~ ^[0-9a-f]{7,40}$ ]]; then
+        continue
+      fi
+      if [[ -n "${protected[$tag]:-}" ]]; then
+        continue
+      fi
+      log "prune: removing $image:$tag"
+      podman rmi "$image:$tag" || log "prune: rmi $image:$tag failed (continuing)"
+    done < <(podman images --format '{{.Tag}}' "$image" 2>/dev/null || true)
+  done
+}
+
 # --- run --------------------------------------------------------------------
 if ! stage_sync; then
   exit 0 # unchanged head: no gate, no build, no deploy
@@ -249,7 +340,7 @@ fi
 # takes effect on the very run that pulls it.
 if [[ -z "${TKB_CICD_FRESH:-}" ]] \
   && ! cmp -s "${BASH_SOURCE[0]}" "$repo_dir/cicd/pipeline.sh"; then
-  log "sync: pipeline.sh changed on main; re-execing the fresh version"
+  log "sync: pipeline.sh changed on $TKB_CICD_BRANCH; re-execing the fresh version"
   TKB_CICD_FRESH=1 exec bash "$repo_dir/cicd/pipeline.sh" "$@"
 fi
 
@@ -267,4 +358,5 @@ stage_backup
 stage_deploy
 stage_verify
 stage_record
+stage_prune
 log "deployed $SHORT_SHA ($HEAD_SHA)"

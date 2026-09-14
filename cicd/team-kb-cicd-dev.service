@@ -1,0 +1,19 @@
+[Unit]
+Description=Team KB CI/CD pipeline, staging stack (watch origin/develop, gate, build, deploy)
+Documentation=file:///home/zhangxiang/workspaces/projects/team-knowledge-base/.deploy/develop/repo/cicd/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Absolute path into the dev checkout's gitignored .deploy/develop/ stable
+# dir; if the checkout moves, update this (and daemon-reload) — see
+# cicd/README.md.
+ExecStart=/home/zhangxiang/workspaces/projects/team-knowledge-base/.deploy/develop/run.sh
+# Minimal PATH for the bootstrap (git) and pipeline (uv; podman/curl).
+# pipeline.sh prepends Node 22 (/var/tmp/node22/bin) itself.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Podman storage is on local disk, not the slow home filesystem.
+Environment=TMPDIR=/var/tmp
+# A failed gate/build must surface in the unit state and journal.
+Nice=10

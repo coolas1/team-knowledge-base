@@ -6,13 +6,20 @@
 #
 # All credentials/ports are sourced from .env, which compose loads
 # automatically for variable substitution (and the app loads via pydantic-settings).
+#
+# Every namespace-bearing name derives from COMPOSE_PROJECT_NAME (default
+# team-kb = the production stack) so one compose file serves both the LAN
+# stacks: production (main) and staging (develop, team-kb-dev). The default
+# renders byte-identical names to the pre-parameterization file, so the
+# production stack is not redeployed by this naming. Volumes need no
+# parameterization: compose auto-prefixes them with the project name.
 
-name: team-kb
+name: ${COMPOSE_PROJECT_NAME:-team-kb}
 
 services:
   postgres:
     image: docker.io/pgvector/pgvector:pg16
-    container_name: team-kb-postgres
+    container_name: ${COMPOSE_PROJECT_NAME:-team-kb}-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-knowledge_base}
       POSTGRES_USER: ${POSTGRES_USER:-kb_user}
@@ -31,7 +38,7 @@ services:
 
   neo4j:
     image: docker.io/library/neo4j:5
-    container_name: team-kb-neo4j
+    container_name: ${COMPOSE_PROJECT_NAME:-team-kb}-neo4j
     environment:
       # Initial password is set only on first init of an empty /data volume.
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-password}
@@ -55,7 +62,7 @@ services:
     # and leave this service unstarted (--profile ollama keeps it out).
     profiles: [ollama]
     image: docker.io/ollama/ollama:latest
-    container_name: team-kb-ollama
+    container_name: ${COMPOSE_PROJECT_NAME:-team-kb}-ollama
     gpus: all
     ports:
       - "11434:11434"
@@ -84,8 +91,8 @@ services:
         # Local-only opt-in proxy for npm (empty = no proxy). Never commit a
         # machine-specific value.
         NPM_PROXY: ${NPM_PROXY:-}
-    image: team-kb-webapp:latest
-    container_name: team-kb-webapp
+    image: ${COMPOSE_PROJECT_NAME:-team-kb}-webapp:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-team-kb}-webapp
     depends_on:
       postgres:
         condition: service_healthy
@@ -180,8 +187,8 @@ services:
     build:
       context: ./src/extensions/pi-agent
       dockerfile: Containerfile
-    image: team-kb-pi-agent:latest
-    container_name: team-kb-pi-agent
+    image: ${COMPOSE_PROJECT_NAME:-team-kb}-pi-agent:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-team-kb}-pi-agent
     depends_on:
       webapp:
         condition: service_started
@@ -247,7 +254,7 @@ services:
 
   tool-job:
     profiles: [tool-images]
-    image: team-kb-tool-job:latest
+    image: ${COMPOSE_PROJECT_NAME:-team-kb}-tool-job:latest
     build:
       context: ./src/extensions/tool-runner
       dockerfile: Containerfile
@@ -258,7 +265,7 @@ services:
 
   tool-runner:
     profiles: [tool-authoring]
-    image: team-kb-tool-runner:latest
+    image: ${COMPOSE_PROJECT_NAME:-team-kb}-tool-runner:latest
     build:
       context: ./src/extensions/tool-runner
       dockerfile: Containerfile
@@ -266,7 +273,7 @@ services:
     environment:
       RUNNER_HOST: 0.0.0.0
       RUNNER_TOKEN: ${PI_AGENT_RUNNER_TOKEN:-}
-      RUNNER_JOB_IMAGE: team-kb-tool-job:latest
+      RUNNER_JOB_IMAGE: ${COMPOSE_PROJECT_NAME:-team-kb}-tool-job:latest
       RUNNER_PUBLIC_HTTP: ${RUNNER_PUBLIC_HTTP:-true}
       PI_AGENT_TIMEZONE: ${PI_AGENT_TIMEZONE:-Asia/Shanghai}
     volumes:
