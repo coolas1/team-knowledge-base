@@ -394,6 +394,7 @@ async def test_reingest_schedules_the_available_retry_path(
         assert calls == [("extract", document_id, source_path, "week.md", "markdown")]
 
 
+@pytest.mark.no_uploads_redirect
 def test_upload_dir_follows_uploads_dir_setting(monkeypatch, tmp_path):
     # UPLOAD_DIR is settings-driven: an absolute UPLOADS_DIR is honored, and
     # without it the module keeps the relative default. Both modules are

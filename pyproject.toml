@@ -41,6 +41,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: requires live Postgres+Neo4j+Ollama (set RUN_INTEGRATION=1)",
+    "no_uploads_redirect: keep the real backend.UPLOAD_DIR binding (binding-behavior tests)",
 ]
 
 [tool.ruff]

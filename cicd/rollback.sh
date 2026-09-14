@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Rollback the LAN deployment to a previously deployed commit SHA.
+# Rollback one LAN deployment stack to a previously deployed commit SHA.
 #
 # Usage: rollback.sh <sha>          (full or short SHA, as recorded in
-#                                    <repo>/.deploy/deployed-shas)
+#                                    <stable-dir>/deployed-shas)
 #
-# Retags the SHA-tagged images (kept from every pipeline build) as :latest,
-# checks the disposable clone out at that SHA so the compose file matches the
-# images, and redeploys. The last-deployed marker is intentionally NOT
-# rewritten: while origin/main stays at the SHA the pipeline last deployed,
-# the timer no-ops and the rollback sticks; the next merge to main deploys
-# forward again. Stop/disable team-kb-cicd.timer to pin a rollback longer.
+# The stack (branch, compose namespace, ports) is defined by this stable
+# dir's deploy.env — same as pipeline.sh. Retags the SHA-tagged images (kept
+# from every pipeline build) as :latest, checks the disposable clone out at
+# that SHA so the compose file matches the images, and redeploys. The
+# last-deployed marker is intentionally NOT rewritten: while the watched
+# branch stays at the SHA the pipeline last deployed, the timer no-ops and
+# the rollback sticks; the next merge deploys forward again. Stop/disable
+# the stack's timer (team-kb-cicd.timer / team-kb-cicd-dev.timer) to pin a
+# rollback longer.
 #
 # Rollback is manual by design (v1): the pipeline never rolls back on its own.
 set -Eeuo pipefail
@@ -27,7 +30,6 @@ TKB_HEALTH_TIMEOUT="${TKB_HEALTH_TIMEOUT:-180}"
 repo_dir="$TKB_CICD_HOME/repo"
 deploy_env="$TKB_CICD_HOME/deploy.env"
 history_file="$TKB_CICD_HOME/deployed-shas"
-compose_images=(team-kb-webapp team-kb-pi-agent)
 
 log() { printf '[cicd-rollback] %s\n' "$*"; }
 die() { log "FAILED: $*"; exit 1; }
@@ -54,11 +56,21 @@ if [[ -f "$deploy_env" ]]; then
     esac
   done < "$deploy_env"
 fi
+# Health port and stack namespace come from deploy.env, read without
+# exporting (see pipeline.sh for why). `|| true` guards pipefail on optional
+# keys. COMPOSE_PROJECT_NAME in the environment still wins for sandbox use.
 app_port=""
+project_name=""
 if [[ -f "$deploy_env" ]]; then
-  app_port="$(grep -E '^APP_PORT=' "$deploy_env" | tail -1 | cut -d= -f2-)"
+  app_port="$(grep -E '^APP_PORT=' "$deploy_env" | tail -1 | cut -d= -f2- || true)"
+  project_name="$(grep -E '^COMPOSE_PROJECT_NAME=' "$deploy_env" | tail -1 | cut -d= -f2- || true)"
 fi
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-${project_name:-team-kb}}"
 health_url="http://127.0.0.1:${app_port:-8000}/health"
+# Rollback needs only the two always-deployed images (the tool images are
+# profile-gated); names derive from the stack's namespace, mirroring the
+# compose file's ${COMPOSE_PROJECT_NAME:-team-kb}-<service> image names.
+compose_images=("${COMPOSE_PROJECT_NAME}-webapp" "${COMPOSE_PROJECT_NAME}-pi-agent")
 
 [[ $# -eq 1 ]] || { echo "usage: rollback.sh <sha>" >&2; exit 2; }
 [[ -d "$repo_dir/.git" ]] || die "disposable clone missing at $repo_dir"
@@ -81,7 +93,7 @@ for image in "${compose_images[@]}"; do
   podman image exists "$image:$short" || die "$image:$short not found locally"
 done
 
-log "rolling back to $target"
+log "rolling back $COMPOSE_PROJECT_NAME to $target"
 for image in "${compose_images[@]}"; do
   podman tag "$image:$short" "$image:latest" || die "failed to retag $image"
 done
