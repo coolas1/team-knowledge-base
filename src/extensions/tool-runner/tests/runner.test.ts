@@ -18,6 +18,8 @@ describe("job boundary", () => {
     const template = jobTemplate(`sha256:${"a".repeat(64)}`, "job", "UTC");
     expect(template.User).toBe("1000:1000");
     expect(template.HostConfig).toMatchObject({ NetworkMode: "none", ReadonlyRootfs: true, CapDrop: ["ALL"], PidsLimit: 32 });
+    expect(template.HostConfig!.Tmpfs).toEqual({ "/work": "rw,noexec,nosuid,nodev,size=32m,mode=0777" });
+    expect(template.HostConfig!.Tmpfs!["/work"]).not.toMatch(/uid=|gid=/); // podman 4.9 compat API rejects them
     expect(JSON.stringify(template)).not.toMatch(/Binds|docker.sock|API_KEY/);
     expect(() => jobTemplate("mutable:tag", "id", "UTC")).toThrow();
   });
@@ -61,6 +63,42 @@ describe("runner HTTP authentication", () => {
       const address = server.address() as { port: number };
       expect((await fetch(`http://127.0.0.1:${address.port}/health`)).status).toBe(401);
     } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+  });
+});
+
+describe("container cleanup", () => {
+  class FakeDocker extends Docker {
+    readonly calls: string[] = [];
+    constructor(private readonly opts: { killFails?: boolean; deleteFails?: boolean } = {}) { super("/nonexistent.sock"); }
+    async request<T = unknown>(method: string, path: string, _body?: unknown): Promise<T> {
+      this.calls.push(`${method} ${path.split("?")[0]}`);
+      if (method === "POST" && path.includes("/kill") && this.opts.killFails) throw new Error("kill failed");
+      if (method === "DELETE" && this.opts.deleteFails) throw new Error("delete failed");
+      if (method === "GET" && path.startsWith("/containers/json")) return [{ Id: "stale1" }, { Id: "stale2" }] as T;
+      if (method === "GET" && path.startsWith("/images/")) return { Id: `sha256:${"b".repeat(64)}` } as T;
+      if (method === "POST" && path === "/containers/create") return { Id: "job1" } as T;
+      return undefined as T;
+    }
+    async attach(_id: string): Promise<never> { throw new Error("attach failed"); }
+  }
+  it("kills before deleting on the startup sweep and job teardown", async () => {
+    const docker = new FakeDocker(); const jobs = new Jobs(docker, new Broker());
+    await jobs.initialize();
+    const killed = docker.calls.indexOf("POST /containers/stale1/kill");
+    expect(killed).toBeGreaterThanOrEqual(0);
+    expect(docker.calls.indexOf("DELETE /containers/stale1")).toBeGreaterThan(killed);
+    const result = await jobs.run(parseJob({ code: "export default()=>1" }));
+    expect(result.status).toBe("failed"); // the fake rejects attach, forcing the teardown path
+    const jobKilled = docker.calls.indexOf("POST /containers/job1/kill");
+    expect(jobKilled).toBeGreaterThanOrEqual(0);
+    expect(docker.calls.indexOf("DELETE /containers/job1")).toBeGreaterThan(jobKilled);
+  });
+  it("ignores kill failure but propagates delete failure", async () => {
+    const killFails = new FakeDocker({ killFails: true });
+    await new Jobs(killFails, new Broker()).initialize();
+    expect(killFails.calls).toContain("DELETE /containers/stale1");
+    const deleteFails = new FakeDocker({ deleteFails: true });
+    await expect(new Jobs(deleteFails, new Broker()).initialize()).rejects.toThrow("delete failed");
   });
 });
 

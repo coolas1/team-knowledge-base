@@ -15,7 +15,9 @@ export function jobTemplate(image: string, jobId: string, timezone: string) {
     NetworkDisabled: true,
     HostConfig: { NetworkMode: "none", ReadonlyRootfs: true, CapDrop: ["ALL"], SecurityOpt: ["no-new-privileges:true"],
       Memory: 268_435_456, MemorySwap: 268_435_456, NanoCpus: 1_000_000_000, PidsLimit: 32,
-      Tmpfs: { "/work": "rw,noexec,nosuid,nodev,size=32m,uid=1000,gid=1000,mode=0700" },
+      // No uid=/gid= tmpfs parameters: podman 4.9's Docker-compat API rejects
+      // them; Docker accepts the portable set, so one template serves both.
+      Tmpfs: { "/work": "rw,noexec,nosuid,nodev,size=32m,mode=0777" },
       Ulimits: [{ Name: "nofile", Soft: 128, Hard: 128 }], LogConfig: { Type: "none" }, AutoRemove: false },
   };
 }
@@ -24,9 +26,17 @@ export class Jobs {
   private imageId?: string;
   constructor(readonly docker = new Docker(), readonly broker = new Broker(), readonly image = process.env.RUNNER_JOB_IMAGE ?? "team-kb-tool-job:latest",
     readonly timezone = process.env.PI_AGENT_TIMEZONE ?? "Asia/Shanghai") { new Intl.DateTimeFormat("en", { timeZone: timezone }); }
+  /** Kill before delete: podman's compat force-delete waits out its ~10 s stop
+   * timeout on wedged jobs (busy loops, process floods); an explicit SIGKILL is
+   * immediate on both runtimes and a no-op for exited containers on Docker. */
+  private async remove(id: string): Promise<void> {
+    try { await this.docker.request("POST", `/containers/${id}/kill?signal=SIGKILL`); }
+    catch { /* best-effort: already stopped or gone */ }
+    await this.docker.request("DELETE", `/containers/${id}?force=1`);
+  }
   async initialize(): Promise<void> {
     const old = await this.docker.request<Array<{ Id: string }>>("GET", `/containers/json?all=1&filters=${encodeURIComponent(JSON.stringify({ label: [`tkb.owner=${OWNER}`] }))}`);
-    for (const container of old) await this.docker.request("DELETE", `/containers/${container.Id}?force=1`);
+    for (const container of old) await this.remove(container.Id);
     const image = await this.docker.request<{ Id: string }>("GET", `/images/${encodeURIComponent(this.image)}/json`);
     this.imageId = image.Id;
   }
@@ -102,7 +112,7 @@ export class Jobs {
     } finally {
       controller.abort(); clearTimeout(timer); signal?.removeEventListener("abort", abort); socket?.destroy();
       // Never report completion until the container is removed; cleanup failure is visible.
-      try { if (containerId) await this.docker.request("DELETE", `/containers/${containerId}?force=1`); }
+      try { if (containerId) await this.remove(containerId); }
       finally { this.active.delete(jobId); }
     }
   }
