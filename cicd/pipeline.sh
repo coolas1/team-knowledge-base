@@ -56,8 +56,10 @@ deploy_env="$TKB_CICD_HOME/deploy.env"
 state_file="$TKB_CICD_HOME/last-deployed"
 history_file="$TKB_CICD_HOME/deployed-shas"
 # Images with fixed names in docker-compose.yml; each is tagged :<short-sha>
-# at build time so any deployed SHA stays available for rollback.
-compose_images=(team-kb-webapp team-kb-pi-agent)
+# at build time so any deployed SHA stays available for rollback. Includes the
+# profile-gated tool images: the build stage activates their profiles so they
+# exist for deployments that enable tool-authoring (harmless to build otherwise).
+compose_images=(team-kb-webapp team-kb-pi-agent team-kb-tool-job team-kb-tool-runner)
 
 DRY_RUN=0
 FORCE=0
@@ -186,11 +188,12 @@ stage_build() {
   # if deploy.env sets it (local-only opt-in).
   SHORT_SHA="$(git -C "$repo_dir" rev-parse --short=7 "$HEAD_SHA")"
   export GIT_COMMIT="$SHORT_SHA"
-  log "build: podman compose build (PYPI_MIRROR=${PYPI_MIRROR:-<upstream PyPI>}, NPM_REGISTRY=$NPM_REGISTRY, NPM_AUDIT_REGISTRY=$NPM_AUDIT_REGISTRY, GIT_COMMIT=$SHORT_SHA)"
+  log "build: podman compose build --profile tool-images --profile tool-authoring (PYPI_MIRROR=${PYPI_MIRROR:-<upstream PyPI>}, NPM_REGISTRY=$NPM_REGISTRY, NPM_AUDIT_REGISTRY=$NPM_AUDIT_REGISTRY, GIT_COMMIT=$SHORT_SHA)"
   PYPI_MIRROR="${PYPI_MIRROR:-}" \
     NPM_REGISTRY="$NPM_REGISTRY" \
     NPM_AUDIT_REGISTRY="$NPM_AUDIT_REGISTRY" \
-    podman compose --env-file "$deploy_env" build || die "compose build failed"
+    podman compose --env-file "$deploy_env" \
+    --profile tool-images --profile tool-authoring build || die "compose build failed"
 
   local image
   for image in "${compose_images[@]}"; do

@@ -270,7 +270,11 @@ services:
       RUNNER_PUBLIC_HTTP: ${RUNNER_PUBLIC_HTTP:-true}
       PI_AGENT_TIMEZONE: ${PI_AGENT_TIMEZONE:-Asia/Shanghai}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Host socket path is deployment-specific: Docker mounts its daemon
+      # socket (default); rootless podman mounts the user's compat socket via
+      # TOOL_RUNNER_DOCKER_SOCKET. The in-container path stays fixed so the
+      # gateway's RUNNER_DOCKER_SOCKET default is untouched.
+      - ${TOOL_RUNNER_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     restart: unless-stopped
 
 volumes:

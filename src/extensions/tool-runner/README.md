@@ -57,6 +57,42 @@ Saved code/tests/descriptions must use synthetic data. Runtime arguments are pas
 
 Rollback: set PI_AGENT_TOOL_AUTHORING_ENABLED=false and clear PI_AGENT_RUNNER_URL, recreate Pi, then `docker compose --profile tool-authoring stop tool-runner`. Keep toolslibrary for recovery. This does not modify the existing TKB data or require deleting volumes.
 
+## Rootless podman deployment
+
+The gateway works unchanged against any Docker-compatible container API,
+including rootless podman's compat socket. On a rootless-podman host:
+
+1. Point the gateway's socket mount at the user's podman socket instead of the
+   Docker daemon socket:
+
+   ```dotenv
+   TOOL_RUNNER_DOCKER_SOCKET=/run/user/<uid>/podman/podman.sock
+   COMPOSE_PROFILES=tool-authoring
+   ```
+
+   The in-container path stays `/var/run/docker.sock`, so the gateway code is
+   untouched. The gateway image runs as container-root, which maps to the
+   deployment user under rootless podman and can reach their socket.
+
+2. Keep the socket alive across reboots:
+
+   ```sh
+   systemctl --user enable podman.socket
+   ```
+
+3. Set the same runner env as a Docker deployment: a generated token (≥ 24
+   characters), `PI_AGENT_RUNNER_URL=http://tool-runner:8020`, and
+   `PI_AGENT_TOOL_AUTHORING_ENABLED=true`.
+
+The pipeline (`cicd/`) builds the `tool-job` and `tool-runner` images
+automatically — its build stage activates the `tool-images` and
+`tool-authoring` profiles — so enabling the profile in the deployment's env
+file is all that is needed; a redeploy then starts tool-runner and
+`--remove-orphans` keeps it. The job template's tmpfs options and the
+SIGKILL-before-delete cleanup are portable across Docker and podman; wedged
+jobs (busy loops, process floods) are cleaned up promptly on both.
+
+
 ## Verification
 
 ```sh
