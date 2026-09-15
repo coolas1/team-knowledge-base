@@ -54,3 +54,7 @@ fallbacks and proves that all child tasks are cancelled and awaited.
 `replay_cases.json` is shared by the MCP and Pi HTTP/SSE acceptance tests. It
 freezes the automatic-driving incident plus knowledge, continuity, mixed, and
 no-answer behavior, including exact document and citation identities.
+
+`rollout_rehearsal.json` records every isolated migration transition with
+document/parent/chunk counts, a stable protected-row checksum, dependency drain,
+read enablement, and feature-off rollback state.

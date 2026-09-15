@@ -141,6 +141,16 @@ def main() -> None:
     )
     assert len(autonomy["document_ids"]) == 2
     assert set(autonomy["citations"]) == set(autonomy["document_ids"])
+    rehearsal = json.loads(
+        (ROOT / "rollout_rehearsal.json").read_text(encoding="utf-8")
+    )
+    assert rehearsal["stages"][-1]["name"] == "rollback"
+    assert rehearsal["stages"][-1]["read_enabled"] is False
+    assert all(stage["protected"] == 1 for stage in rehearsal["stages"])
+    assert all(
+        stage["checksum"] == rehearsal["protected_checksum"]
+        for stage in rehearsal["stages"]
+    )
     print(
         json.dumps(
             {
@@ -154,6 +164,7 @@ def main() -> None:
                 "scale_records": scale["fixture"]["records"],
                 "failure_cases": len(failures["results"]),
                 "replay_cases": len(replay_cases),
+                "rehearsal_stages": len(rehearsal["stages"]),
                 "digest": first,
             }
         )
