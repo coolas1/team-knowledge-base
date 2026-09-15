@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import MDEditor from '@uiw/react-md-editor'
 import {
   AlertCircle,
   BookOpen,
@@ -22,6 +21,7 @@ import {
 } from '../api/client'
 import { randomUUID } from '../api/uuid'
 import './AskPage.css'
+import { MarkdownContent } from '../components/MarkdownContent'
 import { appendActivity } from './tool-activity'
 import {
   applyAcceptance,
@@ -599,7 +599,7 @@ export function AskPage() {
                   {message.role === 'assistant' ? (
                     message.text ? (
                       <div className="ask-markdown" data-color-mode="light">
-                        <MDEditor.Markdown source={message.text} />
+                        <MarkdownContent source={message.text} />
                       </div>
                     ) : loading ? (
                       <div className="ask-answer-loading">
