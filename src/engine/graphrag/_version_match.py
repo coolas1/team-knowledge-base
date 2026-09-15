@@ -14,9 +14,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass
+
+from src.engine.components.extractors.sanitize import sha256_of_text
 
 _WORD_RE = re.compile(r"[\w一-鿿]+")
 
@@ -110,10 +111,10 @@ def find_version_candidate(
 
     返回相似度最高且超过阈值的候选；无则 None（按全新文档处理）。
     """
-    new_hash = hashlib.sha256(new_text.encode()).hexdigest()
+    new_hash = sha256_of_text(new_text)
     best: VersionMatchCandidate | None = None
     for doc_id, title, raw_text in existing:
-        exact = hashlib.sha256((raw_text or "").encode()).hexdigest() == new_hash
+        exact = sha256_of_text(raw_text or "") == new_hash
         if exact:
             # 内容完全一致：无论标题如何都是同一文档的纯重命名。
             candidate = VersionMatchCandidate(
