@@ -64,6 +64,10 @@ class HindsightOptions:
     # of the public-corpus floor, so memory recall is not governed by the
     # public gate.
     conversation_recall_min_semantic: float = 0.3
+    conversation_freshness_half_life_days: float = 180.0
+    conversation_min_freshness_factor: float = 0.65
+    conversation_unconfirmed_factor: float = 0.8
+    conversation_assistant_origin_factor: float = 0.75
     # Cap neural reranker scores with vector similarity to stop the LLM from
     # "hallucinating" high scores for semantically unrelated chunks.
     rerank_semantic_margin: float = 0.25
@@ -105,6 +109,7 @@ class HindsightOptions:
             "recall_max_tokens": self.recall_max_tokens,
             "max_passages_per_document": self.max_passages_per_document,
             "max_memories_per_turn": self.max_memories_per_turn,
+            "conversation_freshness_half_life_days": self.conversation_freshness_half_life_days,
             "reflect_max_iterations": self.reflect_max_iterations,
             "reflect_max_tokens": self.reflect_max_tokens,
             "reflect_total_timeout_seconds": self.reflect_total_timeout_seconds,
@@ -118,6 +123,19 @@ class HindsightOptions:
             raise ValueError("recall_min_term_coverage must be in (0, 1]")
         if self.recall_min_term_count < 1:
             raise ValueError("recall_min_term_count must be at least 1")
+        for name, value in (
+            (
+                "conversation_min_freshness_factor",
+                self.conversation_min_freshness_factor,
+            ),
+            ("conversation_unconfirmed_factor", self.conversation_unconfirmed_factor),
+            (
+                "conversation_assistant_origin_factor",
+                self.conversation_assistant_origin_factor,
+            ),
+        ):
+            if not 0 < value <= 1:
+                raise ValueError(f"{name} must be in (0, 1]")
         for name, weights in (
             ("knowledge_arm_weights", self.knowledge_arm_weights),
             ("conversation_arm_weights", self.conversation_arm_weights),

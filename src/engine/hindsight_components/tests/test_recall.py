@@ -161,6 +161,79 @@ async def test_conversation_filter_is_applied_before_all_arm_rankings() -> None:
     assert result.trace["source_type"] == "conversation"
 
 
+async def test_conversation_quality_factors_beat_short_text_length_advantage() -> None:
+    class QualityRepository(FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.low = candidate(
+                "low-quality",
+                "concise answer",
+                semantic=0.8,
+                keyword=0.95,
+            )
+            self.confirmed = candidate(
+                "confirmed",
+                "User prefers concise answer format",
+                semantic=0.8,
+                keyword=0.6,
+            )
+            for item in (self.low, self.confirmed):
+                item.source_type = "conversation"
+                item.session_id = "session-1"
+            self.low.turn_id = "turn-low"
+            self.low.metadata.update({"origin": "user", "authority": "unclassified"})
+            self.confirmed.turn_id = "turn-confirmed"
+            self.confirmed.metadata.update(
+                {
+                    "origin": "user",
+                    "authority": "user_confirmed",
+                    "confirmed_by_turn_id": "turn-confirmed",
+                }
+            )
+
+        async def semantic_search(
+            self, embedding, limit, *, source_type=None, filters=None
+        ):
+            return [self.low, self.confirmed]
+
+        async def keyword_search(self, query, limit, *, source_type=None, filters=None):
+            return [self.low, self.confirmed]
+
+    result = await RecallEngine(
+        QualityRepository(), FakeProviders(), HindsightOptions()
+    ).recall("concise answer", mode="fast", source_type="conversation")
+
+    assert [item.id for item in result.results] == ["confirmed", "low-quality"]
+    confirmed, low = result.results
+    assert confirmed.metadata["conversation_quality"]["factor"] == 1.0
+    assert low.metadata["conversation_quality"]["factor"] < 1.0
+    assert confirmed.final_score > low.final_score
+
+
+def test_conversation_quality_factor_applies_freshness_after_relevance() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    options = HindsightOptions(conversation_freshness_half_life_days=10)
+    engine = RecallEngine(FakeRepository(), FakeProviders(), options)
+    recent = candidate("recent", "relevant preference", semantic=0.9)
+    old = candidate("old", "relevant preference", semantic=0.9)
+    now = datetime(2026, 9, 15, tzinfo=timezone.utc)
+    for item in (recent, old):
+        item.source_type = "conversation"
+        item.final_score = 1.0
+        item.metadata.update({"origin": "user", "authority": "user_confirmed"})
+    recent.mentioned_at = now.isoformat()
+    old.mentioned_at = (now - timedelta(days=100)).isoformat()
+
+    ordered, filtered = engine._apply_conversation_quality_factors(
+        [old, recent], reference_time=now
+    )
+
+    assert filtered == 0
+    assert [item.id for item in ordered] == ["recent", "old"]
+    assert old.metadata["conversation_quality"]["freshness"] == pytest.approx(0.65)
+
+
 async def test_deep_recall_drops_irrelevant_chunk_despite_high_reranker_score() -> None:
     repository = FakeRepository()
     repository.a = candidate("memory-noise", "unrelated noise", semantic=0.1)
@@ -412,6 +485,8 @@ def test_recall_filter_rejects_invalid_budget_score_and_time() -> None:
         RecallFilter(max_tokens=0)
     with pytest.raises(ValueError, match="knowledge_arm_weights"):
         HindsightOptions(knowledge_arm_weights=(1.0, 1.0, 0.0, 1.0))
+    with pytest.raises(ValueError, match="conversation_unconfirmed_factor"):
+        HindsightOptions(conversation_unconfirmed_factor=0)
 
 
 class CoverageGateRepository(FakeRepository):

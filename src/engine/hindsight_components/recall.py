@@ -245,6 +245,13 @@ class RecallEngine:
             ordered, filtered_count = self._filter_by_relevance(
                 ordered, mode, filters, query
             )
+            ordered, conversation_quality_filtered = (
+                self._apply_conversation_quality_factors(
+                    ordered,
+                    reference_time=filters.reference_time,
+                    include_stale=filters.include_stale,
+                )
+            )
             if filters.prefer_observations:
                 for item in ordered:
                     if item.memory_type == "observation":
@@ -286,17 +293,17 @@ class RecallEngine:
                             detail.get("source_facts", [])
                         )
 
-            conversation_quality_filtered = 0
-            if filters.source_types == ("conversation",):
+            if any(item.source_type == "conversation" for item in selected):
                 before_quality = len(selected)
                 selected = [
                     item
                     for item in selected
-                    if self._conversation_quality_ok(
+                    if item.source_type != "conversation"
+                    or self._conversation_quality_ok(
                         item, include_stale=filters.include_stale
                     )
                 ]
-                conversation_quality_filtered = before_quality - len(selected)
+                conversation_quality_filtered += before_quality - len(selected)
                 selected_count = len(selected)
                 token_count = sum(
                     estimate_tokens(item.source_text) for item in selected
@@ -963,6 +970,78 @@ class RecallEngine:
         ):
             return False
         return True
+
+    def _apply_conversation_quality_factors(
+        self,
+        ordered: list[RecallCandidate],
+        *,
+        reference_time=None,
+        include_stale: bool = False,
+    ) -> tuple[list[RecallCandidate], int]:
+        from datetime import datetime, timezone
+
+        now = reference_time or datetime.now(timezone.utc)
+        kept: list[RecallCandidate] = []
+        filtered = 0
+        for item in ordered:
+            if item.source_type != "conversation":
+                kept.append(item)
+                continue
+            if not self._conversation_quality_ok(item, include_stale=include_stale):
+                filtered += 1
+                continue
+            metadata = item.metadata
+            authority = str(metadata.get("authority") or "unclassified")
+            authority_factor = {
+                "user_confirmed": 1.0,
+                "user_asserted": 0.9,
+                "derived": 0.8,
+                "unclassified": 0.7,
+            }.get(authority, 0.7)
+            confirmation_factor = (
+                1.0
+                if metadata.get("confirmed_by_turn_id") or authority == "user_confirmed"
+                else self._options.conversation_unconfirmed_factor
+            )
+            origin_factor = (
+                self._options.conversation_assistant_origin_factor
+                if metadata.get("origin") == "assistant"
+                else 1.0
+            )
+            freshness_factor = 1.0
+            if item.mentioned_at:
+                try:
+                    mentioned = datetime.fromisoformat(
+                        item.mentioned_at.replace("Z", "+00:00")
+                    )
+                    age_days = max(0.0, (now - mentioned).total_seconds() / 86400)
+                    freshness_factor = max(
+                        self._options.conversation_min_freshness_factor,
+                        0.5
+                        ** (
+                            age_days
+                            / self._options.conversation_freshness_half_life_days
+                        ),
+                    )
+                except ValueError:
+                    freshness_factor = self._options.conversation_min_freshness_factor
+            factor = (
+                authority_factor
+                * confirmation_factor
+                * origin_factor
+                * freshness_factor
+            )
+            item.final_score *= factor
+            metadata["conversation_quality"] = {
+                "factor": factor,
+                "freshness": freshness_factor,
+                "authority": authority_factor,
+                "confirmation": confirmation_factor,
+                "origin": origin_factor,
+            }
+            kept.append(item)
+        kept.sort(key=lambda item: (-item.final_score, item.id))
+        return kept, filtered
 
     def _select(
         self, ordered: list[RecallCandidate], limit: int, token_limit: int | None = None
