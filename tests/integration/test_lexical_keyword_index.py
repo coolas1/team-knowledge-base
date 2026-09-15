@@ -6,7 +6,7 @@ import time
 import uuid
 
 import pytest
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import delete, func, insert, select, text, update
 
 from src.engine.components.store.models import Document
 from src.engine.components.store.postgres import async_session_factory, init_db
@@ -25,6 +25,7 @@ async def test_lexical_backfill_is_resumable_and_indexed_search_is_bounded(
     await init_db()
     document_id = uuid.uuid4()
     token = f"scale{uuid.uuid4().hex}"
+    rare_token = f"rare{uuid.uuid4().hex}"
     count = 30_000
     try:
         async with async_session_factory() as session:
@@ -47,7 +48,11 @@ async def test_lexical_backfill_is_resumable_and_indexed_search_is_bounded(
                         "chunk_index": index,
                         "memory_index": 0,
                         "memory_type": "world",
-                        "text": f"{token} 知识库 item {index}",
+                        "text": (
+                            f"{token} {rare_token} 知识库 item {index}"
+                            if index == 0
+                            else f"{token} 知识库 item {index}"
+                        ),
                         "source_text": f"source {index}",
                         "context": "scale test",
                         "embedding": None,
@@ -145,9 +150,25 @@ async def test_lexical_backfill_is_resumable_and_indexed_search_is_bounded(
         print(f"lexical_30k_p95_ms={p95 * 1000:.2f}")
         assert len(results) == 50
         assert {item.document_id for item in results} == {str(document_id)}
+        assert all(
+            item.metadata["keyword_index_mode"] == "indexed_sql" for item in results
+        )
+        assert all(item.metadata["keyword_candidate_count"] <= 300 for item in results)
+        assert all(item.metadata["keyword_candidate_limit"] == 300 for item in results)
         assert p95 < 2.0
 
         async with async_session_factory() as session:
+            plan = await session.scalar(
+                text(
+                    "EXPLAIN (FORMAT JSON) "
+                    "SELECT id FROM memory_units "
+                    "WHERE state = 'active' "
+                    "AND lexical_tokens && ARRAY[:rare_token]::text[] "
+                    "LIMIT 300"
+                ),
+                {"rare_token": rare_token},
+            )
+            assert "idx_memory_units_lexical_tokens" in str(plan)
             stored = int(
                 await session.scalar(
                     select(func.count())

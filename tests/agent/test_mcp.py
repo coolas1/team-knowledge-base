@@ -143,7 +143,12 @@ async def test_private_conversation_memory_operations_map_success(fake_kb):
 
     recalled = await mcp_mod.recall_conversation_memory("preferred color", top_k=3)
     enqueued = await mcp_mod.enqueue_conversation_turn(
-        "session-1", "turn-1", "Remember blue", "Understood"
+        "session-1",
+        "turn-1",
+        "Remember blue",
+        "Understood",
+        confirmed_by_turn_id="turn-1",
+        derived_from_evidence_ids=["doc:2", "doc:1"],
     )
     forgotten = await mcp_mod.forget_conversation_memory("session-1")
     status = await mcp_mod.get_conversation_memory_status()
@@ -153,6 +158,9 @@ async def test_private_conversation_memory_operations_map_success(fake_kb):
     assert forgotten["deleted_documents"] == 1
     assert status["pending"] == 2
     assert [name for name, _ in service.calls] == ["recall", "enqueue", "forget"]
+    submitted = service.calls[1][1]
+    assert submitted.confirmed_by_turn_id == "turn-1"
+    assert submitted.derived_from_evidence_ids == ("doc:2", "doc:1")
 
 
 async def test_conversation_delivery_acknowledges_committed_content(
@@ -182,7 +190,13 @@ async def test_conversation_delivery_acknowledges_committed_content(
     service = FakeConversationMemoryService()
     mcp_mod.set_conversation_memory_service(service)
     result = await mcp_mod.enqueue_conversation_turn(
-        "session-1", "turn-1", " 问题\n", "answer", require_durable_acceptance=True
+        "session-1",
+        "turn-1",
+        " 问题\n",
+        "answer",
+        require_durable_acceptance=True,
+        confirmed_by_turn_id="turn-1",
+        derived_from_evidence_ids=["doc:2", "doc:1", "doc:2"],
     )
     assert result["durable_acceptance"] is True
     assert (
@@ -190,6 +204,16 @@ async def test_conversation_delivery_acknowledges_committed_content(
         == hashlib.sha256(
             json.dumps(
                 [" 问题\n", "answer"], ensure_ascii=False, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+    )
+    assert (
+        result["provenance_hash"]
+        == hashlib.sha256(
+            json.dumps(
+                ["turn-1", ["doc:1", "doc:2"]],
+                ensure_ascii=False,
+                separators=(",", ":"),
             ).encode()
         ).hexdigest()
     )
@@ -434,10 +458,7 @@ async def test_deep_search_returns_typed_timeout_payload():
 
 
 async def test_search_tool_returns_only_gated_sources_and_reports_filtering(fake_kb):
-    """End to end through the MCP layer: a mixed corpus (matching doc chunk,
-    matching conversation turn, single-term noise) returns exactly the two
-    relevant sources even though top_k allows more, with filtered_count in
-    the trace."""
+    """Default search keeps memories separate and never treats them as evidence."""
     from src.engine.hindsight_components.config import HindsightOptions
     from src.engine.hindsight_components.query import HindsightQueryService
     from src.engine.hindsight_components.recall import RecallEngine
@@ -482,7 +503,9 @@ async def test_search_tool_returns_only_gated_sources_and_reports_filtering(fake
             self.source_filters.append(source_type)
             return [self.noise, self.doc, self.turn]
 
-        async def graph_search(self, entities, limit, *, source_type=None, filters=None):
+        async def graph_search(
+            self, entities, limit, *, source_type=None, filters=None
+        ):
             self.calls["graph"] += 1
             self.source_filters.append(source_type)
             return []
@@ -496,9 +519,7 @@ async def test_search_tool_returns_only_gated_sources_and_reports_filtering(fake
 
     class RecallCore:
         def __init__(self, repository: MixedCorpusRepository) -> None:
-            self.engine = RecallEngine(
-                repository, FakeProviders(), HindsightOptions()
-            )
+            self.engine = RecallEngine(repository, FakeProviders(), HindsightOptions())
 
         async def recall(self, query, *, mode="deep", top_k=None):
             return await self.engine.recall(query, mode=mode, top_k=top_k)
@@ -506,7 +527,12 @@ async def test_search_tool_returns_only_gated_sources_and_reports_filtering(fake
         async def reflect(self, query, *, mode="deep", top_k=None):  # pragma: no cover
             raise AssertionError("recall strategy must not reflect")
 
-    mcp_mod.set_query_service(HindsightQueryService(RecallCore(MixedCorpusRepository())))
+    mcp_mod.set_query_service(
+        HindsightQueryService(
+            RecallCore(MixedCorpusRepository()),
+            knowledge_memory_context_enabled=True,
+        )
+    )
     try:
         out = await mcp_mod.search_knowledge_fast(
             "autonomous driving control theory trajectory planning prediction", top_k=5
@@ -514,11 +540,13 @@ async def test_search_tool_returns_only_gated_sources_and_reports_filtering(fake
     finally:
         mcp_mod._query_service = None
 
-    assert [source["memory_id"] for source in out["sources"]] == [
-        "doc-chunk",
-        "conversation-turn",
+    assert [source["memory_id"] for source in out["sources"]] == ["doc-chunk"]
+    assert [source["memory_id"] for source in out["conversation_context"]] == [
+        "conversation-turn"
     ]
-    assert out["trace"]["filtered_count"] == 1
+    assert out["document_evidence"] == out["sources"]
+    assert out["trace"]["source_pool_quotas"] == {"upload": 5, "conversation": 2}
+    assert out["trace"]["source_pool_traces"]["upload"]["filtered_count"] == 1
 
 
 async def test_search_response_stays_within_whole_response_budget(monkeypatch):

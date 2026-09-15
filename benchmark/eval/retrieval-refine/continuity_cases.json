@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "corpus_version": "retrieval-refine-continuity-v1",
+  "thresholds": {"route_accuracy": 1.0, "conversation_precision_at_3": 0.9},
+  "cases": [
+    {
+      "id": "continuity-current-preference",
+      "query": "我现在偏好什么样的回答？",
+      "expected_route": "conversation",
+      "relevant_memory_ids": ["mem-preference-current"],
+      "candidates": [
+        {"id": "mem-preference-current", "freshness": "active", "authority": "user_confirmed", "relevant": true},
+        {"id": "mem-preference-old", "freshness": "stale", "authority": "user_confirmed", "relevant": false},
+        {"id": "mem-answer-echo", "freshness": "active", "authority": "assistant_derived", "relevant": false}
+      ],
+      "fixture_result": {"route": "conversation", "conversation_ids": ["mem-preference-current"]}
+    },
+    {
+      "id": "continuity-confirmed-plan",
+      "query": "我们确认的发布计划是什么？",
+      "expected_route": "conversation",
+      "relevant_memory_ids": ["mem-plan-confirmed"],
+      "candidates": [
+        {"id": "mem-plan-confirmed", "freshness": "active", "authority": "user_confirmed", "relevant": true},
+        {"id": "mem-plan-unconfirmed", "freshness": "active", "authority": "unconfirmed", "relevant": false},
+        {"id": "mem-plan-superseded", "freshness": "superseded", "authority": "user_confirmed", "relevant": false}
+      ],
+      "fixture_result": {"route": "conversation", "conversation_ids": ["mem-plan-confirmed"]}
+    },
+    {
+      "id": "continuity-no-relevant-memory",
+      "query": "我有没有确认过办公室搬迁？",
+      "expected_route": "conversation",
+      "relevant_memory_ids": [],
+      "candidates": [
+        {"id": "mem-office-unconfirmed", "freshness": "active", "authority": "unconfirmed", "relevant": false},
+        {"id": "mem-office-stale", "freshness": "stale", "authority": "user_stated", "relevant": false}
+      ],
+      "fixture_result": {"route": "conversation", "conversation_ids": []}
+    },
+    {
+      "id": "mixed-policy-and-preference",
+      "query": "结合团队报销制度和我的差旅偏好给建议",
+      "expected_route": "mixed",
+      "relevant_memory_ids": ["mem-travel-current"],
+      "expected_document_ids": ["doc-expense-policy"],
+      "candidates": [
+        {"id": "mem-travel-current", "freshness": "active", "authority": "user_stated", "relevant": true},
+        {"id": "mem-travel-superseded", "freshness": "superseded", "authority": "user_stated", "relevant": false},
+        {"id": "mem-random-history", "freshness": "active", "authority": "user_stated", "relevant": false}
+      ],
+      "fixture_result": {"route": "mixed", "conversation_ids": ["mem-travel-current"], "document_ids": ["doc-expense-policy"]}
+    },
+    {
+      "id": "mixed-runbook-and-confirmed-owner",
+      "query": "按值班手册说明我确认负责的时间段",
+      "expected_route": "mixed",
+      "relevant_memory_ids": ["mem-oncall-confirmed"],
+      "expected_document_ids": ["doc-oncall-runbook"],
+      "candidates": [
+        {"id": "mem-oncall-confirmed", "freshness": "active", "authority": "user_confirmed", "relevant": true},
+        {"id": "mem-oncall-unconfirmed", "freshness": "active", "authority": "unconfirmed", "relevant": false}
+      ],
+      "fixture_result": {"route": "mixed", "conversation_ids": ["mem-oncall-confirmed"], "document_ids": ["doc-oncall-runbook"]}
+    },
+    {
+      "id": "knowledge-despite-keyword-history",
+      "query": "自动驾驶控制算法有哪些？",
+      "expected_route": "knowledge",
+      "relevant_memory_ids": [],
+      "expected_document_ids": ["doc-autonomy-controls"],
+      "candidates": [
+        {"id": "mem-autonomy-short", "freshness": "active", "authority": "user_stated", "relevant": false},
+        {"id": "mem-autonomy-stale", "freshness": "stale", "authority": "user_stated", "relevant": false}
+      ],
+      "fixture_result": {"route": "knowledge", "conversation_ids": [], "document_ids": ["doc-autonomy-controls"]}
+    }
+  ]
+}

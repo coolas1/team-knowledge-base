@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import logging
+import re
+import uuid
 from collections import defaultdict
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Protocol
 
 from src.engine.interface import (
@@ -21,6 +27,8 @@ from src.engine.hindsight_components.directives import DirectiveDefinition
 from src.engine.hindsight_components.mental_models import MentalModelDefinition
 
 from src.engine.hindsight_components.config import HindsightOptions
+from src.engine.hindsight_components.deadlines import DeadlineBudget
+from src.engine.hindsight_components.errors import DeepSearchTimeoutError
 from src.engine.hindsight_components.providers import ProjectHindsightProviders
 from src.engine.hindsight_components.protocols import MemoryRepository
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
@@ -32,6 +40,8 @@ from src.engine.hindsight_components.types import (
     ReflectResult,
 )
 from src.engine.scope import request_tag_filter
+
+logger = logging.getLogger(__name__)
 
 
 class CoreQueryService(Protocol):
@@ -53,11 +63,26 @@ class CoreQueryService(Protocol):
 class HindsightQueryService:
     """Choose raw recall or grounded reflection without exposing both APIs."""
 
-    def __init__(self, core: CoreQueryService) -> None:
+    def __init__(
+        self,
+        core: CoreQueryService,
+        *,
+        mixed_source_search_enabled: bool = True,
+        knowledge_memory_context_enabled: bool = False,
+        knowledge_memory_context_limit: int = 2,
+    ) -> None:
         self._core = core
+        self._mixed_source_search_enabled = mixed_source_search_enabled
+        self._knowledge_memory_context_enabled = knowledge_memory_context_enabled
+        self._knowledge_memory_context_limit = max(0, knowledge_memory_context_limit)
 
     def with_scope(self, scope):
-        return HindsightQueryService(self._core.with_scope(scope))
+        return HindsightQueryService(
+            self._core.with_scope(scope),
+            mixed_source_search_enabled=self._mixed_source_search_enabled,
+            knowledge_memory_context_enabled=self._knowledge_memory_context_enabled,
+            knowledge_memory_context_limit=self._knowledge_memory_context_limit,
+        )
 
     @staticmethod
     def _model_record(value) -> MentalModelRecord:
@@ -190,16 +215,45 @@ class HindsightQueryService:
         )
 
     async def query(self, request: KnowledgeQueryRequest) -> KnowledgeQueryResult:
+        configured_total = float(
+            getattr(
+                getattr(self._core, "options", None),
+                "deep_total_timeout_seconds",
+                45.0,
+            )
+        )
+        total = min(configured_total, request.timeout_seconds or configured_total)
+        budget = DeadlineBudget(total)
+        try:
+            async with asyncio.timeout(budget.remaining()):
+                return await self._query_with_budget(request, budget)
+        except TimeoutError as error:
+            search_id = request.correlation_id or str(uuid.uuid4())
+            raise DeepSearchTimeoutError(
+                search_id,
+                {
+                    "search_id": search_id,
+                    "outcome": "deep_search_timeout",
+                    "elapsed_ms": budget.elapsed_ms(),
+                    "total_timeout_seconds": total,
+                    "category": "outer_query_deadline",
+                },
+            ) from error
+
+    async def _query_with_budget(
+        self, request: KnowledgeQueryRequest, budget: DeadlineBudget
+    ) -> KnowledgeQueryResult:
         self._validate(request)
+        requested_route = request.route
+        route_fallback = None
+        if request.route == "mixed" and not self._mixed_source_search_enabled:
+            request = replace(request, route="knowledge", source_types=("upload",))
+            route_fallback = "mixed_source_search_disabled"
         strategy = self._resolve_strategy(request)
         if strategy == "recall":
-            filters = self._filters(request)
-            recalled = await self._core.recall(
-                request.query,
-                mode=request.mode,
-                top_k=request.top_k,
-                **({"filters": filters} if filters is not None else {}),
-            )
+            recalled = await self._recall_for_route(request, budget)
+            recalled = self._enforce_route_candidates(recalled, request.route)
+            recalled = self._collapse_and_cap(recalled)
             kept, texts, evidence_trace = self._bound_evidence(recalled)
             # based_on duplicates the per-source evidence; it is opt-in and
             # compact (ids and scores, no repeated evidence text).
@@ -226,29 +280,326 @@ class HindsightQueryService:
                 )
             trace = dict(recalled.trace)
             trace.update(evidence_trace)
+            sources = [
+                self._source_from_candidate(item, texts[item.id]) for item in kept
+            ]
+            document_evidence = [
+                source for source in sources if source.authority == "document"
+            ]
+            conversation_context = [
+                source for source in sources if source.authority == "conversation"
+            ]
+            logger.info(
+                "hindsight.knowledge_query.complete",
+                extra={
+                    "query_route": request.route,
+                    "requested_route": requested_route,
+                    "document_result_count": len(document_evidence),
+                    "conversation_result_count": len(conversation_context),
+                    "source_pool_counts": {
+                        "upload": len(document_evidence),
+                        "conversation": len(conversation_context),
+                    },
+                    "conversation_leakage_count": sum(
+                        source.authority == "conversation"
+                        for source in document_evidence
+                    ),
+                    "duplicate_collapsed": trace.get("duplicate_collapsed", 0),
+                    "document_coverage": trace.get("document_coverage", 0),
+                    "fallback": route_fallback or trace.get("fallback"),
+                },
+            )
             return KnowledgeQueryResult(
                 strategy_used="recall",
-                sources=[
-                    self._source_from_candidate(item, texts[item.id]) for item in kept
-                ],
+                sources=document_evidence,
                 related_entities=self._related_entities(recalled.entities),
                 based_on=dict(grouped),
-                trace=trace,
+                trace={
+                    **trace,
+                    "route": request.route,
+                    "requested_route": requested_route,
+                    **({"fallback": route_fallback} if route_fallback else {}),
+                },
+                route_used=request.route,
+                document_evidence=document_evidence,
+                conversation_context=conversation_context,
             )
 
         filters = self._filters(request)
-        reflected = await self._core.reflect(
-            request.query,
-            mode=request.mode,
-            top_k=request.top_k,
-            **({"filters": filters} if filters is not None else {}),
-        )
+        reflect_kwargs = {"mode": request.mode, "top_k": request.top_k}
+        if filters is not None and "filters" in inspect.signature(
+            self._core.reflect
+        ).parameters:
+            reflect_kwargs["filters"] = filters
+        reflected = await self._core.reflect(request.query, **reflect_kwargs)
+        sources = self._sources_from_reflection(reflected)
+        document_evidence = [
+            source for source in sources if source.authority == "document"
+        ]
+        conversation_context = [
+            source for source in sources if source.authority == "conversation"
+        ]
         return KnowledgeQueryResult(
             strategy_used="reflect",
             answer=reflected.text,
-            sources=self._sources_from_reflection(reflected),
+            sources=document_evidence,
             based_on=self._compact_based_on(reflected.based_on),
-            trace={"tool_trace": list(reflected.tool_trace)},
+            trace={
+                "tool_trace": list(reflected.tool_trace),
+                "route": request.route,
+                "requested_route": requested_route,
+                **({"fallback": route_fallback} if route_fallback else {}),
+            },
+            route_used=request.route,
+            document_evidence=document_evidence,
+            conversation_context=conversation_context,
+        )
+
+    async def _recall_for_route(
+        self, request: KnowledgeQueryRequest, budget: DeadlineBudget
+    ) -> RecallResult:
+        if request.route == "conversation":
+            return await self._recall_source_pool(
+                request, source_type="conversation", limit=request.top_k, budget=budget
+            )
+
+        if request.route == "knowledge":
+            document_call = self._recall_source_pool(
+                request, source_type="upload", limit=request.top_k, budget=budget
+            )
+            # Explicit source filters are authoritative. Auxiliary memories are
+            # only added for the ordinary/default knowledge contract.
+            include_context = (
+                self._knowledge_memory_context_enabled
+                and self._knowledge_memory_context_limit > 0
+                and not request.source_types
+            )
+            if not include_context:
+                return await document_call
+            conversation_limit = self._knowledge_memory_context_limit
+            document_result, conversation_result = await asyncio.gather(
+                document_call,
+                self._recall_source_pool(
+                    request,
+                    source_type="conversation",
+                    limit=conversation_limit,
+                    budget=budget,
+                ),
+            )
+            return self._merge_source_pools(
+                document_result,
+                conversation_result,
+                route="knowledge",
+                document_quota=request.top_k,
+                conversation_quota=conversation_limit,
+                auxiliary=True,
+            )
+
+        # Mixed retrieval is deliberately two independent source-local calls.
+        # Raw lexical scores from short conversations and document passages
+        # never compete in one BM25 population. Documents receive the
+        # authoritative majority quota and remain first in compatibility output.
+        document_limit = max(1, (request.top_k * 4 + 4) // 5)
+        document_limit = min(document_limit, request.top_k)
+        conversation_limit = request.top_k - document_limit
+        document_call = self._recall_source_pool(
+            request, source_type="upload", limit=document_limit, budget=budget
+        )
+        if conversation_limit:
+            document_result, conversation_result = await asyncio.gather(
+                document_call,
+                self._recall_source_pool(
+                    request,
+                    source_type="conversation",
+                    limit=conversation_limit,
+                    budget=budget,
+                ),
+            )
+        else:
+            document_result = await document_call
+            conversation_result = RecallResult(
+                results=[], chunks={}, entities={}, trace={"skipped": "zero_quota"}
+            )
+        return self._merge_source_pools(
+            document_result,
+            conversation_result,
+            route="mixed",
+            document_quota=document_limit,
+            conversation_quota=conversation_limit,
+            auxiliary=False,
+        )
+
+    async def _recall_source_pool(
+        self,
+        request: KnowledgeQueryRequest,
+        *,
+        source_type: str,
+        limit: int,
+        budget: DeadlineBudget,
+    ) -> RecallResult:
+        pool_route = "conversation" if source_type == "conversation" else "knowledge"
+        pool_request = replace(
+            request,
+            route=pool_route,
+            source_types=(source_type,),
+            top_k=limit,
+        )
+        kwargs = {"mode": request.mode, "top_k": limit}
+        if "filters" in inspect.signature(self._core.recall).parameters:
+            kwargs["filters"] = self._filters(pool_request)
+        if "budget" in inspect.signature(self._core.recall).parameters:
+            kwargs["budget"] = budget
+        recalled = await self._core.recall(request.query, **kwargs)
+        kept = [
+            item
+            for item in recalled.results
+            if (item.source_type == "conversation")
+            == (source_type == "conversation")
+        ][:limit]
+        return RecallResult(
+            results=kept,
+            chunks=recalled.chunks,
+            entities=recalled.entities,
+            documents=recalled.documents,
+            trace={
+                **recalled.trace,
+                "source_pool": source_type,
+                "source_leakage_filtered": len(recalled.results) - len(kept),
+            },
+        )
+
+    @staticmethod
+    def _merge_source_pools(
+        document_result: RecallResult,
+        conversation_result: RecallResult,
+        *,
+        route: str,
+        document_quota: int,
+        conversation_quota: int,
+        auxiliary: bool,
+    ) -> RecallResult:
+        return RecallResult(
+            results=[*document_result.results, *conversation_result.results],
+            chunks={**document_result.chunks, **conversation_result.chunks},
+            entities={**document_result.entities, **conversation_result.entities},
+            documents={**document_result.documents, **conversation_result.documents},
+            trace={
+                **document_result.trace,
+                "route": route,
+                "auxiliary_memory_context": auxiliary,
+                "source_pool_quotas": {
+                    "upload": document_quota,
+                    "conversation": conversation_quota,
+                },
+                "source_pool_counts": {
+                    "upload": len(document_result.results),
+                    "conversation": len(conversation_result.results),
+                },
+                "source_pool_traces": {
+                    "upload": document_result.trace,
+                    "conversation": conversation_result.trace,
+                },
+            },
+        )
+
+    @staticmethod
+    def _enforce_route_candidates(
+        recalled: RecallResult, route: str
+    ) -> RecallResult:
+        if route in {"knowledge", "mixed"}:
+            return recalled
+        kept = [
+            item
+            for item in recalled.results
+            if (
+                item.source_type == "conversation"
+                if route == "conversation"
+                else item.source_type != "conversation"
+            )
+        ]
+        leaked = len(recalled.results) - len(kept)
+        return RecallResult(
+            results=kept,
+            chunks=recalled.chunks,
+            entities=recalled.entities,
+            documents=recalled.documents,
+            trace={**recalled.trace, "source_leakage_filtered": leaked},
+        )
+
+    @staticmethod
+    def _collapse_and_cap(recalled: RecallResult) -> RecallResult:
+        """Collapse derived duplicates and prevent one identity flooding results.
+
+        Candidate ordering is already strongest-first. Keeping the first item
+        therefore preserves the best representative without comparing raw scores
+        across source pools.
+        """
+        from config.settings import settings
+
+        selected: list[RecallCandidate] = []
+        seen: set[tuple[str, ...]] = set()
+        document_counts: defaultdict[str, int] = defaultdict(int)
+        turn_counts: defaultdict[str, int] = defaultdict(int)
+        duplicate_count = 0
+        cap_count = 0
+        for item in recalled.results:
+            normalized = re.sub(
+                r"\W+", " ", str(item.source_text or item.text or "").casefold()
+            ).strip()
+            if item.source_type == "conversation" and item.turn_id:
+                identity = ("turn", item.session_id or "", item.turn_id, normalized)
+            else:
+                identity = (
+                    "document",
+                    item.document_id,
+                    str(item.chunk_index),
+                    normalized,
+                )
+            if identity in seen:
+                duplicate_count += 1
+                continue
+            if item.source_type == "conversation" and item.turn_id:
+                turn_key = f"{item.session_id or ''}:{item.turn_id}"
+                if turn_counts[turn_key] >= settings.hindsight_max_memories_per_turn:
+                    cap_count += 1
+                    continue
+                turn_counts[turn_key] += 1
+            else:
+                if (
+                    document_counts[item.document_id]
+                    >= settings.hindsight_max_passages_per_document
+                ):
+                    cap_count += 1
+                    continue
+                document_counts[item.document_id] += 1
+            seen.add(identity)
+            selected.append(item)
+        hierarchical = dict(recalled.trace.get("hierarchical_retrieval") or {})
+        if hierarchical:
+            hierarchical.update(
+                final_result_count=len(selected),
+                final_document_coverage=len(
+                    {item.document_id for item in selected if item.document_id}
+                ),
+                route_duplicate_collapsed=duplicate_count,
+                route_cap_dropped=cap_count,
+            )
+        return RecallResult(
+            results=selected,
+            chunks=recalled.chunks,
+            entities=recalled.entities,
+            documents=recalled.documents,
+            trace={
+                **recalled.trace,
+                "duplicate_collapsed": duplicate_count,
+                "identity_cap_dropped": cap_count,
+                "document_coverage": len(
+                    {item.document_id for item in selected if item.document_id}
+                ),
+                **(
+                    {"hierarchical_retrieval": hierarchical} if hierarchical else {}
+                ),
+            },
         )
 
     @staticmethod
@@ -261,6 +612,8 @@ class HindsightQueryService:
             raise ValueError(f"unsupported retrieval mode: {request.mode}")
         if request.top_k < 1:
             raise ValueError("top_k must be greater than zero")
+        if request.route not in {"knowledge", "conversation", "mixed"}:
+            raise ValueError(f"unsupported query route: {request.route}")
 
     @staticmethod
     def _bound_evidence(
@@ -308,16 +661,23 @@ class HindsightQueryService:
 
     @staticmethod
     def _resolve_strategy(request: KnowledgeQueryRequest) -> str:
+        # A mixed route is evidence retrieval by contract: source-local pools
+        # must remain inspectable and the calling agent performs synthesis.
+        if request.route == "mixed":
+            return "recall"
         if request.strategy != "auto":
             return request.strategy
         return "reflect" if request.needs_answer else "recall"
 
     @staticmethod
     def _filters(request: KnowledgeQueryRequest) -> RecallFilter | None:
+        source_types = request.source_types or (
+            ("conversation",) if request.route == "conversation" else ("upload",)
+        )
         extended = any(
             (
                 request.memory_types,
-                request.source_types,
+                source_types,
                 request.tags,
                 request.tags_match != "any",
                 request.reference_time,
@@ -334,7 +694,7 @@ class HindsightQueryService:
             return None
         return RecallFilter(
             memory_types=request.memory_types,
-            source_types=request.source_types,
+            source_types=source_types,
             tags=request_tag_filter(request.tags, request.tags_match),
             reference_time=request.reference_time,
             min_scores=request.min_scores,
@@ -359,6 +719,20 @@ class HindsightQueryService:
             title=item.title,
             chunk_text=chunk_text,
             score=item.final_score,
+            authority=(
+                "conversation" if item.source_type == "conversation" else "document"
+            ),
+            source_group=(
+                "conversation_context"
+                if item.source_type == "conversation"
+                else "document_evidence"
+            ),
+            provenance={
+                "memory_id": item.id,
+                "document_id": item.document_id,
+                **({"session_id": item.session_id} if item.session_id else {}),
+                **({"turn_id": item.turn_id} if item.turn_id else {}),
+            },
             metadata={
                 **dict(item.metadata),
                 "source_type": item.source_type,
@@ -466,6 +840,30 @@ class HindsightQueryService:
                         chunk_text=str(item.get("text", "")),
                         score=float(scores.get("final") or 0.0),
                         metadata={**metadata, "scores": dict(scores)},
+                        authority=(
+                            "conversation"
+                            if metadata.get("source_type") == "conversation"
+                            else "document"
+                        ),
+                        source_group=(
+                            "conversation_context"
+                            if metadata.get("source_type") == "conversation"
+                            else "document_evidence"
+                        ),
+                        provenance={
+                            "memory_id": memory_id,
+                            "document_id": str(item.get("document_id", "")),
+                            **(
+                                {"session_id": item["session_id"]}
+                                if item.get("session_id")
+                                else {}
+                            ),
+                            **(
+                                {"turn_id": item["turn_id"]}
+                                if item.get("turn_id")
+                                else {}
+                            ),
+                        },
                     )
                 )
         return sources
@@ -488,6 +886,7 @@ def build_query_service(
     options = HindsightOptions(
         file_summary_enabled=app_config.engine.ingest.vector_only,
         adaptive_reflect_enabled=memory_config.features.adaptive_reflect,
+        adaptive_deep_search_enabled=settings.hindsight_adaptive_deep_search_enabled,
         fact_cache_capacity=memory_config.fact_cache_capacity,
         fact_cache_ttl_seconds=memory_config.fact_cache_ttl_seconds,
         fact_context_limit=memory_config.fact_context_limit,
@@ -517,4 +916,13 @@ def build_query_service(
         keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
     )
     core = HindsightService(repository, ProjectHindsightProviders(), options)
-    return HindsightQueryService(core)
+    return HindsightQueryService(
+        core,
+        mixed_source_search_enabled=settings.hindsight_mixed_source_search_enabled,
+        knowledge_memory_context_enabled=(
+            settings.hindsight_knowledge_memory_context_enabled
+        ),
+        knowledge_memory_context_limit=(
+            settings.hindsight_knowledge_memory_context_limit
+        ),
+    )

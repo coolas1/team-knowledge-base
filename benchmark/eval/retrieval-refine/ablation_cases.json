@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "corpus_version": "retrieval-refine-ablation-v1",
+  "cases": [
+    {"id": "collision", "expected_document_ids": ["doc-a", "doc-b"], "candidates": [
+      {"id": "turn-short", "document_id": "turn-short", "source": "conversation", "semantic_rank": 1, "keyword_rank": 1, "parent_selected": false, "parent_score": 0.0, "passage_score": 0.0, "safety_score": 0.0},
+      {"id": "a-1", "document_id": "doc-a", "source": "upload", "semantic_rank": 2, "keyword_rank": 3, "parent_selected": true, "parent_score": 0.92, "passage_score": 0.81, "safety_score": 0.81},
+      {"id": "b-1", "document_id": "doc-b", "source": "upload", "semantic_rank": 3, "keyword_rank": 2, "parent_selected": true, "parent_score": 0.86, "passage_score": 0.79, "safety_score": 0.79},
+      {"id": "noise-1", "document_id": "doc-noise", "source": "upload", "semantic_rank": 4, "keyword_rank": 4, "parent_selected": false, "parent_score": 0.2, "passage_score": 0.2, "safety_score": 0.2}
+    ]},
+    {"id": "implicit", "expected_document_ids": ["doc-c"], "candidates": [
+      {"id": "c-1", "document_id": "doc-c", "source": "upload", "semantic_rank": 3, "keyword_rank": 5, "parent_selected": true, "parent_score": 0.9, "passage_score": 0.76, "safety_score": 0.76},
+      {"id": "noise-2", "document_id": "doc-noise-2", "source": "upload", "semantic_rank": 1, "keyword_rank": 2, "parent_selected": false, "parent_score": 0.3, "passage_score": 0.4, "safety_score": 0.4},
+      {"id": "turn-implicit", "document_id": "turn-implicit", "source": "conversation", "semantic_rank": 2, "keyword_rank": 1, "parent_selected": false, "parent_score": 0.0, "passage_score": 0.0, "safety_score": 0.0}
+    ]},
+    {"id": "safety-lane", "expected_document_ids": ["doc-safety"], "candidates": [
+      {"id": "safety-1", "document_id": "doc-safety", "source": "upload", "semantic_rank": 1, "keyword_rank": 4, "parent_selected": false, "parent_score": 0.35, "passage_score": 0.95, "safety_score": 0.95},
+      {"id": "parent-noise", "document_id": "doc-parent-noise", "source": "upload", "semantic_rank": 2, "keyword_rank": 1, "parent_selected": true, "parent_score": 0.88, "passage_score": 0.45, "safety_score": 0.45}
+    ]},
+    {"id": "metadata-only", "expected_document_ids": ["doc-meta"], "candidates": [
+      {"id": "parent:doc-meta", "document_id": "doc-meta", "source": "upload", "semantic_rank": 4, "keyword_rank": 1, "parent_selected": true, "parent_score": 0.93, "passage_score": 0.0, "safety_score": 0.0},
+      {"id": "body-noise", "document_id": "doc-body-noise", "source": "upload", "semantic_rank": 1, "keyword_rank": 3, "parent_selected": false, "parent_score": 0.2, "passage_score": 0.3, "safety_score": 0.3}
+    ]}
+  ]
+}

@@ -27,6 +27,8 @@ class NotSupported(Exception):
 # stays identical across surfaces.
 NOT_FOUND_ANSWER = "知识库中未找到与该问题相关的内容。"
 
+QueryRoute = Literal["knowledge", "conversation", "mixed"]
+
 
 @dataclass
 class Capabilities:
@@ -86,6 +88,7 @@ class RecallRequest:
     timeout_seconds: float | None = None
     max_tokens: int | None = None
     max_candidates: int | None = None
+    route: QueryRoute = "knowledge"
 
 
 @dataclass
@@ -134,6 +137,9 @@ class KnowledgeQueryRequest:
     timeout_seconds: float | None = None
     max_tokens: int | None = None
     max_candidates: int | None = None
+    # Existing callers omit route and receive document-grounded knowledge
+    # search. Conversation context must be selected explicitly.
+    route: QueryRoute = "knowledge"
 
 
 @dataclass
@@ -145,6 +151,11 @@ class KnowledgeSource:
     chunk_text: str
     score: float = 0.0
     metadata: dict = field(default_factory=dict)
+    authority: Literal["document", "conversation"] = "document"
+    source_group: Literal["document_evidence", "conversation_context"] = (
+        "document_evidence"
+    )
+    provenance: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -155,6 +166,9 @@ class KnowledgeQueryResult:
     related_entities: list[dict] = field(default_factory=list)
     based_on: dict[str, list[dict]] = field(default_factory=dict)
     trace: dict = field(default_factory=dict)
+    route_used: QueryRoute = "knowledge"
+    document_evidence: list[KnowledgeSource] = field(default_factory=list)
+    conversation_context: list[KnowledgeSource] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +281,8 @@ class ConversationTurn:
     assistant_text: str
     source_timestamp: str | None = None
     reference_timezone: str = "UTC"
+    confirmed_by_turn_id: str | None = None
+    derived_from_evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,9 +348,7 @@ class KnowledgeBase(Protocol):
     async def reingest(self, doc_id: str) -> DocumentRef: ...
     async def edit_document(self, doc_id: str, new_text: str) -> DocumentRef: ...
     async def propose_edit(self, doc_id: str, edit_request: str) -> dict: ...
-    async def confirm_version_match(
-        self, doc_id: str, parent_doc_id: str
-    ) -> dict: ...
+    async def confirm_version_match(self, doc_id: str, parent_doc_id: str) -> dict: ...
     async def remove(self, doc_id: str) -> None: ...
     async def recall(self, request: RecallRequest) -> RecallResult: ...
     async def get_graph(self, entity: str | None = None) -> GraphData: ...

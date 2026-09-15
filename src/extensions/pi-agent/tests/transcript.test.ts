@@ -124,6 +124,8 @@ describe("transcript journal", () => {
       { type: "custom_message", id: "memory", customType: "conversation-memory", content: "private memory", display: false },
       { type: "message", id: "u1", timestamp: "2026-01-01T00:00:00Z", message: { role: "user", content: [{ type: "text", text: "first" }] } },
       { type: "message", id: "a-tool", timestamp: "2026-01-01T00:00:01Z", message: { role: "assistant", content: [{ type: "toolCall", name: "search" }] } },
+      { type: "message", id: "a-call", timestamp: "2026-01-01T00:00:01Z", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "text", text: "_call search" }] } },
+      { type: "message", id: "a-cancelled", timestamp: "2026-01-01T00:00:02Z", message: { role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "我" }] } },
       { type: "message", id: "a-reasoning", timestamp: "2026-01-01T00:00:01Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "private reasoning" }] } },
       { type: "message", id: "tool", timestamp: "2026-01-01T00:00:02Z", message: { role: "toolResult", content: [{ type: "text", text: "private" }] } },
       { type: "compaction", id: "compact", parentId: "tool", summary: "private summary" },

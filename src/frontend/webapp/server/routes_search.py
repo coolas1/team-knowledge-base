@@ -34,6 +34,7 @@ class SearchRequest(BaseModel):
     timeout_seconds: float | None = None
     max_tokens: int | None = None
     max_candidates: int | None = None
+    route: Literal["knowledge", "conversation", "mixed"] = "knowledge"
 
     @field_validator("query")
     @classmethod
@@ -66,6 +67,7 @@ async def search(
         timeout_seconds=body.timeout_seconds,
         max_tokens=body.max_tokens,
         max_candidates=body.max_candidates,
+        route=body.route,
     )
     if query_service is not None:
         from src.engine.hindsight_components.compat import HindsightRecallAdapter

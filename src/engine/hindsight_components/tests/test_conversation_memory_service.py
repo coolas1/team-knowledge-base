@@ -184,6 +184,85 @@ async def test_service_bounds_oversized_turn_with_truncation_marker():
     assert content.startswith("[user]\nx")
 
 
+async def test_selective_retention_skips_generic_turn_and_never_queues_assistant_summary():
+    queue = FakeQueue()
+    service = ConversationMemoryService(
+        queue,
+        FakeRecall(None),
+        FakeRepository(),
+        selective_retention_enabled=True,
+    )
+
+    result = await service.enqueue_conversation_turn(
+        ConversationTurn(
+            session_id="session-1",
+            turn_id="turn-1",
+            user_text="Explain the policy document",
+            assistant_text="The document says the production password is secret",
+        )
+    )
+
+    assert result.status == "skipped_by_policy"
+    assert queue.enqueued is None
+
+
+async def test_selective_retention_publishes_only_explicit_user_preference():
+    queue = FakeQueue()
+    service = ConversationMemoryService(
+        queue,
+        FakeRecall(None),
+        FakeRepository(),
+        selective_retention_enabled=True,
+    )
+
+    result = await service.enqueue_conversation_turn(
+        ConversationTurn(
+            session_id="session-1",
+            turn_id="turn-2",
+            user_text="我偏好简洁的回答",
+            assistant_text="我会记住；文档内容也说明了这一点",
+            confirmed_by_turn_id="turn-2",
+            derived_from_evidence_ids=("doc:2", "doc:1", "doc:2"),
+        )
+    )
+
+    assert result.status == "pending"
+    assert queue.enqueued["content"] == "[user]\n我偏好简洁的回答"
+    assert queue.enqueued["source_context"]["retained_types"] == ("preference",)
+    assert queue.enqueued["source_context"]["origin"] == "user"
+    assert queue.enqueued["source_context"]["authority"] == "user_confirmed"
+    assert queue.enqueued["source_context"]["confirmed_by_turn_id"] == "turn-2"
+    assert queue.enqueued["source_context"]["derived_from_evidence_ids"] == (
+        "doc:1",
+        "doc:2",
+    )
+
+
+@pytest.mark.parametrize(
+    ("confirmed_by_turn_id", "evidence_ids"),
+    [("another-turn", ()), (None, ("not allowed",)), (None, ("x" * 129,))],
+)
+async def test_service_rejects_untrusted_retention_provenance(
+    confirmed_by_turn_id, evidence_ids
+):
+    queue = FakeQueue()
+    service = ConversationMemoryService(queue, FakeRecall(None), FakeRepository())
+
+    with pytest.raises(ValueError):
+        await service.enqueue_conversation_turn(
+            ConversationTurn(
+                session_id="session-1",
+                turn_id="turn-1",
+                user_text="Remember blue",
+                assistant_text="Understood",
+                confirmed_by_turn_id=confirmed_by_turn_id,
+                derived_from_evidence_ids=evidence_ids,
+            )
+        )
+
+    assert queue.enqueued is None
+
+
 async def test_service_forgets_only_requested_session_and_reports_diagnostics():
     queue = FakeQueue()
     repository = FakeRepository()

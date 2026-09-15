@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "corpus_version": "retrieval-refine-synthetic-v1",
+  "cases": [
+    {"id": "knowledge-short-conversation-collision-zh", "route": "knowledge", "kind": "short_conversation_collision", "expected_document_ids": ["doc-autonomy-zh"]},
+    {"id": "knowledge-short-conversation-collision-en", "route": "knowledge", "kind": "short_conversation_collision", "expected_document_ids": ["doc-autonomy-en"]},
+    {"id": "continuity-preference", "route": "conversation", "kind": "continuity", "expected_turn_ids": ["turn-preference-current"]},
+    {"id": "mixed-policy-preference", "route": "mixed", "kind": "mixed", "expected_document_ids": ["doc-policy"], "expected_turn_ids": ["turn-preference-current"]},
+    {"id": "metadata-title-zh", "route": "knowledge", "kind": "metadata_only", "expected_document_ids": ["doc-title-zh"]},
+    {"id": "metadata-filename-identifier", "route": "knowledge", "kind": "metadata_only", "expected_document_ids": ["doc-rfc-9457"]},
+    {"id": "metadata-overview-ja", "route": "knowledge", "kind": "metadata_only", "expected_document_ids": ["doc-overview-ja"]},
+    {"id": "implicit-topic-passage", "route": "knowledge", "kind": "implicit_topic", "expected_document_ids": ["doc-autonomy-implicit"]},
+    {"id": "uncovered-query", "route": "knowledge", "kind": "no_answer", "expected_document_ids": []},
+    {"id": "weak-single-term-overlap", "route": "knowledge", "kind": "weak_overlap", "expected_document_ids": []},
+    {"id": "deep-reranker-timeout", "route": "knowledge", "kind": "timeout", "expected_outcome": "degraded"},
+    {"id": "deep-all-arms-timeout", "route": "knowledge", "kind": "timeout", "expected_outcome": "fallback_or_typed_error"}
+  ]
+}

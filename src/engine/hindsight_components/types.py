@@ -178,6 +178,8 @@ class ExtractedFact:
     speaker_role: str = "unknown"
     modality: str = "unknown"
     entity_aliases: dict[str, list[str]] = field(default_factory=dict)
+    lifecycle_key: str | None = None
+    expires_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -222,6 +224,7 @@ class RetainPlan:
     memories: list[MemoryDraft]
     links: list[MemoryLinkDraft]
     extraction_status: str = "success"
+    error_code: str | None = None
     stage_results: dict[str, str] = field(default_factory=dict)
     source_context: dict[str, Any] = field(default_factory=dict)
     expected_revision: int | None = None

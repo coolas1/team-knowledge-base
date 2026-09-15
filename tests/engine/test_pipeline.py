@@ -166,7 +166,7 @@ async def test_analyze_document_runs_chunks_parallel_and_bounded(monkeypatch):
     monkeypatch.setattr(pipeline_mod, "embedder", embed)
     pipe = pipeline_mod.Pipeline(object(), analyzer=analyzer, chunk_concurrency=3)
 
-    doc_analysis, chunks, chunk_results, embeddings = await pipe._analyze_document(
+    doc_analysis, chunks, chunk_results, parent_embedding, embeddings = await pipe._analyze_document(
         _multi_chunk_text(), "t.md", uuid4()
     )
 
@@ -176,11 +176,11 @@ async def test_analyze_document_runs_chunks_parallel_and_bounded(monkeypatch):
     assert 1 < analyzer.peak <= 3  # 并行但受信号量限流
     assert embed.calls == 1
     assert len(embeddings) == len(chunk_results)
+    assert parent_embedding
 
 
-async def test_analyze_document_embeds_retrieval_view(monkeypatch):
-    """Chunk embeddings see title|filename|overview + text; the stored
-    chunk_text stays the original extraction."""
+async def test_analyze_document_separates_parent_and_original_chunk_vectors(monkeypatch):
+    """Parent metadata and original chunk text receive separate vectors."""
     from src.engine.graphrag import pipeline as pipeline_mod
 
     analyzer = _RecordingAnalyzer()
@@ -189,13 +189,14 @@ async def test_analyze_document_embeds_retrieval_view(monkeypatch):
     pipe = pipeline_mod.Pipeline(object(), analyzer=analyzer)
 
     noisy = "扫描噪声 乱码 乱码 乱码"
-    doc_analysis, chunks, _results, _embeddings = await pipe._analyze_document(
+    doc_analysis, chunks, _results, parent_embedding, _embeddings = await pipe._analyze_document(
         noisy, "自动驾驶综述.pdf", uuid4(), filename="scan-42.pdf"
     )
 
     assert doc_analysis.overview == "ov"
-    prefix = "自动驾驶综述.pdf | scan-42.pdf | ov\n"
-    assert embed.texts == [[prefix + chunk.text for chunk in chunks]]
+    parent_text = "自动驾驶综述.pdf\nscan-42.pdf\nov"
+    assert embed.texts == [[parent_text, *[chunk.text for chunk in chunks]]]
+    assert parent_embedding
     assert all(chunk.text == noisy or noisy in chunk.text for chunk in chunks)
 
 
@@ -265,7 +266,7 @@ async def test_analyze_document_retries_transient_llm_failures(monkeypatch):
         llm_backoff_base_seconds=0.001,
     )
 
-    doc_analysis, _chunks, chunk_results, _embeddings = await pipe._analyze_document(
+    doc_analysis, _chunks, chunk_results, _parent, _embeddings = await pipe._analyze_document(
         "# T\n\n短文本", "t.md", uuid4()
     )
 
@@ -383,8 +384,10 @@ class _PipelineSession:
     async def __aexit__(self, *_args):
         return None
 
-    async def get(self, _model, key):
-        return self.docs.get(key)
+    async def get(self, model, key, **_kwargs):
+        from src.engine.components.store.models import Document
+
+        return self.docs.get(key) if model is Document else None
 
     async def execute(self, statement):
         self.statements.append(statement)
@@ -393,6 +396,9 @@ class _PipelineSession:
         return SimpleNamespace(scalar_one_or_none=lambda: None)
 
     async def commit(self):
+        return None
+
+    async def rollback(self):
         return None
 
     def add(self, obj):

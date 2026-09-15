@@ -78,6 +78,27 @@ class MemoryUnit(BankOwned, Base):
         ARRAY(Text), nullable=False, default=list, server_default="{}"
     )
     state: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    origin: Mapped[str] = mapped_column(
+        Text, nullable=False, default="unknown", server_default="unknown"
+    )
+    authority: Mapped[str] = mapped_column(
+        Text, nullable=False, default="unclassified", server_default="unclassified"
+    )
+    policy_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    confirmed_by_turn_id: Mapped[str | None] = mapped_column(Text)
+    derived_from_evidence_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lifecycle_state: Mapped[str] = mapped_column(
+        Text, nullable=False, default="current", server_default="current"
+    )
+    superseded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lifecycle_key: Mapped[str | None] = mapped_column(Text)
+    content_fingerprint: Mapped[str | None] = mapped_column(Text)
+    duplicate_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     memory_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
@@ -95,6 +116,14 @@ class MemoryUnit(BankOwned, Base):
         Index("idx_memory_units_document", "document_id"),
         Index("idx_memory_units_type", "memory_type"),
         Index("idx_memory_units_state", "state"),
+        Index("idx_memory_units_lifecycle", "bank_id", "lifecycle_state"),
+        Index("idx_memory_units_expires_at", "expires_at"),
+        Index("idx_memory_units_lifecycle_key", "bank_id", "lifecycle_key"),
+        Index(
+            "idx_memory_units_fingerprint",
+            "bank_id",
+            "content_fingerprint",
+        ),
         Index(
             "idx_memory_units_lexical_tokens",
             "lexical_tokens",
@@ -671,6 +700,126 @@ class HindsightDocumentState(BankOwned, Base):
     )
 
     __table_args__ = (Index("idx_hindsight_document_state_status", "status"),)
+
+
+class RetrievalMigrationRun(BankOwned, Base):
+    """Durable scope-level control record for retrieval representation rollout."""
+
+    __tablename__ = "retrieval_migration_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    generation: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, default=uuid.uuid4
+    )
+    stage: Mapped[str] = mapped_column(
+        Text, nullable=False, default="prepared", server_default="prepared"
+    )
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10, server_default="10"
+    )
+    token_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    tokens_used: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    cost_limit_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    cost_used_usd: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
+    progress: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+        onupdate=_utcnow,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "attempts >= 0 AND max_attempts > 0", name="ck_retrieval_migration_attempts"
+        ),
+        CheckConstraint(
+            "token_limit > 0 AND tokens_used >= 0", name="ck_retrieval_migration_tokens"
+        ),
+        CheckConstraint(
+            "cost_limit_usd >= 0 AND cost_used_usd >= 0",
+            name="ck_retrieval_migration_cost",
+        ),
+        CheckConstraint(
+            "stage IN ('prepared', 'dual_write', 'backfilled', 'validated', "
+            "'read_enabled', 'verified', 'failed')",
+            name="ck_retrieval_migration_stage",
+        ),
+        UniqueConstraint(
+            "bank_id", "generation", name="uq_retrieval_migration_generation"
+        ),
+        Index("idx_retrieval_migration_scope", "bank_id", "stage"),
+    )
+
+
+class RetrievalMigrationDocument(Base):
+    """Revision-fenced, resumable checkpoint for one current document."""
+
+    __tablename__ = "retrieval_migration_documents"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("retrieval_migration_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    expected_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_generation: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default="pending"
+    )
+    checkpoint: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sql_text("'{}'::jsonb")
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    error_code: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=sql_text("now()"),
+        onupdate=_utcnow,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "attempts >= 0", name="ck_retrieval_migration_document_attempts"
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'backfilled', 'validated', "
+            "'verified', 'failed', 'skipped_changed')",
+            name="ck_retrieval_migration_document_status",
+        ),
+        Index(
+            "idx_retrieval_migration_document_ready", "run_id", "status", "document_id"
+        ),
+    )
 
 
 class ConversationMemorySource(BankOwned, Base):

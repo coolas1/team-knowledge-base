@@ -75,6 +75,9 @@ class Document(BankOwned, Base):
         Text, nullable=False, default="pending", server_default="pending"
     )  # pending → processing → indexed / failed
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processing_generation: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
     # ── 版本链（纵向迭代管理）───────────────────────────────────
     # 同一逻辑文档的多个版本共享 version_group；每行是组内一个具体版本。
@@ -170,6 +173,9 @@ class Chunk(BankOwned, Base):
         ARRAY(Text), nullable=False, default=list, server_default="{}"
     )
     embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    embedding_model: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     overview: Mapped[str] = mapped_column(
         Text, nullable=False, default=""
     )  # 冗余自 documents.overview
@@ -187,6 +193,55 @@ class Chunk(BankOwned, Base):
 
     __table_args__ = (
         UniqueConstraint("doc_id", "chunk_index", name="uq_chunks_doc_chunk_index"),
+    )
+
+
+class DocumentRetrieval(BankOwned, Base):
+    """Clean, revision-fenced parent representation for document retrieval."""
+
+    __tablename__ = "document_retrieval"
+
+    doc_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    filename: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    overview: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tags: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
+    entities: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
+    field_tokens: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
+    embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    embedding_model: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+    generation_state: Mapped[str] = mapped_column(
+        Text, nullable=False, default="ready", server_default="ready"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=text("now()"),
+        onupdate=_utcnow,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint("revision > 0", name="ck_document_retrieval_revision"),
+        CheckConstraint(
+            "generation_state IN ('pending', 'ready', 'failed')",
+            name="ck_document_retrieval_generation_state",
+        ),
+        Index("idx_document_retrieval_bank", "bank_id"),
+        Index("idx_document_retrieval_tokens", "field_tokens", postgresql_using="gin"),
     )
 
 

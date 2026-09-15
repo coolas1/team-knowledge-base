@@ -7,11 +7,18 @@ from dataclasses import dataclass
 import hashlib
 import logging
 from pathlib import Path
+import uuid
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert
 
-from src.engine.components.store.models import Chunk, Document, DocumentChange
+from src.engine.components.store.models import (
+    Chunk,
+    Document,
+    DocumentChange,
+    DocumentRetrieval,
+)
 from src.engine.components.store.neo4j import (
     Neo4jClient,
     EntityData,
@@ -29,9 +36,9 @@ from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
 from src.engine.components.retry import retry_transient
 from src.engine.graphrag.progress import clear_progress, set_progress
-from src.engine.retrieval_view import retrieval_view_prefix
 from src.engine.interface import DocumentIndexHook
 from src.engine.scope import MemoryScope, TagFilter
+from src.engine.hindsight_components.utils import lexical_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +61,16 @@ def format_error(exc: BaseException) -> str:
     """类型在前的错误信息：无消息异常（如取消）也能标识失败原因。"""
     message = str(exc)
     return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
+
+class StaleDocumentGeneration(RuntimeError):
+    """The document changed while an indexing generation was in flight."""
+
+
+@dataclass(frozen=True)
+class ProcessingFence:
+    revision: int
+    generation: UUID
 
 
 @dataclass
@@ -106,14 +123,19 @@ class Pipeline:
         title: str,
         doc_id: UUID,
         filename: str | None = None,
-    ) -> tuple[AnalysisResult, list, list[ChunkAnalysisResult], list[list[float]]]:
+    ) -> tuple[
+        AnalysisResult,
+        list,
+        list[ChunkAnalysisResult],
+        list[float],
+        list[list[float]],
+    ]:
         """分块后并行执行：overview ∥ 逐 chunk 分析（信号量限流）∥ embedding。
 
         返回 (doc_analysis, chunks, chunk_analyses, embeddings)；
         chunk_analyses 按 chunk 顺序排列，写入顺序确定。
-        embedding 输入是检索视图（标题/文件名/overview 前缀 + 原文），
-        正文抽取质量差的文档（扫描件 OCR 噪声）仍可经干净元数据被检索；
-        存储的 chunk_text 始终是原始抽取文本。
+        chunk embedding 输入只使用原始文本；标题、文件名和 overview 由
+        独立的文档级/字段级检索承担，避免把同一 metadata 重复进每个向量。
         """
         chunks = await asyncio.to_thread(chunk_text, raw_text)
         total = len(chunks)
@@ -141,13 +163,20 @@ class Pipeline:
         async def _no_embeddings() -> list[list[float]]:
             return []
 
-        async def _embed_chunks() -> list[list[float]]:
-            if not chunks:
-                return []
-            overview = (await overview_task).overview
-            prefix = retrieval_view_prefix(title, filename, overview)
+        async def _embed_document_and_chunks() -> list[list[float]]:
+            analysis = await overview_task
+            parent_text = "\n".join(
+                part
+                for part in (
+                    title,
+                    filename or "",
+                    analysis.overview,
+                    " ".join(entity.name for entity in analysis.entities),
+                )
+                if part
+            )
             return await self._with_retry(
-                lambda: embedder.embed_batch([prefix + c.text for c in chunks]),
+                lambda: embedder.embed_batch([parent_text, *[c.text for c in chunks]]),
                 description="embedding 批量生成",
             )
 
@@ -160,16 +189,59 @@ class Pipeline:
                     description="document overview",
                 )
             )
-            embed_task = tg.create_task(_embed_chunks())
+            embed_task = tg.create_task(_embed_document_and_chunks())
             for i, chunk in enumerate(chunks if not self._vector_only else []):
                 tg.create_task(analyze_one(i, chunk.text))
 
+        vectors = embed_task.result()
         return (
             overview_task.result(),
             chunks,
             [ca for ca in results if ca is not None],
-            embed_task.result(),
+            vectors[0],
+            vectors[1:],
         )
+
+    async def _begin_processing(
+        self, doc_id: UUID, *, skip_complete: bool = False
+    ) -> ProcessingFence | None:
+        """Claim a document generation and make any prior parent row unreadable."""
+        async with async_session_factory() as session:
+            owner = await session.get(Document, doc_id, with_for_update=True)
+            if owner is None:
+                raise ValueError(f"文档不存在: {doc_id}")
+            parent = await session.get(DocumentRetrieval, doc_id)
+            revision = getattr(owner, "version_number", 1)
+            if not getattr(owner, "is_current", True):
+                if parent is not None:
+                    parent.generation_state = "failed"
+                await session.commit()
+                raise StaleDocumentGeneration(f"文档 {doc_id} 已不是当前版本")
+            if (
+                skip_complete
+                and owner.status == "indexed"
+                and parent is not None
+                and parent.revision == revision
+                and parent.generation_state == "ready"
+            ):
+                return None
+            generation = uuid.uuid4()
+            owner.status = "processing"
+            owner.error_msg = None
+            owner.processing_generation = generation
+            await session.execute(
+                update(Document)
+                .where(Document.id == doc_id)
+                .values(
+                    status="processing",
+                    error_msg=None,
+                    processing_generation=generation,
+                )
+            )
+            if parent is not None:
+                parent.generation_state = "pending"
+            await session.commit()
+            return ProcessingFence(revision=revision, generation=generation)
 
     async def _summary_overview(self, raw_text, title, doc_id):
         if self._summary_manager is None:
@@ -192,20 +264,15 @@ class Pipeline:
         版本链：previous_version 提供上一版上下文时，成功入库后
         追加变更抽取（LLM diff）并写入版本图谱。
         """
-        async with async_session_factory() as session:
-            # 1. 检查已完成文档；规范化的文本 hash 在提取后计算。
-            doc = await session.get(Document, doc_id)
-            if doc and doc.status == "indexed":
-                logger.info(f"文档 {doc_id} 已完成，跳过 pipeline")
-                return
-
-            # 2. 标记为 processing
-            await session.execute(
-                update(Document)
-                .where(Document.id == doc_id)
-                .values(status="processing", error_msg=None)
-            )
-            await session.commit()
+        try:
+            fence = await self._begin_processing(doc_id, skip_complete=True)
+        except StaleDocumentGeneration:
+            clear_progress(str(doc_id))
+            logger.info("文档 %s 的过期 pipeline 已停止", doc_id)
+            return
+        if fence is None:
+            logger.info(f"文档 {doc_id} 及其检索记录已完成，跳过 pipeline")
+            return
 
         try:
             # 3. 提取 + 并行分析（doc 信号量限制并发文档数）
@@ -218,6 +285,7 @@ class Pipeline:
                     doc_analysis,
                     chunks,
                     chunk_analyses,
+                    document_embedding,
                     embeddings,
                 ) = await self._analyze_document(
                     raw_text, title, doc_id, filename=file_path.name
@@ -236,8 +304,12 @@ class Pipeline:
                     raw_text=raw_text,
                     content_hash=content_hash,
                     overview=doc_analysis.overview,
+                    filename=file_path.name,
+                    entities=[entity.name for entity in doc_analysis.entities],
+                    document_embedding=document_embedding,
                     chunks=chunks,
                     embeddings=embeddings,
+                    fence=fence,
                 )
 
             # 5. 写入 Neo4j（三层图谱）
@@ -280,8 +352,11 @@ class Pipeline:
             clear_progress(str(doc_id))
             logger.info(f"文档 {doc_id} Pipeline 完成 ✓")
 
+        except StaleDocumentGeneration:
+            clear_progress(str(doc_id))
+            logger.info("文档 %s 的过期 pipeline 结果未发布", doc_id)
         except Exception as e:
-            await self._mark_failed(doc_id, e, "Pipeline")
+            await self._mark_failed(doc_id, e, "Pipeline", fence=fence)
 
     async def _persist_chunks(
         self,
@@ -292,16 +367,74 @@ class Pipeline:
         raw_text: str,
         content_hash: str,
         overview: str,
+        filename: str,
+        entities: list[str],
+        document_embedding: list[float],
         chunks: list,
         embeddings: list[list[float]],
+        fence: ProcessingFence,
     ) -> None:
         """chunk 行写入 + 文档状态更新为 indexed（两条入库路径共用）。"""
         set_progress(str(doc_id), "writing_postgres", "写入数据库")
-        owner = await session.get(Document, doc_id)
+        owner = await session.get(Document, doc_id, with_for_update=True)
         if owner is None:
             raise ValueError(f"文档不存在: {doc_id}")
+        if (
+            not getattr(owner, "is_current", True)
+            or owner.status != "processing"
+            or getattr(owner, "version_number", 1) != fence.revision
+            or getattr(owner, "processing_generation", None) != fence.generation
+        ):
+            await session.rollback()
+            raise StaleDocumentGeneration(
+                f"文档 {doc_id} 的 revision/generation fence 已变化"
+            )
         await session.execute(
             Chunk.__table__.delete().where(Chunk.doc_id == doc_id)  # type: ignore[union-attr]
+        )
+        parent_text = "\n".join(
+            part
+            for part in (
+                title,
+                filename,
+                overview,
+                " ".join(owner.tags or []),
+                " ".join(entities),
+            )
+            if part
+        )
+        await session.execute(
+            insert(DocumentRetrieval)
+            .values(
+                doc_id=doc_id,
+                bank_id=owner.bank_id,
+                revision=getattr(owner, "version_number", 1),
+                title=title,
+                filename=filename,
+                overview=overview,
+                tags=list(owner.tags or []),
+                entities=list(dict.fromkeys(entities)),
+                field_tokens=lexical_tokens(parent_text),
+                embedding=document_embedding,
+                embedding_model=getattr(embedder, "_model", ""),
+                generation_state="ready",
+            )
+            .on_conflict_do_update(
+                index_elements=[DocumentRetrieval.doc_id],
+                set_={
+                    "bank_id": owner.bank_id,
+                    "revision": getattr(owner, "version_number", 1),
+                    "title": title,
+                    "filename": filename,
+                    "overview": overview,
+                    "tags": list(owner.tags or []),
+                    "entities": list(dict.fromkeys(entities)),
+                    "field_tokens": lexical_tokens(parent_text),
+                    "embedding": document_embedding,
+                    "embedding_model": getattr(embedder, "_model", ""),
+                    "generation_state": "ready",
+                },
+            )
         )
 
         doc_uri = f"{doc_id}:{title}"
@@ -314,6 +447,7 @@ class Pipeline:
                     chunk_index=chunk.index,
                     chunk_text=chunk.text,
                     embedding=embedding,
+                    embedding_model=getattr(embedder, "_model", ""),
                     overview=overview,
                     doc_uri=doc_uri,
                     token_count=chunk.token_count,
@@ -322,29 +456,61 @@ class Pipeline:
 
         await session.execute(
             update(Document)
-            .where(Document.id == doc_id)
+            .where(
+                Document.id == doc_id,
+                Document.is_current.is_(True),
+                Document.version_number == fence.revision,
+                Document.processing_generation == fence.generation,
+            )
             .values(
                 raw_text=raw_text,
                 overview=overview,
                 content_hash=content_hash,
                 status="indexed",
                 error_msg=None,
+                processing_generation=fence.generation,
             )
         )
         await session.commit()
         logger.info(f"文档 {doc_id} Postgres 写入完成")
 
-    async def _mark_failed(self, doc_id: UUID, exc: Exception, stage: str) -> None:
+    async def _mark_failed(
+        self,
+        doc_id: UUID,
+        exc: Exception,
+        stage: str,
+        *,
+        fence: ProcessingFence | None = None,
+    ) -> None:
         """失败收尾：清进度 + 状态置为 failed（error_msg 永不为空）。"""
         clear_progress(str(doc_id))
         unwrapped = _unwrap_exception_group(exc)
         logger.error(f"文档 {doc_id} {stage} 失败: {unwrapped}", exc_info=True)
         async with async_session_factory() as session:
-            await session.execute(
+            conditions = [Document.id == doc_id, Document.is_current.is_(True)]
+            if fence is not None:
+                conditions.extend(
+                    (
+                        Document.version_number == fence.revision,
+                        Document.processing_generation == fence.generation,
+                    )
+                )
+            result = await session.execute(
                 update(Document)
-                .where(Document.id == doc_id)
+                .where(*conditions)
                 .values(status="failed", error_msg=format_error(unwrapped))
             )
+            if getattr(result, "rowcount", 1):
+                parent_conditions = [DocumentRetrieval.doc_id == doc_id]
+                if fence is not None:
+                    parent_conditions.append(
+                        DocumentRetrieval.revision == fence.revision
+                    )
+                await session.execute(
+                    update(DocumentRetrieval)
+                    .where(*parent_conditions)
+                    .values(generation_state="failed")
+                )
             await session.commit()
 
     async def reindex_document(
@@ -358,6 +524,13 @@ class Pipeline:
         previous_version 提供上一版上下文时，成功入库后追加
         变更抽取（LLM diff）并写入版本图谱。
         """
+        try:
+            fence = await self._begin_processing(doc_id)
+        except StaleDocumentGeneration:
+            clear_progress(str(doc_id))
+            logger.info("文档 %s 的过期 re-index 已停止", doc_id)
+            return
+        assert fence is not None
         async with async_session_factory() as session:
             doc = await session.get(Document, doc_id)
             if not doc:
@@ -370,13 +543,6 @@ class Pipeline:
             is_current = doc.is_current
             content_hash = hashlib.sha256(new_text.encode()).hexdigest()
 
-            await session.execute(
-                update(Document)
-                .where(Document.id == doc_id)
-                .values(status="processing", error_msg=None)
-            )
-            await session.commit()
-
         try:
             # 并行分析（doc 信号量限制并发文档数）
             async with self._doc_sem:
@@ -384,6 +550,7 @@ class Pipeline:
                     doc_analysis,
                     chunks,
                     chunk_analyses,
+                    document_embedding,
                     embeddings,
                 ) = await self._analyze_document(
                     new_text,
@@ -400,8 +567,12 @@ class Pipeline:
                     raw_text=new_text,
                     content_hash=content_hash,
                     overview=doc_analysis.overview,
+                    filename=_filename_of(getattr(doc, "file_path", None)) or "",
+                    entities=[entity.name for entity in doc_analysis.entities],
+                    document_embedding=document_embedding,
                     chunks=chunks,
                     embeddings=embeddings,
+                    fence=fence,
                 )
 
                 # 更新 Neo4j（先清理旧图谱数据，防止过时实体残留）
@@ -448,8 +619,90 @@ class Pipeline:
 
             logger.info(f"文档 {doc_id} re-index 完成 ✓")
 
+        except StaleDocumentGeneration:
+            clear_progress(str(doc_id))
+            logger.info("文档 %s 的过期 re-index 结果未发布", doc_id)
         except Exception as e:
-            await self._mark_failed(doc_id, e, "re-index")
+            await self._mark_failed(doc_id, e, "re-index", fence=fence)
+
+    async def refresh_document_retrieval(self, doc_id: UUID) -> bool:
+        """Rebuild a current indexed parent after title/tag/overview metadata changes."""
+        async with async_session_factory() as session:
+            document = await session.get(Document, doc_id)
+            parent = await session.get(DocumentRetrieval, doc_id)
+            if (
+                document is None
+                or not document.is_current
+                or document.status != "indexed"
+            ):
+                return False
+            revision = document.version_number
+            filename = _filename_of(document.file_path) or ""
+            title = document.title
+            overview = document.overview or ""
+            tags = list(document.tags or [])
+            entities = list(parent.entities or []) if parent is not None else []
+        parent_text = "\n".join(
+            part
+            for part in (
+                title,
+                filename,
+                overview,
+                " ".join(tags),
+                " ".join(entities),
+            )
+            if part
+        )
+        vectors = await embedder.embed_batch([parent_text])
+        if len(vectors) != 1:
+            raise ValueError("embedding provider returned an unexpected row count")
+        async with async_session_factory() as session, session.begin():
+            current = await session.get(Document, doc_id, with_for_update=True)
+            if (
+                current is None
+                or not current.is_current
+                or current.status != "indexed"
+                or current.version_number != revision
+                or current.title != title
+                or (_filename_of(current.file_path) or "") != filename
+                or (current.overview or "") != overview
+                or list(current.tags or []) != tags
+            ):
+                return False
+            await session.execute(
+                insert(DocumentRetrieval)
+                .values(
+                    doc_id=doc_id,
+                    bank_id=current.bank_id,
+                    revision=revision,
+                    title=title,
+                    filename=filename,
+                    overview=overview,
+                    tags=tags,
+                    entities=entities,
+                    field_tokens=lexical_tokens(parent_text),
+                    embedding=vectors[0],
+                    embedding_model=getattr(embedder, "_model", ""),
+                    generation_state="ready",
+                )
+                .on_conflict_do_update(
+                    index_elements=[DocumentRetrieval.doc_id],
+                    set_={
+                        "bank_id": current.bank_id,
+                        "revision": revision,
+                        "title": title,
+                        "filename": filename,
+                        "overview": overview,
+                        "tags": tags,
+                        "entities": entities,
+                        "field_tokens": lexical_tokens(parent_text),
+                        "embedding": vectors[0],
+                        "embedding_model": getattr(embedder, "_model", ""),
+                        "generation_state": "ready",
+                    },
+                )
+            )
+        return True
 
     async def record_version_change(
         self,

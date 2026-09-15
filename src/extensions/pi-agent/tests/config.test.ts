@@ -15,6 +15,8 @@ describe("loadTkbAdapterConfig", () => {
     expect(config.enableWriteTools).toBe(false);
     expect(config.enableFullGraph).toBe(false);
     expect(config.conversationMemoryEnabled).toBe(false);
+    expect(config.conversationMemoryAutoRecallEnabled).toBe(false);
+    expect(config.conversationMemoryRoutingTimeoutMs).toBe(750);
     expect(config.conversationMemoryRecallTimeoutMs).toBe(5000);
     expect(config.conversationMemoryRecallLimit).toBe(5);
     expect(config.conversationMemoryContextBudgetChars).toBe(6000);
@@ -44,6 +46,10 @@ describe("loadTkbAdapterConfig", () => {
   it("validates conversation memory limits and context", () => {
     const config = loadTkbAdapterConfig({
       TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_ROUTING_TIMEOUT_MS: "500",
+      TKB_CONVERSATION_MEMORY_ROUTING_MODEL_ENABLED: "false",
+      TKB_CONVERSATION_MEMORY_ROUTING_CONTEXT_BUDGET_CHARS: "800",
       TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS: "1200",
       TKB_CONVERSATION_MEMORY_RECALL_LIMIT: "10",
       TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS: "4000",
@@ -53,6 +59,10 @@ describe("loadTkbAdapterConfig", () => {
       TKB_CONVERSATION_MEMORY_SHOW_SOURCE_TIME: "yes",
     });
     expect(config.conversationMemoryEnabled).toBe(true);
+    expect(config.conversationMemoryAutoRecallEnabled).toBe(true);
+    expect(config.conversationMemoryRoutingTimeoutMs).toBe(500);
+    expect(config.conversationMemoryRoutingModelEnabled).toBe(false);
+    expect(config.conversationMemoryRoutingContextBudgetChars).toBe(800);
     expect(config.conversationMemoryRecallTimeoutMs).toBe(1200);
     expect(config.conversationMemoryRecallLimit).toBe(10);
     expect(config.conversationMemoryContextBudgetChars).toBe(4000);
@@ -69,6 +79,12 @@ describe("loadTkbAdapterConfig", () => {
     ] as const) {
       expect(() => loadTkbAdapterConfig({ [key]: value })).toThrow(key);
     }
+  });
+
+  it("requires memory retention capability before automatic recall", () => {
+    expect(() => loadTkbAdapterConfig({
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+    })).toThrow("requires conversation memory");
   });
 });
 
@@ -158,9 +174,70 @@ describe("loadPiAgentConfig", () => {
     });
 
     expect(() => validateDeadlineHierarchy(agent, adapter)).toThrow(
-      /tool timeout.*PI_AGENT_TURN_RESERVE_SECONDS.*PI_AGENT_MAX_RUN_SECONDS/,
+      /deep tool timeout.*fallback timeout.*PI_AGENT_TURN_RESERVE_SECONDS.*PI_AGENT_MAX_RUN_SECONDS/,
     );
     expect(() => new PiAgentRuntime(agent, adapter)).toThrow(/Invalid timeout hierarchy/);
+  });
+
+  it("validates every startup deadline path with actionable field names", () => {
+    const baseAgent = loadPiAgentConfig({});
+    const baseAdapter = loadTkbAdapterConfig({});
+
+    expect(() => validateDeadlineHierarchy(
+      { ...baseAgent, maxRunSeconds: 60, turnReserveSeconds: 60 },
+      baseAdapter,
+    )).toThrow(/PI_AGENT_TURN_RESERVE_SECONDS.*PI_AGENT_MAX_RUN_SECONDS/);
+
+    expect(() => validateDeadlineHierarchy(
+      { ...baseAgent, maxRunSeconds: 10, turnReserveSeconds: 1 },
+      {
+        ...baseAdapter,
+        conversationMemoryAutoRecallEnabled: true,
+        conversationMemoryRoutingModelEnabled: true,
+        conversationMemoryRoutingTimeoutMs: 4_000,
+        conversationMemoryRecallTimeoutMs: 5_000,
+      },
+    )).toThrow(/conversation routing \+ recall/);
+
+    expect(() => validateDeadlineHierarchy(
+      { ...baseAgent, maxRunSeconds: 130, turnReserveSeconds: 10 },
+      { ...baseAdapter, deepToolTimeoutMs: 60_000, defaultToolTimeoutMs: 60_000 },
+    )).toThrow(/TKB_DEEP_TOOL_TIMEOUT_MS.*TKB_TOOL_TIMEOUT_MS/);
+
+    expect(() => validateDeadlineHierarchy(
+      { ...baseAgent, maxRunSeconds: 120, turnReserveSeconds: 10 },
+      {
+        ...baseAdapter,
+        deepToolTimeoutMs: 1_000,
+        defaultToolTimeoutMs: 1_000,
+        pptToolTimeoutMs: 110_000,
+      },
+    )).toThrow(/PPT exception policy.*TKB_PPT_TOOL_TIMEOUT_MS/);
+
+    expect(() => validateDeadlineHierarchy(
+      { ...baseAgent, maxRunSeconds: 70, turnReserveSeconds: 5 },
+      {
+        ...baseAdapter,
+        conversationMemoryAutoRecallEnabled: true,
+        conversationMemoryRoutingModelEnabled: false,
+        conversationMemoryRoutingTimeoutMs: 60_000,
+        conversationMemoryRecallTimeoutMs: 1_000,
+        deepToolTimeoutMs: 1_000,
+        defaultToolTimeoutMs: 1_000,
+        pptToolTimeoutMs: 1_000,
+      },
+    )).not.toThrow();
+  });
+
+  it("rejects malformed timeout values instead of silently using defaults", () => {
+    expect(() => loadTkbAdapterConfig({ TKB_DEEP_TOOL_TIMEOUT_MS: "0" }))
+      .toThrow("TKB_DEEP_TOOL_TIMEOUT_MS");
+    expect(() => loadTkbAdapterConfig({ TKB_TOOL_TIMEOUT_MS: "not-a-number" }))
+      .toThrow("TKB_TOOL_TIMEOUT_MS");
+    expect(() => loadPiAgentConfig({ PI_AGENT_MAX_RUN_SECONDS: "-1" }))
+      .toThrow("PI_AGENT_MAX_RUN_SECONDS");
+    expect(() => loadPiAgentConfig({ PI_AGENT_TURN_RESERVE_SECONDS: "0" }))
+      .toThrow("PI_AGENT_TURN_RESERVE_SECONDS");
   });
 
   it("ignores a stale LLM_PROVIDER without LLM_BASE_URL", () => {

@@ -138,6 +138,51 @@ async def test_worker_retains_conversation_provenance_and_completes_job() -> Non
     assert "session:session-1" in retain_input.tags
 
 
+async def test_worker_passes_trusted_lifecycle_provenance_to_retention() -> None:
+    base = _job()
+    job = ConversationMemoryJob(
+        **{
+            field: getattr(base, field)
+            for field in (
+                "document_id",
+                "session_id",
+                "turn_id",
+                "title",
+                "content",
+                "attempts",
+                "status",
+            )
+        },
+        source_context={
+            "origin": "user",
+            "authority": "user_confirmed",
+            "retention_policy_version": 4,
+            "confirmed_by_turn_id": base.turn_id,
+            "derived_from_evidence_ids": ["doc:1"],
+            "expires_at": "2027-01-01T00:00:00Z",
+            "lifecycle_state": "current",
+        },
+    )
+    queue = FakeQueue([job])
+    service = FakeService()
+
+    result = await ConversationRetentionWorker(queue, service, FakeCleaner()).run_once()
+
+    assert result.completed == 1
+    assert service.inputs[0].policy_version == 4
+    assert service.inputs[0].metadata == {
+        "session_id": "session-1",
+        "turn_id": base.turn_id,
+        "origin": "user",
+        "authority": "user_confirmed",
+        "retention_policy_version": 4,
+        "confirmed_by_turn_id": base.turn_id,
+        "derived_from_evidence_ids": ["doc:1"],
+        "expires_at": "2027-01-01T00:00:00Z",
+        "lifecycle_state": "current",
+    }
+
+
 @pytest.mark.parametrize(
     ("attempts", "expected_status", "expected_delay"),
     [(2, "pending", 4.0), (3, "failed", 8.0)],

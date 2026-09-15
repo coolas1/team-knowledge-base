@@ -10,6 +10,11 @@ from src.engine.hindsight_components.providers import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_memory_thinking_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings.llm, "memory_thinking", "auto")
+
+
 class FakeEmbedder:
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         return [[1.0, 0.0] for _ in texts]

@@ -2,6 +2,7 @@
 
 import os
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import Text, func, insert, literal, select, text
@@ -18,7 +19,7 @@ from src.engine.scope import TagFilter, TagGroup
 from src.engine.scope import MemoryScope
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
 from src.engine.hindsight_components.config import HindsightOptions
-from src.engine.hindsight_components.types import MemoryDraft, RetainPlan
+from src.engine.hindsight_components.types import MemoryDraft, RecallFilter, RetainPlan
 
 pytestmark = pytest.mark.integration
 
@@ -1696,6 +1697,7 @@ async def test_document_access_and_background_chunk_ownership(
 ):
     from types import SimpleNamespace
     from src.engine.graphrag import backend as backend_module
+    from src.engine.graphrag import pipeline as pipeline_module
     from src.engine.graphrag.backend import GraphRAGBackend
     from src.engine.graphrag.pipeline import Pipeline
     from src.engine.components.store.models import Chunk, MemoryBank
@@ -1876,6 +1878,9 @@ async def test_document_access_and_background_chunk_ownership(
 
     # The background pipeline has no request scope: ownership must come from DB.
     pipeline = Pipeline(SimpleNamespace(), analyzer=SimpleNamespace())
+    monkeypatch.setattr(pipeline_module, "async_session_factory", sessions)
+    fence = await pipeline._begin_processing(ids[1])
+    assert fence is not None
     async with sessions() as session:
         await pipeline._persist_chunks(
             session,
@@ -1884,15 +1889,18 @@ async def test_document_access_and_background_chunk_ownership(
             raw_text="same content",
             content_hash="same-hash",
             overview="",
+            filename="same.md",
+            entities=[],
+            document_embedding=[0.1] * 768,
             chunks=[SimpleNamespace(index=0, text="same content", token_count=2)],
             embeddings=[[0.1] * 768],
+            fence=fence,
         )
     async with sessions() as session:
         chunk = (await session.execute(select(Chunk))).scalar_one()
         assert chunk.bank_id == "B"
         assert chunk.tags == ["user:1"]
         assert (await session.get(Document, ids[2])).raw_text == "same content"
-    from src.engine.graphrag import pipeline as pipeline_module
     from src.engine.hindsight_components.hook import HindsightRetainHook
     from src.engine.hindsight_components.service import HindsightService
 
@@ -1960,6 +1968,576 @@ async def scope_database():
         async with engine.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         await engine.dispose()
+
+
+async def test_memory_lifecycle_migration_round_trip_and_scope_isolation(
+    scope_database,
+):
+    from datetime import datetime, timezone
+    from src.engine.components.store.memory_lifecycle_migration import (
+        migrate_memory_lifecycle,
+    )
+    from src.engine.components.store.models import EMBEDDING_DIM
+
+    engine, schema = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_id = uuid.uuid4()
+    memory_id = uuid.uuid4()
+    superseded_by = uuid.uuid4()
+    async with sessions() as session, session.begin():
+        session.add(
+            Document(
+                id=document_id,
+                bank_id="bank-a",
+                title="lifecycle",
+                file_type="text",
+                status="indexed",
+            )
+        )
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                f'ALTER TABLE "{schema}"."memory_units" '
+                "DROP COLUMN origin, DROP COLUMN authority, DROP COLUMN policy_version, "
+                "DROP COLUMN confirmed_by_turn_id, DROP COLUMN derived_from_evidence_ids, "
+                "DROP COLUMN expires_at, DROP COLUMN lifecycle_state, DROP COLUMN superseded_by, "
+                "DROP COLUMN lifecycle_key, DROP COLUMN content_fingerprint, DROP COLUMN duplicate_of"
+            )
+        )
+    await migrate_memory_lifecycle(engine, schema=schema)
+    await migrate_memory_lifecycle(engine, schema=schema)
+
+    repo = PostgresMemoryRepository(sessions, scope=MemoryScope(bank_id="bank-a"))
+    await repo.replace_document(
+        RetainPlan(
+            document_id=str(document_id),
+            title="lifecycle",
+            file_type="text",
+            source_type="conversation",
+            memories=[
+                MemoryDraft(
+                    id=str(memory_id),
+                    document_id=str(document_id),
+                    chunk_index=0,
+                    memory_index=1,
+                    memory_type="preference",
+                    text="prefers concise answers",
+                    source_text="prefers concise answers",
+                    context="conversation",
+                    embedding=[0.0] * EMBEDDING_DIM,
+                    metadata={
+                        "source_type": "conversation",
+                        "origin": "user",
+                        "authority": "user_confirmed",
+                        "retention_policy_version": 7,
+                        "confirmed_by_turn_id": "turn-1",
+                        "derived_from_evidence_ids": ["doc:2", "doc:1"],
+                        "expires_at": "2027-01-01T00:00:00Z",
+                        "lifecycle_state": "superseded",
+                        "superseded_by": str(superseded_by),
+                        "lifecycle_key": "user:response-style",
+                    },
+                )
+            ],
+            links=[],
+        )
+    )
+    async with sessions() as session:
+        row = await session.get(MemoryUnit, memory_id)
+        assert row.origin == "user"
+        assert row.authority == "user_confirmed"
+        assert row.policy_version == 7
+        assert row.confirmed_by_turn_id == "turn-1"
+        assert row.derived_from_evidence_ids == ["doc:1", "doc:2"]
+        assert row.expires_at == datetime(2027, 1, 1, tzinfo=timezone.utc)
+        assert row.lifecycle_state == "superseded"
+        assert row.superseded_by == superseded_by
+        assert row.lifecycle_key == "user:response-style"
+        candidate = repo._candidate(row, SimpleNamespace(title="lifecycle"))
+        assert candidate.metadata["derived_from_evidence_ids"] == ["doc:1", "doc:2"]
+        assert candidate.metadata["lifecycle_state"] == "superseded"
+
+    visible = await repo.keyword_search("concise", 5)
+    assert visible == []
+
+    hidden = repo.with_scope(MemoryScope(bank_id="bank-b"))
+    assert await hidden.keyword_search("concise", 5) == []
+
+
+async def test_conversation_paraphrases_collapse_to_one_current_audit_chain(
+    scope_database,
+):
+    from src.engine.components.store.models import EMBEDDING_DIM
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_ids = [uuid.uuid4(), uuid.uuid4()]
+    memory_ids = [uuid.uuid4(), uuid.uuid4()]
+    async with sessions() as session, session.begin():
+        session.add_all(
+            [
+                Document(
+                    id=document_id,
+                    bank_id="bank-a",
+                    title=f"turn-{index}",
+                    file_type="text",
+                    status="indexed",
+                )
+                for index, document_id in enumerate(document_ids)
+            ]
+        )
+    repo = PostgresMemoryRepository(sessions, scope=MemoryScope(bank_id="bank-a"))
+    texts = ["User prefers concise answers", "The user likes brief responses"]
+    for index, (document_id, memory_id, memory_text) in enumerate(
+        zip(document_ids, memory_ids, texts, strict=True)
+    ):
+        await repo.replace_document(
+            RetainPlan(
+                document_id=str(document_id),
+                title=f"turn-{index}",
+                file_type="text",
+                source_type="conversation",
+                memories=[
+                    MemoryDraft(
+                        id=str(memory_id),
+                        document_id=str(document_id),
+                        chunk_index=0,
+                        memory_index=1,
+                        memory_type="preference",
+                        text=memory_text,
+                        source_text=memory_text,
+                        context="conversation",
+                        embedding=[1.0] + [0.0] * (EMBEDDING_DIM - 1),
+                        metadata={
+                            "source_type": "conversation",
+                            "origin": "user",
+                            "authority": "user_confirmed",
+                            "session_id": "session-1",
+                            "turn_id": f"turn-{index}",
+                        },
+                    )
+                ],
+                links=[],
+            )
+        )
+
+    async with sessions() as session:
+        rows = list(
+            await session.scalars(
+                select(MemoryUnit)
+                .where(MemoryUnit.id.in_(memory_ids))
+                .order_by(MemoryUnit.mentioned_at, MemoryUnit.id)
+            )
+        )
+        assert [row.lifecycle_state for row in rows].count("current") == 1
+        retired = next(row for row in rows if row.lifecycle_state == "retired")
+        current = next(row for row in rows if row.lifecycle_state == "current")
+        assert retired.duplicate_of == current.id
+        assert retired.content_fingerprint != current.content_fingerprint
+
+    recalled = await repo.keyword_search("concise answers", 10)
+    assert [item.id for item in recalled] == [str(current.id)]
+    audit = await repo.expand_memory_record(str(retired.id))
+    assert audit is not None
+    assert audit["memory"]["metadata"]["duplicate_of"] == str(current.id)
+
+
+async def test_changed_preference_supersedes_without_deleting_history(scope_database):
+    from src.engine.components.store.models import EMBEDDING_DIM
+    from src.engine.hindsight_components.memory_admin import (
+        PostgresMemoryAdminRepository,
+    )
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_ids = [uuid.uuid4(), uuid.uuid4()]
+    memory_ids = [uuid.uuid4(), uuid.uuid4()]
+    async with sessions() as session, session.begin():
+        session.add_all(
+            [
+                Document(
+                    id=document_id,
+                    bank_id="bank-a",
+                    title=f"preference-{index}",
+                    file_type="text",
+                    status="indexed",
+                )
+                for index, document_id in enumerate(document_ids)
+            ]
+        )
+    repo = PostgresMemoryRepository(sessions, scope=MemoryScope(bank_id="bank-a"))
+    values = [
+        ("User prefers verbose answers", [1.0, 0.0]),
+        ("User now prefers concise answers", [0.0, 1.0]),
+    ]
+    for index, ((memory_text, prefix), document_id, memory_id) in enumerate(
+        zip(values, document_ids, memory_ids, strict=True)
+    ):
+        await repo.replace_document(
+            RetainPlan(
+                document_id=str(document_id),
+                title=f"preference-{index}",
+                file_type="text",
+                source_type="conversation",
+                memories=[
+                    MemoryDraft(
+                        id=str(memory_id),
+                        document_id=str(document_id),
+                        chunk_index=0,
+                        memory_index=1,
+                        memory_type="world",
+                        text=memory_text,
+                        source_text=memory_text,
+                        context="conversation",
+                        embedding=prefix + [0.0] * (EMBEDDING_DIM - 2),
+                        metadata={
+                            "source_type": "conversation",
+                            "origin": "user",
+                            "authority": "user_confirmed",
+                            "retained_types": ["preference"],
+                            "lifecycle_key": "user:response-style",
+                        },
+                    )
+                ],
+                links=[],
+            )
+        )
+
+    async with sessions() as session:
+        old = await session.get(MemoryUnit, memory_ids[0])
+        new = await session.get(MemoryUnit, memory_ids[1])
+        assert old.lifecycle_state == "superseded"
+        assert old.superseded_by == new.id
+        assert new.lifecycle_state == "current"
+    stale_results = await repo.keyword_search("verbose answers", 5)
+    assert str(memory_ids[0]) not in {item.id for item in stale_results}
+    assert [item.id for item in await repo.keyword_search("concise answers", 5)] == [
+        str(memory_ids[1])
+    ]
+    audit = await repo.expand_memory_record(str(memory_ids[0]))
+    assert audit is not None
+    assert audit["memory"]["metadata"]["lifecycle_state"] == "superseded"
+    admin_rows = await PostgresMemoryAdminRepository(
+        sessions, scope=MemoryScope(bank_id="bank-a")
+    ).list_facts()
+    old_admin = next(item for item in admin_rows if item["id"] == str(memory_ids[0]))
+    assert old_admin["lifecycle_state"] == "superseded"
+    assert old_admin["superseded_by"] == str(memory_ids[1])
+
+
+async def test_expiry_boundary_filters_ordinary_recall_but_preserves_audit(
+    scope_database,
+):
+    from datetime import datetime, timezone
+    from src.engine.components.store.models import EMBEDDING_DIM
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_id, memory_id = uuid.uuid4(), uuid.uuid4()
+    async with sessions() as session, session.begin():
+        session.add(
+            Document(
+                id=document_id,
+                bank_id="bank-a",
+                title="temporary-state",
+                file_type="text",
+                status="indexed",
+            )
+        )
+    repo = PostgresMemoryRepository(sessions, scope=MemoryScope(bank_id="bank-a"))
+    await repo.replace_document(
+        RetainPlan(
+            document_id=str(document_id),
+            title="temporary-state",
+            file_type="text",
+            source_type="conversation",
+            memories=[
+                MemoryDraft(
+                    id=str(memory_id),
+                    document_id=str(document_id),
+                    chunk_index=0,
+                    memory_index=1,
+                    memory_type="world",
+                    text="User is temporarily on call",
+                    source_text="User is temporarily on call",
+                    context="conversation",
+                    embedding=[1.0] + [0.0] * (EMBEDDING_DIM - 1),
+                    metadata={
+                        "source_type": "conversation",
+                        "origin": "user",
+                        "authority": "user_confirmed",
+                        "retained_types": ["state"],
+                        "lifecycle_key": "user:on-call",
+                        "expires_at": "2027-01-01T00:00:00Z",
+                    },
+                )
+            ],
+            links=[],
+        )
+    )
+    before = RecallFilter(
+        reference_time=datetime(2026, 12, 31, 23, 59, tzinfo=timezone.utc)
+    )
+    boundary = RecallFilter(reference_time=datetime(2027, 1, 1, tzinfo=timezone.utc))
+    assert len(await repo.keyword_search("temporarily on call", 5, filters=before)) == 1
+    assert await repo.keyword_search("temporarily on call", 5, filters=boundary) == []
+    assert await repo.expire_due_memories(at=boundary.reference_time) == 1
+    async with sessions() as session:
+        expired = await session.get(MemoryUnit, memory_id)
+        assert expired.lifecycle_state == "expired"
+    assert (await repo.graph_projection(str(document_id))).memories == ()
+    assert await repo.expand_memory_record(str(memory_id)) is not None
+
+
+async def test_supersession_invalidates_cache_graph_observation_and_model_dependents(
+    scope_database,
+):
+    from sqlalchemy import delete
+    from src.engine.components.store.models import EMBEDDING_DIM
+    from src.engine.hindsight_components.models import (
+        HindsightGraphOutbox,
+        MentalModel,
+        MentalModelRefreshJob,
+        ObservationEvidence,
+        ObservationRecord,
+    )
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    old_document, new_document, observation_document = (
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
+    old_id, new_id, observation_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    async with sessions() as session, session.begin():
+        session.add_all(
+            [
+                Document(
+                    id=document_id,
+                    bank_id="bank-a",
+                    title=title,
+                    file_type="text",
+                    status="indexed",
+                )
+                for document_id, title in (
+                    (old_document, "old preference"),
+                    (new_document, "new preference"),
+                    (observation_document, "derived observation"),
+                )
+            ]
+        )
+    repo = PostgresMemoryRepository(sessions, scope=MemoryScope(bank_id="bank-a"))
+
+    def plan(document_id, memory_id, value, embedding):
+        return RetainPlan(
+            document_id=str(document_id),
+            title=value,
+            file_type="text",
+            source_type="conversation",
+            memories=[
+                MemoryDraft(
+                    id=str(memory_id),
+                    document_id=str(document_id),
+                    chunk_index=0,
+                    memory_index=1,
+                    memory_type="world",
+                    text=value,
+                    source_text=value,
+                    context="conversation",
+                    embedding=embedding,
+                    metadata={
+                        "source_type": "conversation",
+                        "origin": "user",
+                        "authority": "user_confirmed",
+                        "retained_types": ["preference"],
+                        "lifecycle_key": "user:response-style",
+                    },
+                )
+            ],
+            links=[],
+        )
+
+    await repo.replace_document(
+        plan(
+            old_document,
+            old_id,
+            "User prefers verbose answers",
+            [1.0] + [0.0] * (EMBEDDING_DIM - 1),
+        )
+    )
+    async with sessions() as session, session.begin():
+        session.add(
+            MemoryUnit(
+                id=observation_id,
+                bank_id="bank-a",
+                document_id=observation_document,
+                chunk_index=-1,
+                memory_index=1,
+                memory_type="observation",
+                text="User response-style observation",
+                source_text="derived",
+                context="observation",
+                source_memory_ids=[old_id],
+            )
+        )
+        session.add(
+            ObservationRecord(
+                memory_id=observation_id,
+                bank_id="bank-a",
+                normalized_text="user response style observation",
+                write_scope=[],
+            )
+        )
+        session.add(
+            ObservationEvidence(
+                observation_id=observation_id,
+                fact_id=old_id,
+                fact_version=1,
+                bank_id="bank-a",
+                active=True,
+            )
+        )
+        session.add(
+            MentalModel(
+                id="response-style-model",
+                bank_id="bank-a",
+                name="Response style",
+                description="Current response preference",
+                summary="Verbose",
+                version=1,
+                freshness="active",
+                source_memory_ids=[old_id],
+            )
+        )
+        await session.execute(delete(HindsightGraphOutbox))
+
+    await repo.replace_document(
+        plan(
+            new_document,
+            new_id,
+            "User now prefers concise answers",
+            [0.0, 1.0] + [0.0] * (EMBEDDING_DIM - 2),
+        )
+    )
+
+    assert await repo.load_cached_facts([str(old_id)]) == {}
+    assert (await repo.graph_projection(str(old_document))).memories == ()
+    assert (await repo.graph_projection(str(observation_document))).memories == ()
+    detail = await repo.recall_details([str(observation_id)], include_source_facts=True)
+    assert detail[str(observation_id)]["freshness"] == "stale"
+    assert detail[str(observation_id)]["source_facts"] == []
+    context = await repo.reflection_context("response", [1.0] + [0.0] * 767)
+    model = next(
+        item for item in context.mental_models if item.id == "response-style-model"
+    )
+    assert model.freshness == "stale"
+    async with sessions() as session:
+        refresh = await session.get(
+            MentalModelRefreshJob, ("bank-a", "response-style-model")
+        )
+        assert refresh is not None
+        assert refresh.error_msg == "memory_superseded"
+        projected_documents = set(
+            await session.scalars(select(HindsightGraphOutbox.document_id))
+        )
+        assert {old_document, new_document, observation_document} <= projected_documents
+    assert await repo.retire_memories([str(new_id)]) == 1
+    assert await repo.load_cached_facts([str(new_id)]) == {}
+    assert (await repo.graph_projection(str(new_document))).memories == ()
+    retired_audit = await repo.expand_memory_record(str(new_id))
+    assert retired_audit["memory"]["metadata"]["lifecycle_state"] == "retired"
+
+
+async def test_hybrid_safety_lane_ablation_recovers_global_chunk_with_caps(
+    scope_database, monkeypatch
+):
+    from config.settings import settings
+    from src.engine.components.store.models import (
+        Chunk,
+        DocumentRetrieval,
+        EMBEDDING_DIM,
+    )
+    from src.engine.hindsight_components.file_chunk_recall import search_file_chunks
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_ids = [uuid.uuid4() for _ in range(6)]
+    parent_vector = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
+    other_vector = [0.0, 1.0] + [0.0] * (EMBEDDING_DIM - 2)
+    async with sessions() as session, session.begin():
+        for index, document_id in enumerate(document_ids):
+            document = Document(
+                id=document_id,
+                bank_id="bank-a",
+                title=f"document-{index}",
+                file_type="text",
+                status="indexed",
+            )
+            session.add(document)
+            session.add(
+                DocumentRetrieval(
+                    doc_id=document_id,
+                    bank_id="bank-a",
+                    revision=1,
+                    title=document.title,
+                    embedding=parent_vector if index < 5 else other_vector,
+                    embedding_model="test",
+                    generation_state="ready",
+                )
+            )
+            chunk_count = 1 if index < 5 else 4
+            for chunk_index in range(chunk_count):
+                session.add(
+                    Chunk(
+                        doc_id=document_id,
+                        bank_id="bank-a",
+                        chunk_index=chunk_index,
+                        chunk_text=(
+                            "weak parent passage"
+                            if index < 5
+                            else f"globally strong passage {chunk_index}"
+                        ),
+                        doc_uri=f"{document_id}:document-{index}",
+                        embedding=other_vector if index < 5 else parent_vector,
+                    )
+                )
+
+    monkeypatch.setattr(settings, "hindsight_hierarchical_retrieval_enabled", True)
+    monkeypatch.setattr(settings, "hindsight_max_passages_per_document", 1)
+    monkeypatch.setattr(settings, "hindsight_hybrid_safety_lane_limit", 4)
+    monkeypatch.setattr(settings, "hindsight_hybrid_safety_lane_min_score", 0.95)
+    monkeypatch.setattr(settings, "hindsight_hybrid_safety_lane_enabled", False)
+    disabled = await search_file_chunks(
+        sessions,
+        MemoryScope(bank_id="bank-a"),
+        parent_vector,
+        2,
+        "upload",
+        RecallFilter(),
+    )
+    assert disabled
+    assert all(item.text == "" and item.source_text == "" for item in disabled)
+    assert all(item.metadata["metadata_only"] is True for item in disabled)
+    assert all(item.metadata["passage_confidence"] == "low" for item in disabled)
+    assert all(item.metadata["best_passage_score"] == pytest.approx(0.0) for item in disabled)
+    monkeypatch.setattr(settings, "hindsight_hybrid_safety_lane_enabled", True)
+    enabled = await search_file_chunks(
+        sessions,
+        MemoryScope(bank_id="bank-a"),
+        parent_vector,
+        2,
+        "upload",
+        RecallFilter(),
+    )
+
+    target = str(document_ids[-1])
+    assert target not in {item.document_id for item in disabled}
+    recovered = [item for item in enabled if item.document_id == target]
+    assert len(recovered) == 1
+    assert recovered[0].metadata["safety_lane"] is True
+    assert recovered[0].metadata["retrieval_level"] == "global_safety_lane"
+    assert all(item.source_type == "upload" for item in enabled)
 
 
 async def test_backfill_resume_constraints_and_count_preservation(scope_database):

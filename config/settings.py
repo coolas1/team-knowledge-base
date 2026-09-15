@@ -138,7 +138,7 @@ class InfraSettings(BaseSettings):
     # Conversation-memory recall uses its own, lower semantic floor so the
     # public-corpus gate does not determine what memories are recalled.
     hindsight_conversation_recall_min_semantic: float = Field(
-        default=0.25, ge=0.0, le=1.0
+        default=0.3, ge=0.0, le=1.0
     )
     hindsight_rerank_semantic_margin: float = Field(default=0.25, ge=0.0)
 
@@ -153,6 +153,29 @@ class InfraSettings(BaseSettings):
     hindsight_rerank_total_chars: int = Field(default=60_000, ge=1)
     hindsight_keyword_candidate_limit: int = Field(default=300, ge=1)
     hindsight_keyword_index_enabled: bool = False
+
+    # Retrieval-refinement rollout switches. Disabled states preserve the
+    # existing indexed document path and never broaden a query to conversation
+    # records. They can be enabled independently during staged acceptance.
+    hindsight_mixed_source_search_enabled: bool = False
+    hindsight_knowledge_memory_context_enabled: bool = True
+    hindsight_knowledge_memory_context_limit: int = Field(default=2, ge=0, le=10)
+    hindsight_hierarchical_retrieval_enabled: bool = False
+    hindsight_hybrid_safety_lane_enabled: bool = False
+    hindsight_hybrid_safety_lane_limit: int = Field(default=3, ge=1, le=20)
+    hindsight_hybrid_safety_lane_min_score: float = Field(default=0.8, ge=0.0, le=1.0)
+    hindsight_adaptive_deep_search_enabled: bool = False
+    hindsight_selective_retention_enabled: bool = False
+    hindsight_max_passages_per_document: int = Field(default=3, ge=1, le=20)
+    hindsight_min_passage_score: float = Field(default=0.35, ge=-1.0, le=1.0)
+    hindsight_trace_candidate_limit: int = Field(default=20, ge=1, le=100)
+    hindsight_evidence_sufficiency_min_margin: float = Field(default=0.01, ge=0.0)
+    hindsight_max_memories_per_turn: int = Field(default=1, ge=1, le=10)
+    hindsight_lexical_title_weight: float = Field(default=3.0, ge=0)
+    hindsight_lexical_filename_weight: float = Field(default=2.5, ge=0)
+    hindsight_lexical_overview_weight: float = Field(default=1.8, ge=0)
+    hindsight_lexical_tags_weight: float = Field(default=2.0, ge=0)
+    hindsight_lexical_body_weight: float = Field(default=1.0, ge=0)
 
     # Automatic conversation memory remains separately gated from file-memory
     # retention so deployments can upgrade the engine contract before enabling it.

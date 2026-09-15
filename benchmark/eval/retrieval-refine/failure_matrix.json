@@ -1,0 +1,15 @@
+{
+  "version": "retrieval-failure-contract-v1",
+  "cases": [
+    {"id": "routing", "component": "routing", "failure": "error", "expected_outcome": "fallback", "expected_fallback": "document_default"},
+    {"id": "embedding", "component": "embedding", "failure": "error", "expected_outcome": "degraded", "expected_fallback": "indexed_lexical"},
+    {"id": "lexical-db", "component": "lexical_db", "failure": "error", "expected_outcome": "unavailable", "expected_fallback": null},
+    {"id": "graph", "component": "graph", "failure": "error", "expected_outcome": "degraded", "expected_fallback": "source_local_fusion"},
+    {"id": "temporal", "component": "temporal", "failure": "error", "expected_outcome": "degraded", "expected_fallback": "timeless_ranking"},
+    {"id": "reranker", "component": "reranker", "failure": "error", "expected_outcome": "degraded", "expected_fallback": "deterministic_ranking"},
+    {"id": "evidence-load", "component": "evidence_load", "failure": "error", "expected_outcome": "empty", "expected_fallback": null},
+    {"id": "mcp-timeout", "component": "mcp", "failure": "timeout", "expected_outcome": "timeout", "expected_fallback": "one_fast_search"},
+    {"id": "mcp-unavailable", "component": "mcp", "failure": "error", "expected_outcome": "unavailable", "expected_fallback": null},
+    {"id": "cancellation", "component": "cancellation", "failure": "cancel", "expected_outcome": "cancelled", "expected_fallback": null}
+  ]
+}

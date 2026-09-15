@@ -3,7 +3,12 @@ from __future__ import annotations
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex, CreateTable
 
-from src.engine.components.store.models import Base, Document, EMBEDDING_DIM
+from src.engine.components.store.models import (
+    Base,
+    Document,
+    DocumentRetrieval,
+    EMBEDDING_DIM,
+)
 from src.engine.hindsight_components.models import (
     ConsolidationFactEvent,
     ConsolidationJob,
@@ -71,6 +76,19 @@ def test_memory_schema_compiles_for_postgresql_with_expected_vector_dimension() 
     assert "on delete cascade" in ddl
     assert MemoryUnit.__table__.c.embedding.type.dim == EMBEDDING_DIM
     assert "lexical_tokens" in MemoryUnit.__table__.c
+    assert {
+        "origin",
+        "authority",
+        "policy_version",
+        "confirmed_by_turn_id",
+        "derived_from_evidence_ids",
+        "expires_at",
+        "lifecycle_state",
+        "superseded_by",
+        "lifecycle_key",
+        "content_fingerprint",
+        "duplicate_of",
+    } <= {column.name for column in MemoryUnit.__table__.columns}
     lexical_index = next(
         index
         for index in MemoryUnit.__table__.indexes
@@ -89,6 +107,27 @@ def test_memory_schema_compiles_for_postgresql_with_expected_vector_dimension() 
         CreateIndex(observation_index).compile(dialect=postgresql.dialect())
     ).lower()
     assert "(bank_id, md5(normalized_text))" in observation_ddl
+
+
+def test_document_retrieval_schema_is_revision_fenced_and_indexed() -> None:
+    ddl = str(
+        CreateTable(DocumentRetrieval.__table__).compile(dialect=postgresql.dialect())
+    ).lower()
+    assert "foreign key(doc_id) references documents" in ddl
+    assert "revision > 0" in ddl
+    assert DocumentRetrieval.__table__.c.embedding.type.dim == EMBEDDING_DIM
+    assert {"title", "filename", "overview", "tags", "entities", "field_tokens"} <= {
+        column.name for column in DocumentRetrieval.__table__.columns
+    }
+    lexical_index = next(
+        index
+        for index in DocumentRetrieval.__table__.indexes
+        if index.name == "idx_document_retrieval_tokens"
+    )
+    assert (
+        "using gin"
+        in str(CreateIndex(lexical_index).compile(dialect=postgresql.dialect())).lower()
+    )
 
 
 def test_all_hindsight_model_tables_are_distinct() -> None:

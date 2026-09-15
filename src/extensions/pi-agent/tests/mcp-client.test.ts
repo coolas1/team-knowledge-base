@@ -114,6 +114,8 @@ describe("TkbMcpClient", () => {
         turnId: "t1",
         userText: "question",
         assistantText: "answer",
+        confirmedByTurnId: "t1",
+        derivedFromEvidenceIds: ["doc:1"],
       }),
     ).resolves.toEqual({ document_id: "d1", status: "pending" });
     await expect(client.forgetConversationMemory("s1")).resolves.toEqual({
@@ -135,7 +137,14 @@ describe("TkbMcpClient", () => {
       2,
       {
         name: "enqueue_conversation_turn",
-        arguments: { session_id: "s1", turn_id: "t1", user_text: "question", assistant_text: "answer" },
+        arguments: {
+          session_id: "s1",
+          turn_id: "t1",
+          user_text: "question",
+          assistant_text: "answer",
+          confirmed_by_turn_id: "t1",
+          derived_from_evidence_ids: ["doc:1"],
+        },
       },
       undefined,
       expect.objectContaining({ timeout: 60_000, maxTotalTimeout: 60_000 }),

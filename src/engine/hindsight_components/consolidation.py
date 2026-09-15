@@ -173,8 +173,11 @@ class PostgresConsolidationRepository:
                             ConsolidationJob.status.in_(("pending", "failed")),
                             and_(
                                 ConsolidationJob.status == "processing",
-                                ConsolidationJob.lease_expires_at
-                                < func.clock_timestamp(),
+                                or_(
+                                    ConsolidationJob.lease_expires_at.is_(None),
+                                    ConsolidationJob.lease_expires_at
+                                    < func.clock_timestamp(),
+                                ),
                             ),
                         ),
                     )

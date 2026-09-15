@@ -89,6 +89,13 @@ const QUERY_PARAMS = Type.Object({
   mode: Type.Optional(Type.Union([Type.Literal("fast"), Type.Literal("deep")])),
   top_k: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
   needs_answer: Type.Optional(Type.Boolean()),
+  route: Type.Optional(
+    Type.Union([
+      Type.Literal("knowledge"),
+      Type.Literal("conversation"),
+      Type.Literal("mixed"),
+    ]),
+  ),
 });
 
 const GET_DOCUMENT_PARAMS = Type.Object({
@@ -326,7 +333,7 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
       name: "tkb_query_knowledge",
       label: "TKB Hindsight Query",
       description:
-        "Query Hindsight with recall or reflect. Use reflect for complex synthesis and recall for direct evidence retrieval.",
+        "Query document-grounded knowledge by default. Select conversation only for explicit continuity, or mixed for separately grouped document evidence and conversation context. Conversation context is never a document citation.",
       parameters: QUERY_PARAMS,
       execute: (_id, params, signal) =>
         executeMcpTool(
@@ -338,6 +345,7 @@ export function buildAllTkbTools(options: BuildToolsOptions = {}): ToolDefinitio
             mode: params.mode ?? "deep",
             top_k: params.top_k ?? 10,
             needs_answer: params.needs_answer ?? false,
+            route: params.route ?? "knowledge",
           },
           signal,
           deep,

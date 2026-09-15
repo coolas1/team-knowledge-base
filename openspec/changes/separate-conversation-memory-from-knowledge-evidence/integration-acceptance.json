@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "build_sha": "6c7ee470c6ab3a0d836bc49c09877b2f44237f40",
+  "environment": {
+    "postgres": "pgvector/pgvector:pg16",
+    "neo4j": "neo4j:5",
+    "isolation": [
+      "memory_refine_scope database plus per-test schemas",
+      "memory_refine_global database",
+      "dedicated Neo4j container with per-test bank prefixes"
+    ]
+  },
+  "results": {
+    "scope_and_graph": {"passed": 10, "failed": 0, "deselected": 28},
+    "migration_state_and_rollback": {"passed": 4, "failed": 0},
+    "hierarchical_backfill": {"passed": 1, "failed": 0},
+    "lexical_index": {"passed": 1, "failed": 0},
+    "revision_fenced_dual_write": {"passed": 1, "failed": 0},
+    "cleanup_invalidation": {"passed": 1, "failed": 0}
+  },
+  "coverage": [
+    "source filters and scope isolation",
+    "PostgreSQL lexical/vector indexes and bounded candidates",
+    "hierarchical parent/chunk retrieval",
+    "revision and generation fencing",
+    "cleanup and dependent invalidation",
+    "lease takeover and cancellation fencing",
+    "feature-off read rollback",
+    "Neo4j projection scope isolation"
+  ],
+  "cleanup": {
+    "remaining_scope_schemas": 0,
+    "remaining_scoped_neo4j_nodes": 0,
+    "dedicated_containers_removed": true
+  },
+  "status": "passed"
+}

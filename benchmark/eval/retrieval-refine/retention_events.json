@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "corpus_version": "retrieval-refine-retention-v1",
+  "reference_time": "2026-09-15T00:00:00+00:00",
+  "expected": {
+    "active_memory_ids": ["preference-current", "plan-confirmed"],
+    "active_count": 2,
+    "required_origin": "user",
+    "allowed_authorities": ["user_stated", "user_confirmed"]
+  },
+  "events": [
+    {"id": "document-answer-1", "scenario": "repeated_document_answer", "source": "assistant", "text": "自动驾驶论文采用模型预测控制。", "derived_from_evidence_ids": ["doc-autonomy"]},
+    {"id": "document-answer-2", "scenario": "repeated_document_answer", "source": "assistant", "text": "自动驾驶论文采用模型预测控制。", "derived_from_evidence_ids": ["doc-autonomy"]},
+    {"id": "tool-payload", "scenario": "tool_payload", "source": "tool", "text": "{\"secret\":\"must-not-become-memory\"}"},
+    {"id": "assistant-hallucination", "scenario": "assistant_hallucination", "source": "assistant", "text": "用户已经决定下周迁移。"},
+    {"id": "preference-old", "scenario": "changed_preference", "source": "user", "text": "我喜欢详细回答", "lifecycle_key": "response-detail"},
+    {"id": "preference-current", "scenario": "changed_preference", "source": "user", "text": "我喜欢简短回答", "lifecycle_key": "response-detail"},
+    {"id": "preference-duplicate", "scenario": "duplicate_turn", "source": "user", "text": "我喜欢简短回答", "lifecycle_key": "response-detail"},
+    {"id": "plan-confirmed", "scenario": "confirmed_plan", "source": "user", "text": "我们决定周五发布", "confirmed_by_turn_id": "turn-plan"},
+    {"id": "temporary-state", "scenario": "expiry", "source": "user", "text": "我们目前正在临时值班", "expires_at": "2026-09-14T00:00:00+00:00"}
+  ]
+}
