@@ -71,20 +71,20 @@
 
 ## 5. Structured API error envelope
 
-- [ ] 5.1 Register a FastAPI handler for unhandled exceptions on the `/api`
+- [x] 5.1 Register a FastAPI handler for unhandled exceptions on the `/api`
   router in `src/frontend/webapp/server/app.py`, returning
   `{code, message, suggestion, retryable}` with `retryable` true and a 5xx
   status.
   Verify: a BFF test against a route forced to raise returns that body shape
   rather than a bare server-error response.
-- [ ] 5.2 Include a per-request identifier in the response body and in the
+- [x] 5.2 Include a per-request identifier in the response body and in the
   logged traceback.
   Verify: a test asserts the identifier in the response body also appears in
   the captured log output for the same failure.
-- [ ] 5.3 Confirm explicit HTTP errors are untouched.
+- [x] 5.3 Confirm explicit HTTP errors are untouched.
   Verify: the existing BFF suite passes with no change to any expected
   `detail` shape (`uv run pytest tests/frontend`).
-- [ ] 5.4 Confirm no client change is needed.
+- [x] 5.4 Confirm no client change is needed.
   Verify: `cd src/frontend/webapp/client && npm test` passes with the
   `responseError` tests covering both the object and string `detail` shapes.
 
