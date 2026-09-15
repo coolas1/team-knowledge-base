@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import hashlib
 import logging
 import shutil
 import uuid
@@ -23,6 +22,11 @@ from config.settings import settings
 from src.engine.components.analyzer import Analyzer
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import ExtractorRegistry, registry
+from src.engine.components.extractors.sanitize import (
+    format_positions,
+    sanitize_surrogates,
+    sha256_of_text,
+)
 from src.engine.components.store.models import (
     Chunk,
     Document,
@@ -245,7 +249,7 @@ class GraphRAGBackend:
             shutil.rmtree(extract_dir, ignore_errors=True)
 
         # 版本链检测：同名文档的当前版本存在时，本次上传成为新版本。
-        content_hash = hashlib.sha256(new_text.encode()).hexdigest()
+        content_hash = sha256_of_text(new_text)
         async with async_session_factory() as session:
             parent = (
                 await session.execute(
@@ -403,6 +407,19 @@ class GraphRAGBackend:
         当前版本退位（is_current=False），新行继承 version_group 并
         链接 version_of；内容 hash 一致时跳过（幂等）。
         """
+        # 编辑内容直接来自请求体，不经过 extractor registry，代理项必须在
+        # 这里归一化：否则 asyncpg 写 raw_text 与文件落盘都会抛
+        # UnicodeEncodeError，上传接口再把它误判成用户错误。
+        sanitized = sanitize_surrogates(new_text)
+        if sanitized.positions:
+            logger.warning(
+                "编辑内容含代理项，已替换为 U+FFFD: 文档=%s 替换数=%d 位置=[%s]",
+                doc_id,
+                sanitized.replacements,
+                format_positions(sanitized.positions),
+            )
+        new_text = sanitized.text
+
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
@@ -413,7 +430,7 @@ class GraphRAGBackend:
             title = doc.title
             file_type = doc.file_type
             old_text = doc.raw_text or ""
-            content_hash = hashlib.sha256(new_text.encode()).hexdigest()
+            content_hash = sha256_of_text(new_text)
 
             if content_hash == doc.content_hash or new_text == old_text:
                 # 内容未变：不产生新版本

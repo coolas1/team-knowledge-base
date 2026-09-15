@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-import hashlib
 import logging
 from pathlib import Path
 from uuid import UUID
@@ -27,6 +26,7 @@ from src.engine.components.analyzer import (
 from src.engine.components.chunker import chunk_text
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
+from src.engine.components.extractors.sanitize import sha256_of_text
 from src.engine.components.retry import retry_transient
 from src.engine.graphrag.progress import clear_progress, set_progress
 from src.engine.retrieval_view import retrieval_view_prefix
@@ -212,7 +212,7 @@ class Pipeline:
             set_progress(str(doc_id), "extracting", "提取文本")
             async with self._doc_sem:
                 raw_text = await asyncio.to_thread(registry.extract, file_path)
-                content_hash = hashlib.sha256(raw_text.encode()).hexdigest()
+                content_hash = sha256_of_text(raw_text)
                 logger.info(f"文档 {doc_id} 提取完成, {len(raw_text)} 字符")
                 (
                     doc_analysis,
@@ -368,7 +368,7 @@ class Pipeline:
             version_of = doc.version_of
             version_number = doc.version_number
             is_current = doc.is_current
-            content_hash = hashlib.sha256(new_text.encode()).hexdigest()
+            content_hash = sha256_of_text(new_text)
 
             await session.execute(
                 update(Document)

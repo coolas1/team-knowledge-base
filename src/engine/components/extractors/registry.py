@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from src.engine.components.extractors.base import BaseExtractor
@@ -6,6 +7,12 @@ from src.engine.components.extractors.image import ImageExtractor
 from src.engine.components.extractors.markdown import MarkdownExtractor
 from src.engine.components.extractors.pdf import PDFExtractor
 from src.engine.components.extractors.pptx import PPTXExtractor
+from src.engine.components.extractors.sanitize import (
+    format_positions,
+    sanitize_surrogates,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class ExtractorRegistry:
@@ -38,8 +45,21 @@ class ExtractorRegistry:
         return extractor
 
     def extract(self, file_path: Path) -> str:
-        """快捷方法：获取 extractor 并提取文本。"""
-        return self.get_extractor(file_path).extract(file_path)
+        """快捷方法：获取 extractor 并提取文本。
+
+        这里是所有格式的唯一收敛点：文本在返回前统一去掉代理项码位，
+        保证调用方拿到的文本一定能编成 UTF-8。
+        """
+        text = self.get_extractor(file_path).extract(file_path)
+        result = sanitize_surrogates(text)
+        if result.positions:
+            logger.warning(
+                "提取文本含代理项，已替换为 U+FFFD: 文件=%s 替换数=%d 位置=[%s]",
+                file_path.name,
+                result.replacements,
+                format_positions(result.positions),
+            )
+        return result.text
 
     @staticmethod
     def guess_file_type(file_path: Path) -> str:
