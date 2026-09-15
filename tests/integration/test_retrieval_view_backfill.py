@@ -1,4 +1,4 @@
-"""Retrieval-view backfill: OCR-noisy documents become findable by title.
+"""Parent-record backfill: OCR-noisy documents become findable by title.
 
 Mirrors the 2026-09-12 incident: a scanned paper whose extracted body is
 OCR noise never competed on embeddings (an unrelated recipe actually
@@ -16,7 +16,12 @@ import pytest
 from sqlalchemy import delete, select
 
 from src.engine.components.embedder import embedder
-from src.engine.components.store.models import Chunk, Document, MemoryBank
+from src.engine.components.store.models import (
+    Chunk,
+    Document,
+    DocumentRetrieval,
+    MemoryBank,
+)
 from src.engine.components.store.postgres import async_session_factory, engine, init_db
 from src.engine.hindsight_components.file_chunk_recall import search_file_chunks
 from src.engine.hindsight_components.models import MemoryUnit
@@ -112,7 +117,10 @@ async def _semantic_scores(
     return {item.document_id: float(item.semantic_score or 0.0) for item in candidates}
 
 
-async def test_backfill_surfaces_noisy_documents_by_title() -> None:
+async def test_backfill_surfaces_noisy_documents_by_title(monkeypatch) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "hindsight_hierarchical_retrieval_enabled", True)
     await init_db()
     bank_id = f"backfill-test-{uuid.uuid4().hex[:8]}"
     scope = MemoryScope(bank_id=bank_id)
@@ -122,20 +130,44 @@ async def test_backfill_surfaces_noisy_documents_by_title() -> None:
             await session.commit()
         doc_ids = await _seed_documents(bank_id)
 
-        # The incident: the noisy paper is not findable — the keyword arm has
-        # no title tokens to match, and its embedding loses to the recipe.
+        # Fielded lexical scoring already finds the title before migration;
+        # the flat dense chunk path still loses to the unrelated recipe.
         repository = PostgresMemoryRepository(
             keyword_index_enabled=True, scope=scope
         )
         keyword_before = await repository.keyword_search("自动驾驶 论文", 10)
-        assert str(doc_ids["noisy"]) not in {item.document_id for item in keyword_before}
+        assert str(doc_ids["noisy"]) in {item.document_id for item in keyword_before}
         before = await _semantic_scores(scope, QUERY)
         assert before[str(doc_ids["noisy"])] < before[str(doc_ids["ferment"])]
+
+        dry_run = await backfill_retrieval_views(
+            async_session_factory,
+            embedder.embed_batch,
+            bank_id=bank_id,
+            dry_run=True,
+        )
+        assert dry_run["dry_run"] == 1
+        assert dry_run["parent_records"] == 3
+        async with async_session_factory() as session:
+            assert list(
+                await session.scalars(
+                    select(DocumentRetrieval).where(
+                        DocumentRetrieval.bank_id == bank_id
+                    )
+                )
+            ) == []
 
         stats = await backfill_retrieval_views(
             async_session_factory, embedder.embed_batch, bank_id=bank_id
         )
-        assert stats == {"documents": 3, "chunks": 3, "memories": 3}
+        assert stats == {
+            "documents": 3,
+            "parent_records": 3,
+            "chunks": 3,
+            "memories": 3,
+            "skipped_changed_revision": 0,
+            "dry_run": 0,
+        }
 
         # Keyword arm matches the title through the rebuilt lexical tokens.
         keyword_after = await repository.keyword_search("自动驾驶 论文", 10)
