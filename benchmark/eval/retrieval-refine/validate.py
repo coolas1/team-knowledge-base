@@ -9,6 +9,7 @@ from pathlib import Path
 from metrics import (
     conversation_precision_at_k,
     document_recall_at_k,
+    honesty_rates,
     metadata_disclosure_accuracy,
     passage_usefulness,
     route_accuracy,
@@ -89,6 +90,13 @@ def main() -> None:
         record["id"] for record in retention_records if record["state"] == "active"
     ]
     assert active_ids == retention["expected"]["active_memory_ids"]
+    honesty = json.loads((ROOT / "honesty_cases.json").read_text(encoding="utf-8"))
+    honesty_cases = honesty["cases"]
+    honesty_results = {case["id"]: case["fixture_result"] for case in honesty_cases}
+    rates = honesty_rates(honesty_cases, honesty_results)
+    assert all(
+        rates[name] <= tolerance for name, tolerance in honesty["tolerances"].items()
+    )
     print(
         json.dumps(
             {
@@ -97,6 +105,7 @@ def main() -> None:
                 "continuity_cases": len(continuity_cases),
                 "metadata_cases": len(metadata_cases),
                 "retention_events": len(retention["events"]),
+                "honesty_cases": len(honesty_cases),
                 "digest": first,
             }
         )

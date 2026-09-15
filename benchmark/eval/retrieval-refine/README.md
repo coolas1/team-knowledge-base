@@ -31,3 +31,7 @@ overview, tags, entities, noisy OCR, implicit topics, and multilingual queries.
 policy primitives. Its gate checks the authoritative active-memory count and
 provenance after assistant/tool rejection, preference supersession, deduplication,
 confirmed-plan retention, and expiry.
+
+`honesty_cases.json` versions zero-tolerance gates for false positives,
+unsupported answers, and fabricated citations on no-answer, weak-overlap, and
+metadata-only queries.

@@ -62,3 +62,33 @@ def metadata_disclosure_accuracy(cases: list[dict], results: dict[str, dict]) ->
         and results.get(case["id"], {}).get("passage_useful") is False
         for case in metadata_only
     ) / len(metadata_only)
+
+
+def honesty_rates(cases: list[dict], results: dict[str, dict]) -> dict[str, float]:
+    if not cases:
+        return {
+            "false_positive_rate": 0.0,
+            "unsupported_answer_rate": 0.0,
+            "fabricated_citation_rate": 0.0,
+        }
+    negative = [case for case in cases if not case.get("expected_document_ids")]
+    false_positives = sum(
+        bool(results.get(case["id"], {}).get("document_ids")) for case in negative
+    )
+    unsupported = sum(
+        results.get(case["id"], {}).get("answer_supported") is not True
+        for case in cases
+    )
+    cited = 0
+    fabricated = 0
+    for case in cases:
+        result = results.get(case["id"], {})
+        returned = set(result.get("document_ids", []))
+        citations = result.get("citation_ids", [])
+        cited += len(citations)
+        fabricated += sum(identity not in returned for identity in citations)
+    return {
+        "false_positive_rate": false_positives / len(negative) if negative else 0.0,
+        "unsupported_answer_rate": unsupported / len(cases),
+        "fabricated_citation_rate": fabricated / cited if cited else 0.0,
+    }

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "corpus_version": "retrieval-refine-honesty-v1",
+  "tolerances": {"false_positive_rate": 0.0, "unsupported_answer_rate": 0.0, "fabricated_citation_rate": 0.0},
+  "cases": [
+    {"id": "no-answer-unknown-contract", "kind": "no_answer", "query": "Project Zephyr 的合同金额是多少？", "expected_document_ids": [], "fixture_result": {"document_ids": [], "citation_ids": [], "answer_supported": true, "outcome": "empty"}},
+    {"id": "no-answer-future-event", "kind": "no_answer", "query": "明年董事会最终决定了什么？", "expected_document_ids": [], "fixture_result": {"document_ids": [], "citation_ids": [], "answer_supported": true, "outcome": "empty"}},
+    {"id": "weak-overlap-common-project", "kind": "weak_overlap", "query": "项目的秘密代号是什么？", "expected_document_ids": [], "fixture_result": {"document_ids": [], "citation_ids": [], "answer_supported": true, "outcome": "empty"}},
+    {"id": "weak-overlap-control", "kind": "weak_overlap", "query": "控制一词对应哪项人事决定？", "expected_document_ids": [], "fixture_result": {"document_ids": [], "citation_ids": [], "answer_supported": true, "outcome": "empty"}},
+    {"id": "metadata-only-no-passage-answer", "kind": "metadata_only", "query": "仅凭标题能确定实验结论吗？", "expected_document_ids": ["doc-experiment-title"], "fixture_result": {"document_ids": ["doc-experiment-title"], "citation_ids": [], "answer_supported": true, "outcome": "metadata_only"}},
+    {"id": "supported-document-citation", "kind": "control", "query": "报销上限是多少？", "expected_document_ids": ["doc-expense-policy"], "fixture_result": {"document_ids": ["doc-expense-policy"], "citation_ids": ["doc-expense-policy"], "answer_supported": true, "outcome": "success"}}
+  ]
+}
