@@ -106,7 +106,7 @@
 - [x] 7.1 `uv run ruff check` passes with no new findings.
 - [x] 7.2 `uv run pytest` passes (unit + contract + BFF).
 - [x] 7.3 `cd src/frontend/webapp/client && npm test` passes.
-- [ ] 7.4 Push the branch and open a PR into `develop` using
+- [x] 7.4 Push the branch and open a PR into `develop` using
   `.github/PULL_REQUEST_TEMPLATE.md`, carrying this change's spec delta.
 
 ## 8. Post-merge release (maintainer)
