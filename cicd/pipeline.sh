@@ -253,9 +253,23 @@ stage_build() {
 
 stage_backup() {
   # Before the redeploy replaces the running stack: dump Postgres and snapshot
-  # the uploads volume into <stable-dir>/backups/ (keep-last-N).
+  # the uploads volume into <stable-dir>/backups/ (keep-last-N). The backup
+  # targets THIS stack's objects: backup.sh reads TKB_POSTGRES_CONTAINER /
+  # TKB_UPLOADS_VOLUME from the environment (not deploy.env), so pass the
+  # COMPOSE_PROJECT_NAME-derived names explicitly — without them a develop
+  # deploy would back up the production stack.
+  # A stack's very first deploy (no state file, no postgres container) has
+  # nothing to back up, so it skips the stage; backup.sh still dies when an
+  # ESTABLISHED stack's container is missing (tripwire).
   cd "$repo_dir"
+  if [[ ! -f "$state_file" ]] \
+    && ! podman container exists "${COMPOSE_PROJECT_NAME}-postgres"; then
+    log "backup: first deploy (no ${COMPOSE_PROJECT_NAME} stack yet); skipping"
+    return 0
+  fi
   TKB_CICD_HOME="$TKB_CICD_HOME" TKB_BACKUP_KEEP="$TKB_BACKUP_KEEP" \
+    TKB_POSTGRES_CONTAINER="${COMPOSE_PROJECT_NAME}-postgres" \
+    TKB_UPLOADS_VOLUME="${COMPOSE_PROJECT_NAME}_uploadsdata" \
     bash "$repo_dir/cicd/backup.sh" "$SHORT_SHA" \
     || die "pre-deploy backup failed"
 }
