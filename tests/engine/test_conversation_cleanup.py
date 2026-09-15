@@ -133,6 +133,7 @@ def test_export_integrity_and_restoration_preconditions(tmp_path) -> None:
         duplicate_of=duplicate.duplicate_of,
         source_memory_ids=duplicate.source_memory_ids,
         state="retired",
+        lifecycle_state="retired",
         memory_version=2,
     )
     validate_restoration_preconditions(manifest, [retired])
