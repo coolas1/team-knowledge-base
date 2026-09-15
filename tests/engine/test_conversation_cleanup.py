@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import uuid
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
-from src.engine.conversation_cleanup import classify_conversation_memories
+from src.engine.conversation_cleanup import (
+    classify_conversation_memories,
+    export_cleanup_manifest,
+    load_cleanup_manifest,
+    validate_restoration_preconditions,
+)
 
 
 NOW = datetime(2026, 9, 15, tzinfo=timezone.utc)
@@ -25,6 +31,10 @@ def _row(kind: str, **overrides):
         "superseded_by": None,
         "lifecycle_state": "current",
         "expires_at": None,
+        "state": "active",
+        "memory_version": 1,
+        "derived_from_evidence_ids": [],
+        "source_memory_ids": [],
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -99,3 +109,39 @@ def test_confirmed_assistant_commitment_is_kept() -> None:
         reference_time=NOW,
     )
     assert manifest.counts["keep"] == 1
+
+
+def test_export_integrity_and_restoration_preconditions(tmp_path) -> None:
+    duplicate = _row(
+        "duplicate", duplicate_of=uuid.uuid4(), source_memory_ids=[uuid.uuid4()]
+    )
+    manifest = classify_conversation_memories(
+        [duplicate], bank_id="bank-a", reference_time=NOW
+    )
+    path = tmp_path / "cleanup.json"
+    export_cleanup_manifest(manifest, path)
+    exported = path.read_text(encoding="utf-8")
+    assert "conversation body" not in exported
+    assert "metadata_json" not in exported
+    restored_manifest = load_cleanup_manifest(path, expected_bank_id="bank-a")
+    assert restored_manifest == manifest
+
+    retired = _row(
+        "duplicate",
+        id=duplicate.id,
+        document_id=duplicate.document_id,
+        duplicate_of=duplicate.duplicate_of,
+        source_memory_ids=duplicate.source_memory_ids,
+        state="retired",
+        memory_version=2,
+    )
+    validate_restoration_preconditions(manifest, [retired])
+    retired.memory_version = 3
+    with pytest.raises(ValueError, match="preconditions changed"):
+        validate_restoration_preconditions(manifest, [retired])
+
+    payload = json.loads(exported)
+    payload["counts"]["duplicate"] = 99
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        load_cleanup_manifest(path, expected_bank_id="bank-a")

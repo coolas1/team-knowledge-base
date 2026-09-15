@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -40,6 +41,14 @@ class CleanupItem:
     content_fingerprint: str | None
     duplicate_of: str | None
     superseded_by: str | None
+    state: str
+    lifecycle_state: str
+    memory_version: int
+    origin: str
+    authority: str
+    confirmed_by_turn_id: str | None
+    derived_from_evidence_ids: tuple[str, ...]
+    source_memory_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +91,14 @@ class ConversationCleanupManifest:
                     "content_fingerprint": item.content_fingerprint,
                     "duplicate_of": item.duplicate_of,
                     "superseded_by": item.superseded_by,
+                    "state": item.state,
+                    "lifecycle_state": item.lifecycle_state,
+                    "memory_version": item.memory_version,
+                    "origin": item.origin,
+                    "authority": item.authority,
+                    "confirmed_by_turn_id": item.confirmed_by_turn_id,
+                    "derived_from_evidence_ids": list(item.derived_from_evidence_ids),
+                    "source_memory_ids": list(item.source_memory_ids),
                 }
                 for item in self.items
             ],
@@ -144,6 +161,14 @@ def classify_conversation_memories(
                 content_fingerprint=row.content_fingerprint,
                 duplicate_of=duplicate_of,
                 superseded_by=superseded_by,
+                state=row.state,
+                lifecycle_state=row.lifecycle_state,
+                memory_version=row.memory_version,
+                origin=row.origin,
+                authority=row.authority,
+                confirmed_by_turn_id=row.confirmed_by_turn_id,
+                derived_from_evidence_ids=tuple(row.derived_from_evidence_ids or ()),
+                source_memory_ids=tuple(str(value) for value in row.source_memory_ids),
             )
         )
     counts = {name: 0 for name in (*sorted(RETIRE_CLASSES), "keep", "unknown")}
@@ -203,3 +228,79 @@ class ConversationCleanupPlanner:
         return classify_conversation_memories(
             rows, bank_id=self.scope.bank_id, reference_time=reference_time
         )
+
+
+def export_cleanup_manifest(manifest: ConversationCleanupManifest, path: Path) -> None:
+    """Create an immutable rollback artifact without conversation source text."""
+    with path.open("x", encoding="utf-8") as output:
+        json.dump(manifest.as_dict(), output, ensure_ascii=False, sort_keys=True)
+
+
+def load_cleanup_manifest(
+    path: Path, *, expected_bank_id: str
+) -> ConversationCleanupManifest:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    checksum = payload.pop("checksum", None)
+    expected = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if checksum != expected:
+        raise ValueError("cleanup manifest checksum mismatch")
+    if payload.get("version") != 1 or payload.get("bank_id") != expected_bank_id:
+        raise ValueError("cleanup manifest identity mismatch")
+    allowed = {field.name for field in CleanupItem.__dataclass_fields__.values()}
+    items = []
+    for raw in payload.get("items", []):
+        if set(raw) != allowed:
+            raise ValueError("cleanup manifest item schema mismatch")
+        items.append(
+            CleanupItem(
+                **{
+                    **raw,
+                    "derived_from_evidence_ids": tuple(
+                        raw["derived_from_evidence_ids"]
+                    ),
+                    "source_memory_ids": tuple(raw["source_memory_ids"]),
+                }
+            )
+        )
+    return ConversationCleanupManifest(
+        version=1,
+        bank_id=payload["bank_id"],
+        reference_time=payload["reference_time"],
+        items=tuple(items),
+        counts={str(key): int(value) for key, value in payload["counts"].items()},
+        checksum=checksum,
+    )
+
+
+def validate_restoration_preconditions(
+    manifest: ConversationCleanupManifest, rows: list
+) -> None:
+    """Reject restoration after any target identity or derivation has changed."""
+    expected = {
+        item.memory_id: item
+        for item in manifest.items
+        if item.classification in RETIRE_CLASSES
+    }
+    actual = {str(row.id): row for row in rows if str(row.id) in expected}
+    if set(actual) != set(expected):
+        raise ValueError("cleanup restoration target set changed")
+    for identity, item in expected.items():
+        row = actual[identity]
+        unchanged = (
+            row.state == "retired"
+            and row.memory_version == item.memory_version + 1
+            and row.content_fingerprint == item.content_fingerprint
+            and row.lifecycle_state == item.lifecycle_state
+            and (str(row.duplicate_of) if row.duplicate_of else None)
+            == item.duplicate_of
+            and (str(row.superseded_by) if row.superseded_by else None)
+            == item.superseded_by
+            and tuple(row.derived_from_evidence_ids or ())
+            == item.derived_from_evidence_ids
+            and tuple(str(value) for value in row.source_memory_ids)
+            == item.source_memory_ids
+        )
+        if not unchanged:
+            raise ValueError("cleanup restoration preconditions changed")
