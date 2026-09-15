@@ -31,4 +31,4 @@
 ## 7. Validation & PR
 
 - [x] 7.1 Run `uv run ruff check` and `uv run pytest` from the repo root and `cd src/frontend/webapp/client && npm test` — all green before pushing the branch.
-- [ ] 7.2 Open the PR to `develop` using the new template (first dogfood); after merge, confirm the staging pipeline deploys the docs-only change cleanly and production is untouched.
+- [x] 7.2 Open the PR to `develop` using the new template (first dogfood); after merge, confirm the staging pipeline deploys the docs-only change cleanly and production is untouched.
