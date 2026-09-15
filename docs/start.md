@@ -1,5 +1,6 @@
 # TKB 快速启动
 
+项目简介与常用入口见根目录 `README.md`;本文保留容器化部署的详细步骤。
 当前 `.env` 与 `docker-compose.yml` 已配置完整，可以直接启动。当前配置使用
 外部 LLM API，Embedding 使用 Compose 内的 Ollama，Pi Agent 默认随服务启动。
 
@@ -54,37 +55,16 @@ EMBEDDING_MODEL=nomic-embed-text
 
 ## 3. 模型配置
 
-### 使用外部 API
+全部配置项(数据库、模型端点、检索、记忆、Pi Agent、tool-runner、构建)
+的详细说明见 [`config-reference.md`](config-reference.md)。
 
-当前 `.env` 使用 OpenAI-compatible API：
-
-```dotenv
-LLM_MODEL=供应商提供的模型名称
-LLM_BASE_URL=https://供应商地址/v1
-LLM_API_KEY=真实API密钥
-```
-
-`LLM_BASE_URL` 填 API 根地址，不要包含 `/chat/completions`。Pi Agent 默认
-继承 `LLM_*`，不需要重复配置 `PI_AGENT_*`。
-
-使用外部 API 进行文档分析、deep recall 或 reflect 时，相关知识片段可能
-发送给外部供应商。不要提交包含真实 API Key 的 `.env`。
-
-### 使用本地 Ollama
-
-先安装生成模型：
-
-```powershell
-docker compose exec ollama ollama pull qwen3:14b
-```
-
-然后修改 `.env`：
-
-```dotenv
-LLM_MODEL=qwen3:14b
-LLM_BASE_URL=http://ollama:11434/v1
-LLM_API_KEY=ollama
-```
+要点:`LLM_BASE_URL` 填 API 根地址,不要包含 `/chat/completions`;Pi Agent
+默认继承 `LLM_*`,不需要重复配置 `PI_AGENT_*`。使用外部 API 进行文档分析、
+deep recall 或 reflect 时,相关知识片段可能发送给外部供应商;不要提交包含
+真实 API Key 的 `.env`。切换到本地 Ollama 时,先
+`docker compose exec ollama ollama pull qwen3:14b`,再把 `.env` 的
+`LLM_MODEL=qwen3:14b`、`LLM_BASE_URL=http://ollama:11434/v1`、
+`LLM_API_KEY=ollama`。
 
 ## 4. 常用入口
 
