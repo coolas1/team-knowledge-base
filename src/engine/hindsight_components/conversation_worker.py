@@ -135,6 +135,20 @@ class ConversationRetentionWorker:
                     metadata={
                         "session_id": job.session_id,
                         "turn_id": job.turn_id,
+                        **{
+                            key: job.source_context[key]
+                            for key in (
+                                "origin",
+                                "authority",
+                                "retention_policy_version",
+                                "retained_types",
+                                "confirmed_by_turn",
+                                "derived_from_evidence_ids",
+                                "expires_at",
+                                "lifecycle_state",
+                            )
+                            if key in job.source_context
+                        },
                     },
                     agent_name=job.source_context.get("agent_name"),
                     speakers=job.source_context.get("speakers", {}),
@@ -146,7 +160,10 @@ class ConversationRetentionWorker:
                     reference_timezone=job.source_context.get(
                         "reference_timezone", "UTC"
                     ),
-                    policy_version=job.source_context.get("policy_version", 1),
+                    policy_version=job.source_context.get(
+                        "retention_policy_version",
+                        job.source_context.get("policy_version", 1),
+                    ),
                 )
             )
             if job.lease_token and hasattr(queue, "record_stages"):
