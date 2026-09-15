@@ -168,6 +168,15 @@ services:
       # container recreation (redeploys). Default is a relative "uploads/"
       # dir for non-compose runs.
       UPLOADS_DIR: /app/uploads
+      # Auto-archiving workspace (inbox + archive tree + uploads) lives on a
+      # durable volume so original files survive CI-driven container rebuilds.
+      # Behavior knobs (threshold/delta/mode/...) come from config/app.yaml
+      # and can be overridden here via ARCHIVE_* variables.
+      ARCHIVE_WORKSPACE_DIR: ${ARCHIVE_WORKSPACE_DIR:-/app/workspace}
+      ARCHIVE_THRESHOLD:
+      ARCHIVE_DELTA:
+      ARCHIVE_REVIEW_ALL:
+      ARCHIVE_POLL_SECONDS:
       APP_HOST: 0.0.0.0
       APP_PORT: "8000"
     ports:
@@ -181,6 +190,7 @@ services:
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
       - artifactsdata:/app/artifacts
       - uploadsdata:/app/uploads
+      - workspacedata:/app/workspace
     restart: unless-stopped
 
   pi-agent:
@@ -292,3 +302,4 @@ volumes:
   artifactsdata:
   toolslibrary:
   uploadsdata:
+  workspacedata:

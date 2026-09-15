@@ -62,6 +62,41 @@ async def test_summary_policy_does_not_affect_interactive_analyzer(ark):
     assert "thinking" not in FakeClient.request[1]
 
 
+async def test_summary_retries_malformed_json(monkeypatch):
+    analyzer = Analyzer()
+    responses = iter(["not json", '{"overview":"recovered"}'])
+
+    async def call(*_args, **_kwargs):
+        return next(responses)
+
+    monkeypatch.setattr(settings.llm, "base_url", "https://example.test/v1")
+    monkeypatch.setattr(settings.llm, "model", "test-model")
+    monkeypatch.setattr(analyzer, "_call_openai_compatible", call)
+
+    result = await analyzer.summarize_document("source text", "title")
+
+    assert result.overview == "recovered"
+
+
+async def test_summary_uses_extractive_fallback_after_two_bad_responses(monkeypatch):
+    analyzer = Analyzer()
+    calls = 0
+
+    async def call(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return ""
+
+    monkeypatch.setattr(settings.llm, "base_url", "https://example.test/v1")
+    monkeypatch.setattr(settings.llm, "model", "test-model")
+    monkeypatch.setattr(analyzer, "_call_openai_compatible", call)
+
+    result = await analyzer.summarize_document("source\n text", "title")
+
+    assert calls == 2
+    assert result.overview == "[Extractive fallback] source text"
+
+
 async def test_extraction_cache_reuses_only_matching_provider_policy():
     from src.engine.components.chunker import chunk_text
     from src.engine.hindsight_components.config import HindsightOptions
