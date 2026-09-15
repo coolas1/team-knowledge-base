@@ -38,20 +38,20 @@
 
 ## 3. Malformed-trailer recovery
 
-- [ ] 3.1 In `src/engine/components/extractors/pdf.py`, attempt `PdfReader` on
+- [x] 3.1 In `src/engine/components/extractors/pdf.py`, attempt `PdfReader` on
   the unmodified bytes first and, on `PdfStreamError`, retry once with
   `re.sub(rb"startxref\s+(\d+)\s+%%EOF", rb"startxref\r\n\1\r\n%%EOF", data)`.
   Verify: a test asserts the retry path is taken only after the first attempt
   raises.
-- [ ] 3.2 Add a flattened-trailer fixture under `tests/`.
+- [x] 3.2 Add a flattened-trailer fixture under `tests/`.
   Verify: the fixture extracts successfully through `PDFExtractor`, and the
   same bytes with the trailer un-flattened extract to identical text.
-- [ ] 3.3 Confirm the repair does not mask genuinely broken input.
+- [x] 3.3 Confirm the repair does not mask genuinely broken input.
   Verify: a truncated-PDF fixture still raises the extraction failure with the
   underlying reason, and no document row is created.
-- [ ] 3.4 Confirm well-formed PDFs keep today's path.
+- [x] 3.4 Confirm well-formed PDFs keep today's path.
   Verify: `uv run pytest tests/engine/test_extractors.py` passes unchanged.
-- [ ] 3.5 Confirm the real Frenet PDF extracts.
+- [x] 3.5 Confirm the real Frenet PDF extracts.
   Verify: extraction over
   `基于Frenet坐标系的车辆自动驾驶轨迹规划算法研究.pdf` (repo root) yields
   5 pages and 6,301 characters.
