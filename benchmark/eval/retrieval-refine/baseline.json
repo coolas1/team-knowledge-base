@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "label": "pre-change-synthetic-contract-baseline",
+  "corpus_version": "retrieval-refine-synthetic-v1",
+  "active_memory_counts": {"upload": 8, "conversation": 24},
+  "summary": {"knowledge_conversation_leakage_rate": 0.5, "metadata_recall_at_5": 0.333333, "typed_deep_failure_rate": 1.0},
+  "results": [
+    {"case_id": "knowledge-short-conversation-collision-zh", "source_types": ["conversation", "upload"], "ranks": [1, 2], "scores": [2.91, 0.84], "citation_ids": ["turn-autonomy-short"], "phase_ms": {"total": 23.0}, "payload_bytes": 980, "outcome": "success"},
+    {"case_id": "knowledge-short-conversation-collision-en", "source_types": ["conversation", "upload"], "ranks": [1, 2], "scores": [2.73, 0.79], "citation_ids": ["turn-autonomy-short-en"], "phase_ms": {"total": 21.0}, "payload_bytes": 944, "outcome": "success"},
+    {"case_id": "continuity-preference", "source_types": ["conversation"], "ranks": [1], "scores": [0.82], "citation_ids": [], "phase_ms": {"total": 17.0}, "payload_bytes": 540, "outcome": "success"},
+    {"case_id": "mixed-policy-preference", "source_types": ["conversation", "upload"], "ranks": [1, 2], "scores": [1.92, 0.71], "citation_ids": ["turn-preference-current"], "phase_ms": {"total": 28.0}, "payload_bytes": 1220, "outcome": "success"},
+    {"case_id": "metadata-title-zh", "source_types": [], "ranks": [], "scores": [], "citation_ids": [], "phase_ms": {"total": 18.0}, "payload_bytes": 240, "outcome": "empty"},
+    {"case_id": "metadata-filename-identifier", "source_types": ["upload"], "ranks": [4], "scores": [0.42], "citation_ids": ["doc-rfc-9457"], "phase_ms": {"total": 19.0}, "payload_bytes": 610, "outcome": "success"},
+    {"case_id": "metadata-overview-ja", "source_types": [], "ranks": [], "scores": [], "citation_ids": [], "phase_ms": {"total": 18.0}, "payload_bytes": 241, "outcome": "empty"},
+    {"case_id": "implicit-topic-passage", "source_types": [], "ranks": [], "scores": [], "citation_ids": [], "phase_ms": {"total": 20.0}, "payload_bytes": 245, "outcome": "empty"},
+    {"case_id": "uncovered-query", "source_types": [], "ranks": [], "scores": [], "citation_ids": [], "phase_ms": {"total": 16.0}, "payload_bytes": 232, "outcome": "empty"},
+    {"case_id": "weak-single-term-overlap", "source_types": ["conversation"], "ranks": [1], "scores": [2.1], "citation_ids": ["turn-weak-overlap"], "phase_ms": {"total": 18.0}, "payload_bytes": 570, "outcome": "success"},
+    {"case_id": "deep-reranker-timeout", "source_types": ["upload"], "ranks": [1], "scores": [0.51], "citation_ids": ["doc-policy"], "phase_ms": {"query_analysis": 3000.0, "reranker": 12000.0, "total": 15120.0}, "payload_bytes": 720, "outcome": "degraded"},
+    {"case_id": "deep-all-arms-timeout", "source_types": [], "ranks": [], "scores": [], "citation_ids": [], "phase_ms": {"total": 45000.0}, "payload_bytes": 410, "outcome": "timeout"}
+  ]
+}

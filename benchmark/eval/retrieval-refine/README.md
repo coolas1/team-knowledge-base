@@ -1,0 +1,18 @@
+# Retrieval refinement benchmark
+
+This fixture freezes the failure modes that motivated
+`separate-conversation-memory-from-knowledge-evidence`. It is synthetic and
+contains no production query or evidence text.
+
+Run the reproducibility/schema check from the repository root:
+
+```powershell
+$env:UV_CACHE_DIR='.uv-cache'
+uv run python benchmark/eval/retrieval-refine/validate.py
+```
+
+`baseline.json` records the pre-change behavior of the fixture. A result may
+only replace it when the case IDs and corpus version match. Runtime evaluations
+append a separate report containing build SHA, configuration, corpus hash,
+source ranks, normalized scores, citation IDs, phase timing, payload bytes and
+active-memory counts; source text is deliberately excluded.
