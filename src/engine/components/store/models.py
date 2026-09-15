@@ -173,6 +173,9 @@ class Chunk(BankOwned, Base):
         ARRAY(Text), nullable=False, default=list, server_default="{}"
     )
     embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    embedding_model: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     overview: Mapped[str] = mapped_column(
         Text, nullable=False, default=""
     )  # 冗余自 documents.overview
@@ -217,7 +220,9 @@ class DocumentRetrieval(BankOwned, Base):
         ARRAY(Text), nullable=False, default=list, server_default="{}"
     )
     embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
-    embedding_model: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    embedding_model: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     generation_state: Mapped[str] = mapped_column(
         Text, nullable=False, default="ready", server_default="ready"
     )

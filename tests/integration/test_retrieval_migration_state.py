@@ -18,7 +18,10 @@ from src.engine.hindsight_components.models import (
     RetrievalMigrationDocument,
     RetrievalMigrationRun,
 )
-from src.engine.retrieval_migration import RetrievalMigrationStore
+from src.engine.retrieval_migration import (
+    RetrievalBackfillWorker,
+    RetrievalMigrationStore,
+)
 from src.engine.scope import MemoryScope
 
 pytestmark = pytest.mark.integration
@@ -237,7 +240,7 @@ async def test_dry_run_manifest_reports_work_and_performs_no_writes() -> None:
             "estimated_tokens": 5,
         }
         assert manifest["protected"]["conversation_documents"] == 1
-        assert manifest["documents"][0]["chunks"]["model_state"] == "untracked"
+        assert manifest["documents"][0]["chunks"]["model_state"] == {"untracked": 1}
         assert len(manifest["checksum"]) == 64
         async with async_session_factory() as session:
             after = {
@@ -255,6 +258,123 @@ async def test_dry_run_manifest_reports_work_and_performs_no_writes() -> None:
         assert after == before
     finally:
         async with async_session_factory() as session, session.begin():
+            await session.execute(delete(Document).where(Document.bank_id == bank_id))
+            await session.execute(delete(MemoryBank).where(MemoryBank.id == bank_id))
+        await engine.dispose()
+
+
+async def test_backfill_resumes_without_duplicates_and_fences_concurrent_edit() -> None:
+    await init_db()
+    bank_id = f"migration-worker-{uuid.uuid4().hex[:8]}"
+    first_id, changed_id = sorted((uuid.uuid4(), uuid.uuid4()))
+    generations = {first_id: uuid.uuid4(), changed_id: uuid.uuid4()}
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session_factory() as session, session.begin():
+            session.add(MemoryBank(id=bank_id, name=bank_id))
+            await session.flush()
+            for document_id in (first_id, changed_id):
+                session.add(
+                    Document(
+                        id=document_id,
+                        bank_id=bank_id,
+                        title=str(document_id),
+                        file_type="markdown",
+                        raw_text="original source",
+                        overview="clean overview",
+                        status="indexed",
+                        processing_generation=generations[document_id],
+                    )
+                )
+            await session.flush()
+            for document_id in (first_id, changed_id):
+                session.add(
+                    Chunk(
+                        doc_id=document_id,
+                        bank_id=bank_id,
+                        chunk_index=0,
+                        chunk_text=f"original chunk {document_id}",
+                        doc_uri=f"{document_id}:0",
+                    )
+                )
+
+        store = RetrievalMigrationStore(
+            async_session_factory, scope=MemoryScope(bank_id=bank_id)
+        )
+        run_id = await store.prepare(
+            [str(first_id), str(changed_id)], token_limit=10_000
+        )
+        first_lease = await store.claim(run_id, lease_seconds=1, now=now)
+        assert first_lease is not None
+        interrupted_target = await store.next_document(first_lease)
+        assert interrupted_target is not None
+
+        calls = []
+
+        async def embed(values):
+            calls.extend(values)
+            return [[float(len(value) % 7)] * 768 for value in values]
+
+        resumed = await store.claim(
+            run_id, lease_seconds=60, now=now + timedelta(seconds=2)
+        )
+        assert resumed is not None
+        worker = RetrievalBackfillWorker(
+            store, embed, embedding_model="fixture-v2", batch_size=1
+        )
+        first = await worker.process_next(resumed)
+        assert first.status == "backfilled"
+        assert any(value.startswith("original chunk") for value in calls)
+        async with async_session_factory() as session:
+            assert (
+                int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(DocumentRetrieval)
+                        .where(DocumentRetrieval.doc_id == uuid.UUID(first.document_id))
+                    )
+                    or 0
+                )
+                == 1
+            )
+
+        async def edit_during_embedding(values):
+            if any(value.startswith(str(changed_id)) for value in values):
+                async with async_session_factory() as session, session.begin():
+                    changed = await session.get(Document, changed_id)
+                    changed.version_number += 1
+                    changed.processing_generation = uuid.uuid4()
+            return [[0.2] * 768 for _ in values]
+
+        changed_worker = RetrievalBackfillWorker(
+            store, edit_during_embedding, embedding_model="fixture-v2", batch_size=1
+        )
+        changed = await changed_worker.process_next(resumed)
+        assert changed.status == "skipped_changed"
+        assert (await changed_worker.process_next(resumed)).status == "complete"
+        async with async_session_factory() as session:
+            assert await session.get(DocumentRetrieval, changed_id) is None
+            chunk = await session.scalar(select(Chunk).where(Chunk.doc_id == first_id))
+            assert chunk.embedding_model == "fixture-v2"
+            assert chunk.chunk_text.startswith("original chunk")
+            assert (
+                int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(DocumentRetrieval)
+                        .where(DocumentRetrieval.doc_id == first_id)
+                    )
+                    or 0
+                )
+                == 1
+            )
+    finally:
+        async with async_session_factory() as session, session.begin():
+            await session.execute(
+                delete(RetrievalMigrationRun).where(
+                    RetrievalMigrationRun.bank_id == bank_id
+                )
+            )
             await session.execute(delete(Document).where(Document.bank_id == bank_id))
             await session.execute(delete(MemoryBank).where(MemoryBank.id == bank_id))
         await engine.dispose()

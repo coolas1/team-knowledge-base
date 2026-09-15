@@ -447,6 +447,7 @@ class Pipeline:
                     chunk_index=chunk.index,
                     chunk_text=chunk.text,
                     embedding=embedding,
+                    embedding_model=getattr(embedder, "_model", ""),
                     overview=overview,
                     doc_uri=doc_uri,
                     token_count=chunk.token_count,
@@ -629,7 +630,11 @@ class Pipeline:
         async with async_session_factory() as session:
             document = await session.get(Document, doc_id)
             parent = await session.get(DocumentRetrieval, doc_id)
-            if document is None or not document.is_current or document.status != "indexed":
+            if (
+                document is None
+                or not document.is_current
+                or document.status != "indexed"
+            ):
                 return False
             revision = document.version_number
             filename = _filename_of(document.file_path) or ""

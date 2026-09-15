@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert
 
 from src.engine.components.store.models import (
     Chunk,
@@ -22,6 +23,8 @@ from src.engine.hindsight_components.models import (
     RetrievalMigrationRun,
     MemoryUnit,
 )
+from src.engine.hindsight_components.utils import lexical_tokens
+from src.engine.retrieval_view import retrieval_view_prefix
 from src.engine.scope import MemoryScope
 
 
@@ -35,6 +38,14 @@ class MigrationLease:
     token: str
     generation: str
     expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillOutcome:
+    document_id: str | None
+    status: str
+    parent_embeddings: int = 0
+    chunk_embeddings: int = 0
 
 
 class RetrievalMigrationStore:
@@ -138,6 +149,14 @@ class RetrievalMigrationStore:
                     if row.embedding is not None
                 }
             )
+            chunk_model_state: dict[str, int] = {}
+            for row in document_chunks:
+                model = row.embedding_model or "untracked"
+                chunk_model_state[model] = chunk_model_state.get(model, 0) + 1
+            chunks_to_embed = sum(
+                row.embedding is None or row.embedding_model != target_embedding_model
+                for row in document_chunks
+            )
             lexical_complete = sum(
                 row.lexical_tokens is not None for row in document_memories
             )
@@ -164,7 +183,7 @@ class RetrievalMigrationStore:
                             row.embedding is not None for row in document_chunks
                         ),
                         "vector_dimensions": vector_dimensions,
-                        "model_state": "untracked",
+                        "model_state": chunk_model_state,
                     },
                     "lexical": {
                         "eligible": len(document_memories),
@@ -173,7 +192,7 @@ class RetrievalMigrationStore:
                     },
                     "estimated_embedding_work": {
                         "parents": int(not parent_ready),
-                        "chunks": len(document_chunks),
+                        "chunks": chunks_to_embed,
                         "estimated_tokens": sum(
                             row.token_count
                             if row.token_count is not None
@@ -208,7 +227,9 @@ class RetrievalMigrationStore:
                 "estimated_parent_embeddings": sum(
                     item["estimated_embedding_work"]["parents"] for item in documents
                 ),
-                "estimated_chunk_embeddings": selected_chunk_count,
+                "estimated_chunk_embeddings": sum(
+                    item["estimated_embedding_work"]["chunks"] for item in documents
+                ),
                 "estimated_tokens": sum(
                     item["estimated_embedding_work"]["estimated_tokens"]
                     for item in documents
@@ -247,6 +268,8 @@ class RetrievalMigrationStore:
                     .where(
                         Document.id.in_(identities),
                         Document.is_current.is_(True),
+                        Document.status == "indexed",
+                        Document.file_type.not_in(INTERNAL_DOCUMENT_FILE_TYPES),
                         scope_predicate(Document.bank_id, Document.tags, self.scope),
                     )
                     .order_by(Document.id)
@@ -423,3 +446,158 @@ class RetrievalMigrationStore:
         if run.generation != uuid.UUID(lease.generation):
             raise ValueError("migration generation changed")
         return run
+
+
+class RetrievalBackfillWorker:
+    """Embed outside transactions and atomically publish revision-fenced batches."""
+
+    def __init__(
+        self,
+        store: RetrievalMigrationStore,
+        embed_batch,
+        *,
+        embedding_model: str,
+        batch_size: int = 32,
+    ):
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        if not embedding_model.strip():
+            raise ValueError("embedding_model is required")
+        self.store = store
+        self.embed_batch = embed_batch
+        self.embedding_model = embedding_model
+        self.batch_size = batch_size
+
+    async def process_next(self, lease: MigrationLease) -> BackfillOutcome:
+        target = await self.store.next_document(lease)
+        if target is None:
+            return BackfillOutcome(None, "complete")
+        document_id = str(target.document_id)
+        async with self.store.sessions() as session:
+            document = await session.get(Document, target.document_id)
+            chunks = list(
+                await session.scalars(
+                    select(Chunk)
+                    .where(Chunk.doc_id == target.document_id)
+                    .order_by(Chunk.chunk_index, Chunk.id)
+                )
+            )
+            if not self._matches(target, document):
+                await self._mark_changed(lease, target.document_id)
+                return BackfillOutcome(document_id, "skipped_changed")
+            title = document.title
+            filename = (
+                document.file_path.rsplit("/", 1)[-1] if document.file_path else None
+            )
+            overview = document.overview or ""
+            tags = list(document.tags or [])
+            parent_text = retrieval_view_prefix(title, filename, overview).rstrip("\n")
+            chunk_inputs = [(chunk.id, chunk.chunk_text) for chunk in chunks]
+
+        estimated_tokens = max(1, len(parent_text) // 4) + sum(
+            max(1, len(value) // 4) for _, value in chunk_inputs
+        )
+        if not await self.store.charge(lease, tokens=estimated_tokens):
+            await self.store.fail_document(lease, document_id, "budget_exhausted")
+            return BackfillOutcome(document_id, "budget_exhausted")
+
+        parent_vectors = await self.embed_batch([parent_text])
+        if len(parent_vectors) != 1:
+            raise ValueError("embedding provider returned an unexpected row count")
+        chunk_vectors = []
+        for offset in range(0, len(chunk_inputs), self.batch_size):
+            inputs = [
+                value for _, value in chunk_inputs[offset : offset + self.batch_size]
+            ]
+            vectors = await self.embed_batch(inputs)
+            if len(vectors) != len(inputs):
+                raise ValueError("embedding provider returned an unexpected row count")
+            chunk_vectors.extend(vectors)
+
+        async with self.store.sessions() as session, session.begin():
+            run = await self.store._leased_run(session, lease, lock=True)
+            locked_target = await session.get(
+                RetrievalMigrationDocument,
+                (run.id, target.document_id),
+                with_for_update=True,
+            )
+            current = await session.get(
+                Document, target.document_id, with_for_update=True
+            )
+            if locked_target is None or locked_target.status != "processing":
+                raise ValueError("migration document is not claimed")
+            if not self._matches(locked_target, current):
+                locked_target.status = "skipped_changed"
+                locked_target.error_code = "revision_or_generation_changed"
+                return BackfillOutcome(document_id, "skipped_changed")
+            await session.execute(
+                insert(DocumentRetrieval)
+                .values(
+                    doc_id=current.id,
+                    bank_id=current.bank_id,
+                    revision=current.version_number,
+                    title=title,
+                    filename=filename or "",
+                    overview=overview,
+                    tags=tags,
+                    entities=[],
+                    field_tokens=lexical_tokens(parent_text),
+                    embedding=parent_vectors[0],
+                    embedding_model=self.embedding_model,
+                    generation_state="ready",
+                )
+                .on_conflict_do_update(
+                    index_elements=[DocumentRetrieval.doc_id],
+                    set_={
+                        "bank_id": current.bank_id,
+                        "revision": current.version_number,
+                        "title": title,
+                        "filename": filename or "",
+                        "overview": overview,
+                        "tags": tags,
+                        "field_tokens": lexical_tokens(parent_text),
+                        "embedding": parent_vectors[0],
+                        "embedding_model": self.embedding_model,
+                        "generation_state": "ready",
+                    },
+                )
+            )
+            for (chunk_id, _), vector in zip(chunk_inputs, chunk_vectors, strict=True):
+                result = await session.execute(
+                    update(Chunk)
+                    .where(Chunk.id == chunk_id, Chunk.doc_id == current.id)
+                    .values(embedding=vector, embedding_model=self.embedding_model)
+                )
+                if result.rowcount != 1:
+                    raise ValueError("document chunks changed during migration")
+            locked_target.status = "backfilled"
+            locked_target.checkpoint = {
+                "parent_embeddings": 1,
+                "chunk_embeddings": len(chunk_inputs),
+                "embedding_model": self.embedding_model,
+            }
+        return BackfillOutcome(document_id, "backfilled", 1, len(chunk_inputs))
+
+    async def _mark_changed(
+        self, lease: MigrationLease, document_id: uuid.UUID
+    ) -> None:
+        async with self.store.sessions() as session, session.begin():
+            run = await self.store._leased_run(session, lease, lock=True)
+            target = await session.get(
+                RetrievalMigrationDocument,
+                (run.id, document_id),
+                with_for_update=True,
+            )
+            if target is not None:
+                target.status = "skipped_changed"
+                target.error_code = "revision_or_generation_changed"
+
+    @staticmethod
+    def _matches(target, document) -> bool:
+        return bool(
+            document is not None
+            and document.is_current
+            and document.status == "indexed"
+            and document.version_number == target.expected_revision
+            and document.processing_generation == target.expected_generation
+        )

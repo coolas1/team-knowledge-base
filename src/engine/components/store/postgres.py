@@ -37,6 +37,12 @@ async def init_db() -> None:
             )
         )
         await conn.execute(
+            text(
+                "ALTER TABLE chunks "
+                "ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT ''"
+            )
+        )
+        await conn.execute(
             text("UPDATE documents SET version_group = id WHERE version_group IS NULL")
         )
         await conn.execute(

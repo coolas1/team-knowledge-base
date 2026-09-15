@@ -69,7 +69,7 @@
 
 - [x] 8.1 Add durable scope/document migration states, revision/generation fences, leases, retries, token/cost limits, and resumable checkpoints; verify interruption and concurrent-edit integration tests.
 - [x] 8.2 Implement a dry-run document migration manifest that reports current revisions, missing parent records, chunk vector/model state, lexical completeness, estimated embedding work, and protected counts; verify dry-run performs no writes.
-- [ ] 8.3 Implement bounded document-parent creation and original-chunk re-embedding outside long transactions with revision recheck at commit; verify restart resumes without duplicate records and skips changed revisions.
+- [x] 8.3 Implement bounded document-parent creation and original-chunk re-embedding outside long transactions with revision recheck at commit; verify restart resumes without duplicate records and skips changed revisions.
 - [ ] 8.4 Implement a conversation cleanup classifier and manifest for keep, duplicate, superseded, expired, disallowed-assistant-derived, and unknown records; verify unknown provenance blocks automatic retirement.
 - [ ] 8.5 Export rollback-safe IDs, hashes, states, derivation edges, and counts without unnecessary source text or credentials; verify export integrity and restoration preconditions.
 - [ ] 8.6 Execute authorized cleanup as forward-only retirement from ordinary recall and invalidate dependent cache/graph/observation/mental-model state; verify transcripts, uploaded documents, unrelated scopes, and retained audit history remain unchanged.
