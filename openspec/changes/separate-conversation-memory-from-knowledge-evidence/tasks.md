@@ -79,7 +79,7 @@
 
 - [x] 9.1 Add adversarial benchmark cases where short conversations share one or more terms with long relevant documents; verify knowledge-route conversation leakage into document evidence is exactly zero, auxiliary context is capped, and document recall is scored.
 - [x] 9.2 Add continuity and mixed-query cases with relevant/irrelevant, fresh/stale, confirmed/unconfirmed, and superseded memories; verify route accuracy and conversation precision@3.
-- [ ] 9.3 Add metadata-only and implicit-topic document cases across title, filename, overview, tags, entities, noisy OCR, and multilingual content; verify document Recall@5 and passage usefulness separately.
+- [x] 9.3 Add metadata-only and implicit-topic document cases across title, filename, overview, tags, entities, noisy OCR, and multilingual content; verify document Recall@5 and passage usefulness separately.
 - [ ] 9.4 Add retention-contamination replays covering repeated document answers, tool payloads, assistant hallucinations, changed preferences, duplicate turns, confirmed plans, and expiry; verify authoritative active-memory counts and provenance.
 - [ ] 9.5 Add no-answer and weak-overlap cases; verify false positives, unsupported-answer rate, and fabricated citations do not exceed versioned tolerances.
 - [ ] 9.6 Run ranking ablations for current retrieval, source isolation only, source-local fusion, hierarchical retrieval, and safety lane; record MRR/nDCG/Recall@k, unique-document coverage, latency, and selected configuration.

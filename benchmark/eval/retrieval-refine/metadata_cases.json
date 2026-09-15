@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "corpus_version": "retrieval-refine-metadata-v1",
+  "thresholds": {"document_recall_at_5": 1.0, "passage_usefulness": 1.0, "metadata_disclosure_accuracy": 1.0},
+  "cases": [
+    {"id": "metadata-title-zh-noisy-ocr", "language": "zh", "match_field": "title", "query": "自动驾驶控制理论论文", "document": {"id": "doc-title-zh", "title": "自动驾驶控制理论", "body_quality": "noisy_ocr"}, "expected_document_ids": ["doc-title-zh"], "requires_passage": false, "fixture_result": {"document_ids": ["doc-title-zh"], "passage_useful": false, "metadata_only": true}},
+    {"id": "metadata-filename-rfc", "language": "en", "match_field": "filename", "query": "RFC 9457 guidance", "document": {"id": "doc-rfc", "filename": "rfc-9457-problem-details.pdf", "body_quality": "noisy_ocr"}, "expected_document_ids": ["doc-rfc"], "requires_passage": false, "fixture_result": {"document_ids": ["doc-rfc"], "passage_useful": false, "metadata_only": true}},
+    {"id": "metadata-overview-ja", "language": "ja", "match_field": "overview", "query": "沖縄のサンゴ白化調査", "document": {"id": "doc-overview-ja", "overview": "沖縄沿岸のサンゴ白化調査報告", "body_quality": "implicit"}, "expected_document_ids": ["doc-overview-ja"], "requires_passage": true, "fixture_result": {"document_ids": ["doc-overview-ja"], "passage_useful": true, "metadata_only": false}},
+    {"id": "metadata-tags-zh", "language": "zh", "match_field": "tags", "query": "找红曲发酵记录", "document": {"id": "doc-tags-zh", "tags": ["红曲", "发酵"], "body_quality": "implicit"}, "expected_document_ids": ["doc-tags-zh"], "requires_passage": true, "fixture_result": {"document_ids": ["doc-tags-zh"], "passage_useful": true, "metadata_only": false}},
+    {"id": "metadata-entities-en", "language": "en", "match_field": "entities", "query": "What did Project Boreal decide?", "document": {"id": "doc-entity-boreal", "entities": ["Project Boreal"], "body_quality": "implicit"}, "expected_document_ids": ["doc-entity-boreal"], "requires_passage": true, "fixture_result": {"document_ids": ["doc-entity-boreal"], "passage_useful": true, "metadata_only": false}},
+    {"id": "implicit-autonomy-algorithm-zh", "language": "zh", "match_field": "implicit_topic", "query": "自动驾驶算法", "document": {"id": "doc-implicit-autonomy", "body": "使用模型预测控制进行轨迹规划，并以卡尔曼滤波融合传感器。", "body_quality": "implicit"}, "expected_document_ids": ["doc-implicit-autonomy"], "requires_passage": true, "fixture_result": {"document_ids": ["doc-implicit-autonomy"], "passage_useful": true, "metadata_only": false}},
+    {"id": "implicit-kelp-glossary-cross-lingual", "language": "multilingual", "match_field": "implicit_topic", "query": "海藻の炭素固定", "document": {"id": "doc-kelp-glossary", "body": "Kelp forests capture dissolved carbon through photosynthesis.", "body_quality": "implicit"}, "expected_document_ids": ["doc-kelp-glossary"], "requires_passage": true, "fixture_result": {"document_ids": ["doc-kelp-glossary"], "passage_useful": true, "metadata_only": false}}
+  ]
+}

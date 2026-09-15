@@ -22,3 +22,7 @@ relevant/irrelevant, active/stale, confirmed/unconfirmed, and superseded memory.
 `metrics.py` scores route accuracy and conversation precision@3 from any runner
 that emits the documented `fixture_result` shape; the embedded fixture results
 are schema/metric smoke data, not a production-quality claim.
+
+`metadata_cases.json` independently scores document Recall@5, useful original
+passages, and truthful metadata-only disclosure across title, filename,
+overview, tags, entities, noisy OCR, implicit topics, and multilingual queries.

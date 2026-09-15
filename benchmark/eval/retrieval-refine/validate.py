@@ -6,7 +6,13 @@ import hashlib
 import json
 from pathlib import Path
 
-from metrics import conversation_precision_at_k, route_accuracy
+from metrics import (
+    conversation_precision_at_k,
+    document_recall_at_k,
+    metadata_disclosure_accuracy,
+    passage_usefulness,
+    route_accuracy,
+)
 
 
 ROOT = Path(__file__).parent
@@ -59,12 +65,28 @@ def main() -> None:
         conversation_precision_at_k(continuity_cases, fixture_results, k=3)
         >= continuity["thresholds"]["conversation_precision_at_3"]
     )
+    metadata = json.loads((ROOT / "metadata_cases.json").read_text(encoding="utf-8"))
+    metadata_cases = metadata["cases"]
+    metadata_results = {case["id"]: case["fixture_result"] for case in metadata_cases}
+    assert (
+        document_recall_at_k(metadata_cases, metadata_results, k=5)
+        >= metadata["thresholds"]["document_recall_at_5"]
+    )
+    assert (
+        passage_usefulness(metadata_cases, metadata_results)
+        >= metadata["thresholds"]["passage_usefulness"]
+    )
+    assert (
+        metadata_disclosure_accuracy(metadata_cases, metadata_results)
+        >= metadata["thresholds"]["metadata_disclosure_accuracy"]
+    )
     print(
         json.dumps(
             {
                 "status": "ok",
                 "cases": len(case_ids),
                 "continuity_cases": len(continuity_cases),
+                "metadata_cases": len(metadata_cases),
                 "digest": first,
             }
         )
