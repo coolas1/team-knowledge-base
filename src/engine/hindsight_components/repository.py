@@ -6,7 +6,7 @@ import math
 import uuid
 from collections import defaultdict
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Text, bindparam, case, delete, func, or_, select, text, update
@@ -917,6 +917,11 @@ class PostgresMemoryRepository:
                         MemoryUnit.document_id == uid,
                         self._memory_scope(),
                         MemoryUnit.state == "active",
+                        MemoryUnit.lifecycle_state == "current",
+                        or_(
+                            MemoryUnit.expires_at.is_(None),
+                            MemoryUnit.expires_at > func.clock_timestamp(),
+                        ),
                     )
                     .order_by(
                         MemoryUnit.chunk_index,
@@ -947,7 +952,13 @@ class PostgresMemoryRepository:
                             MemoryLink.source_memory_id.in_(memory_ids),
                             MemoryLink.target_memory_id.in_(
                                 select(MemoryUnit.id).where(
-                                    self._memory_scope(), MemoryUnit.state == "active"
+                                    self._memory_scope(),
+                                    MemoryUnit.state == "active",
+                                    MemoryUnit.lifecycle_state == "current",
+                                    or_(
+                                        MemoryUnit.expires_at.is_(None),
+                                        MemoryUnit.expires_at > func.clock_timestamp(),
+                                    ),
                                 )
                             ),
                         )
@@ -1209,21 +1220,85 @@ class PostgresMemoryRepository:
             {"preference", "state"}
         ):
             return
-        await session.execute(
-            update(MemoryUnit)
-            .where(
-                self._memory_scope(),
-                MemoryUnit.id != row.id,
-                MemoryUnit.state == "active",
-                MemoryUnit.lifecycle_state == "current",
-                MemoryUnit.is_source_chunk.is_(False),
-                MemoryUnit.memory_type == row.memory_type,
-                MemoryUnit.origin == row.origin,
-                MemoryUnit.lifecycle_key == row.lifecycle_key,
-                MemoryUnit.metadata_json["source_type"].astext == "conversation",
-            )
-            .values(lifecycle_state="superseded", superseded_by=row.id)
+        changed = list(
+            (
+                await session.execute(
+                    update(MemoryUnit)
+                    .where(
+                        self._memory_scope(),
+                        MemoryUnit.id != row.id,
+                        MemoryUnit.state == "active",
+                        MemoryUnit.lifecycle_state == "current",
+                        MemoryUnit.is_source_chunk.is_(False),
+                        MemoryUnit.memory_type == row.memory_type,
+                        MemoryUnit.origin == row.origin,
+                        MemoryUnit.lifecycle_key == row.lifecycle_key,
+                        MemoryUnit.metadata_json["source_type"].astext
+                        == "conversation",
+                    )
+                    .values(lifecycle_state="superseded", superseded_by=row.id)
+                    .returning(MemoryUnit.id, MemoryUnit.document_id)
+                )
+            ).all()
         )
+        await self._invalidate_lifecycle_dependents(
+            session, changed, reason="memory_superseded"
+        )
+
+    async def expire_due_memories(self, *, at: datetime | None = None) -> int:
+        boundary = at or datetime.now(timezone.utc)
+        if boundary.tzinfo is None:
+            raise ValueError("memory expiry boundary must include a timezone")
+        async with self._session_factory() as session, session.begin():
+            rows = list(
+                (
+                    await session.execute(
+                        select(MemoryUnit.id, MemoryUnit.document_id)
+                        .where(
+                            self._memory_scope(),
+                            MemoryUnit.lifecycle_state == "current",
+                            MemoryUnit.expires_at.is_not(None),
+                            MemoryUnit.expires_at <= boundary,
+                        )
+                        .with_for_update(skip_locked=True)
+                    )
+                ).all()
+            )
+            if not rows:
+                return 0
+            ids = [memory_id for memory_id, _ in rows]
+            await session.execute(
+                update(MemoryUnit)
+                .where(MemoryUnit.id.in_(ids), self._memory_scope())
+                .values(lifecycle_state="expired")
+            )
+            await self._invalidate_lifecycle_dependents(
+                session, rows, reason="memory_expired"
+            )
+            return len(rows)
+
+    async def _invalidate_lifecycle_dependents(
+        self,
+        session: AsyncSession,
+        rows: list[tuple[uuid.UUID, uuid.UUID]],
+        *,
+        reason: str,
+    ) -> None:
+        if not rows:
+            return
+        memory_ids = [memory_id for memory_id, _ in rows]
+        document_ids = {document_id for _, document_id in rows}
+        impacted = set(document_ids)
+        for document_id in document_ids:
+            impacted.update(
+                await self._dependent_graph_documents(
+                    session, memory_ids, exclude_document_id=document_id
+                )
+            )
+        await self._invalidate_observation_evidence(session, memory_ids, reason=reason)
+        await self._invalidate_mental_model_sources(session, memory_ids, reason=reason)
+        for document_id in sorted(impacted, key=str):
+            self._enqueue_graph_event(session, document_id, "replace")
 
     @staticmethod
     def _lifecycle_values(draft) -> dict[str, Any]:
@@ -1431,7 +1506,11 @@ class PostgresMemoryRepository:
             )
 
     async def _invalidate_mental_model_sources(
-        self, session: AsyncSession, fact_ids: list[uuid.UUID]
+        self,
+        session: AsyncSession,
+        fact_ids: list[uuid.UUID],
+        *,
+        reason: str = "source_deleted",
     ) -> None:
         models = list(
             await session.scalars(
@@ -1443,13 +1522,14 @@ class PostgresMemoryRepository:
         )
         for model in models:
             model.freshness = "stale"
-            model.error_msg = "source_deleted"
+            model.error_msg = reason
             requested = model.evidence_watermark + 1
             statement = insert(MentalModelRefreshJob).values(
                 bank_id=model.bank_id,
                 model_id=model.id,
                 requested_watermark=requested,
                 status="pending",
+                error_msg=reason,
             )
             await session.execute(
                 statement.on_conflict_do_update(
@@ -1462,7 +1542,7 @@ class PostgresMemoryRepository:
                         "available_at": func.now(),
                         "lease_token": None,
                         "lease_expires_at": None,
-                        "error_msg": "source_deleted",
+                        "error_msg": reason,
                         "updated_at": func.now(),
                     },
                 )
@@ -2042,7 +2122,15 @@ class PostgresMemoryRepository:
                 select(MemoryEntity, MemoryUnit)
                 .join(MemoryUnitEntity, MemoryUnitEntity.entity_id == MemoryEntity.id)
                 .join(MemoryUnit, MemoryUnit.id == MemoryUnitEntity.memory_id)
-                .where(MemoryUnit.id.in_(ids), self._memory_scope())
+                .where(
+                    MemoryUnit.id.in_(ids),
+                    self._memory_scope(),
+                    MemoryUnit.lifecycle_state == "current",
+                    or_(
+                        MemoryUnit.expires_at.is_(None),
+                        MemoryUnit.expires_at > func.clock_timestamp(),
+                    ),
+                )
             )
         states: dict[str, Any] = {}
         for entity, unit in rows:
@@ -2092,6 +2180,11 @@ class PostgresMemoryRepository:
                         ObservationEvidence.observation_id.in_(observation_ids),
                         ObservationEvidence.active.is_(True),
                         MemoryUnit.state == "active",
+                        MemoryUnit.lifecycle_state == "current",
+                        or_(
+                            MemoryUnit.expires_at.is_(None),
+                            MemoryUnit.expires_at > func.clock_timestamp(),
+                        ),
                         self._memory_scope(),
                     )
                     .order_by(ObservationEvidence.observation_id, MemoryUnit.id)

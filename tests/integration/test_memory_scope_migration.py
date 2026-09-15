@@ -2274,7 +2274,167 @@ async def test_expiry_boundary_filters_ordinary_recall_but_preserves_audit(
     boundary = RecallFilter(reference_time=datetime(2027, 1, 1, tzinfo=timezone.utc))
     assert len(await repo.keyword_search("temporarily on call", 5, filters=before)) == 1
     assert await repo.keyword_search("temporarily on call", 5, filters=boundary) == []
+    assert await repo.expire_due_memories(at=boundary.reference_time) == 1
+    async with sessions() as session:
+        expired = await session.get(MemoryUnit, memory_id)
+        assert expired.lifecycle_state == "expired"
+    assert (await repo.graph_projection(str(document_id))).memories == ()
     assert await repo.expand_memory_record(str(memory_id)) is not None
+
+
+async def test_supersession_invalidates_cache_graph_observation_and_model_dependents(
+    scope_database,
+):
+    from sqlalchemy import delete
+    from src.engine.components.store.models import EMBEDDING_DIM
+    from src.engine.hindsight_components.models import (
+        HindsightGraphOutbox,
+        MentalModel,
+        MentalModelRefreshJob,
+        ObservationEvidence,
+        ObservationRecord,
+    )
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    old_document, new_document, observation_document = (
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
+    old_id, new_id, observation_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    async with sessions() as session, session.begin():
+        session.add_all(
+            [
+                Document(
+                    id=document_id,
+                    bank_id="bank-a",
+                    title=title,
+                    file_type="text",
+                    status="indexed",
+                )
+                for document_id, title in (
+                    (old_document, "old preference"),
+                    (new_document, "new preference"),
+                    (observation_document, "derived observation"),
+                )
+            ]
+        )
+    repo = PostgresMemoryRepository(sessions, scope=MemoryScope(bank_id="bank-a"))
+
+    def plan(document_id, memory_id, value, embedding):
+        return RetainPlan(
+            document_id=str(document_id),
+            title=value,
+            file_type="text",
+            source_type="conversation",
+            memories=[
+                MemoryDraft(
+                    id=str(memory_id),
+                    document_id=str(document_id),
+                    chunk_index=0,
+                    memory_index=1,
+                    memory_type="world",
+                    text=value,
+                    source_text=value,
+                    context="conversation",
+                    embedding=embedding,
+                    metadata={
+                        "source_type": "conversation",
+                        "origin": "user",
+                        "authority": "user_confirmed",
+                        "retained_types": ["preference"],
+                        "lifecycle_key": "user:response-style",
+                    },
+                )
+            ],
+            links=[],
+        )
+
+    await repo.replace_document(
+        plan(
+            old_document,
+            old_id,
+            "User prefers verbose answers",
+            [1.0] + [0.0] * (EMBEDDING_DIM - 1),
+        )
+    )
+    async with sessions() as session, session.begin():
+        session.add(
+            MemoryUnit(
+                id=observation_id,
+                bank_id="bank-a",
+                document_id=observation_document,
+                chunk_index=-1,
+                memory_index=1,
+                memory_type="observation",
+                text="User response-style observation",
+                source_text="derived",
+                context="observation",
+                source_memory_ids=[old_id],
+            )
+        )
+        session.add(
+            ObservationRecord(
+                memory_id=observation_id,
+                bank_id="bank-a",
+                normalized_text="user response style observation",
+                write_scope=[],
+            )
+        )
+        session.add(
+            ObservationEvidence(
+                observation_id=observation_id,
+                fact_id=old_id,
+                fact_version=1,
+                bank_id="bank-a",
+                active=True,
+            )
+        )
+        session.add(
+            MentalModel(
+                id="response-style-model",
+                bank_id="bank-a",
+                name="Response style",
+                description="Current response preference",
+                summary="Verbose",
+                version=1,
+                freshness="active",
+                source_memory_ids=[old_id],
+            )
+        )
+        await session.execute(delete(HindsightGraphOutbox))
+
+    await repo.replace_document(
+        plan(
+            new_document,
+            new_id,
+            "User now prefers concise answers",
+            [0.0, 1.0] + [0.0] * (EMBEDDING_DIM - 2),
+        )
+    )
+
+    assert await repo.load_cached_facts([str(old_id)]) == {}
+    assert (await repo.graph_projection(str(old_document))).memories == ()
+    assert (await repo.graph_projection(str(observation_document))).memories == ()
+    detail = await repo.recall_details([str(observation_id)], include_source_facts=True)
+    assert detail[str(observation_id)]["freshness"] == "stale"
+    assert detail[str(observation_id)]["source_facts"] == []
+    context = await repo.reflection_context("response", [1.0] + [0.0] * 767)
+    model = next(
+        item for item in context.mental_models if item.id == "response-style-model"
+    )
+    assert model.freshness == "stale"
+    async with sessions() as session:
+        refresh = await session.get(
+            MentalModelRefreshJob, ("bank-a", "response-style-model")
+        )
+        assert refresh is not None
+        assert refresh.error_msg == "memory_superseded"
+        projected_documents = set(
+            await session.scalars(select(HindsightGraphOutbox.document_id))
+        )
+        assert {old_document, new_document, observation_document} <= projected_documents
 
 
 async def test_backfill_resume_constraints_and_count_preservation(scope_database):

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
-from src.engine.hindsight_components.fact_cache import FactCache, cache_key
+from src.engine.hindsight_components.fact_cache import FactCache, cache_key, same_fact
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.reflect import ReflectEngine
 from src.engine.hindsight_components.types import RecallFilter
@@ -39,6 +39,14 @@ def test_fact_selection_relevance_budget_and_copy():
         cache.candidates("a", "budget", limit=8, max_tokens=20)[0]["text"]
         == "预算 budget"
     )
+
+
+def test_non_current_memory_never_enters_or_validates_from_fact_cache():
+    cache = FactCache()
+    retired = fact("1", metadata={"lifecycle_state": "retired"})
+    cache.remember("a", [retired])
+    assert cache.candidates("a", "budget", limit=8, max_tokens=100) == []
+    assert not same_fact(fact("1", metadata={"lifecycle_state": "current"}), retired)
 
 
 async def test_warm_fact_avoids_search_and_revalidates():
@@ -89,7 +97,13 @@ async def test_vector_pipeline_embeds_all_chunks_without_entity_calls(monkeypatc
     embed = AsyncMock(side_effect=lambda texts: [[0.1] for _ in texts])
     monkeypatch.setattr(pipeline, "embedder", SimpleNamespace(embed_batch=embed))
     pipe = pipeline.Pipeline(object(), analyzer=analyzer, vector_only=True)
-    overview, chunks, analyses, parent_embedding, embeddings = await pipe._analyze_document(
+    (
+        overview,
+        chunks,
+        analyses,
+        parent_embedding,
+        embeddings,
+    ) = await pipe._analyze_document(
         "\n\n".join("正文内容。" * 300 for _ in range(10)), "title", uuid4()
     )
     assert overview.overview == "summary"

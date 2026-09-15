@@ -71,6 +71,9 @@ class RecallEngine:
             filters = replace(
                 filters, source_types=(*filters.source_types, source_type)
             )
+        expire_due = getattr(self._repository, "expire_due_memories", None)
+        if expire_due is not None:
+            await expire_due()
         budget = DeadlineBudget(
             min(
                 self._options.deep_total_timeout_seconds,
@@ -203,9 +206,7 @@ class RecallEngine:
                         raise DeepSearchTimeoutError(identifier, trace)
                     raise DeepSearchUnavailableError(identifier, trace)
 
-            candidates, duplicate_collapsed = self._collapse_candidates(
-                candidates, rrf
-            )
+            candidates, duplicate_collapsed = self._collapse_candidates(candidates, rrf)
             ordered = sorted(
                 candidates.values(), key=lambda item: (-rrf[item.id], item.id)
             )[: self._options.rerank_limit]
@@ -280,7 +281,9 @@ class RecallEngine:
                 ]
                 conversation_quality_filtered = before_quality - len(selected)
                 selected_count = len(selected)
-                token_count = sum(estimate_tokens(item.source_text) for item in selected)
+                token_count = sum(
+                    estimate_tokens(item.source_text) for item in selected
+                )
 
             if self._fact_cache is not None:
                 scope = getattr(self._repository, "scope", id(self._repository))
@@ -570,8 +573,10 @@ class RecallEngine:
                 )
             )
         else:
-            reason = "fast_mode" if mode == "fast" else (
-                "analysis_unavailable" if not analysis_ok else "not_required"
+            reason = (
+                "fast_mode"
+                if mode == "fast"
+                else ("analysis_unavailable" if not analysis_ok else "not_required")
             )
             self._record_local_phase(
                 "graph_expansion", PhaseStatus.SKIPPED, 0.0, phase_outcomes, reason
@@ -588,8 +593,10 @@ class RecallEngine:
                 )
             )
         else:
-            reason = "fast_mode" if mode == "fast" else (
-                "analysis_unavailable" if not analysis_ok else "not_required"
+            reason = (
+                "fast_mode"
+                if mode == "fast"
+                else ("analysis_unavailable" if not analysis_ok else "not_required")
             )
             self._record_local_phase(
                 "temporal_search", PhaseStatus.SKIPPED, 0.0, phase_outcomes, reason
@@ -725,9 +732,7 @@ class RecallEngine:
             phase_ms["neural_rerank_llm"] = 0.0
             return False, "rrf", 0
         deterministic_margin = (
-            rrf[ordered[0].id] - rrf[ordered[1].id]
-            if len(ordered) > 1
-            else 1.0
+            rrf[ordered[0].id] - rrf[ordered[1].id] if len(ordered) > 1 else 1.0
         )
         if mode == "fast" or (
             self._options.adaptive_deep_search_enabled
