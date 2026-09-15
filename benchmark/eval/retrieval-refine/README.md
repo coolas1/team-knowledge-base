@@ -16,3 +16,9 @@ only replace it when the case IDs and corpus version match. Runtime evaluations
 append a separate report containing build SHA, configuration, corpus hash,
 source ranks, normalized scores, citation IDs, phase timing, payload bytes and
 active-memory counts; source text is deliberately excluded.
+
+`continuity_cases.json` freezes conversation and mixed-route adversaries across
+relevant/irrelevant, active/stale, confirmed/unconfirmed, and superseded memory.
+`metrics.py` scores route accuracy and conversation precision@3 from any runner
+that emits the documented `fixture_result` shape; the embedded fixture results
+are schema/metric smoke data, not a production-quality claim.
