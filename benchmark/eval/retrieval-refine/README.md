@@ -26,3 +26,8 @@ are schema/metric smoke data, not a production-quality claim.
 `metadata_cases.json` independently scores document Recall@5, useful original
 passages, and truthful metadata-only disclosure across title, filename,
 overview, tags, entities, noisy OCR, implicit topics, and multilingual queries.
+
+`retention_events.json` replays contamination risks through the real retention
+policy primitives. Its gate checks the authoritative active-memory count and
+provenance after assistant/tool rejection, preference supersession, deduplication,
+confirmed-plan retention, and expiry.

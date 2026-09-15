@@ -13,6 +13,7 @@ from metrics import (
     passage_usefulness,
     route_accuracy,
 )
+from retention_replay import replay
 
 
 ROOT = Path(__file__).parent
@@ -80,6 +81,14 @@ def main() -> None:
         metadata_disclosure_accuracy(metadata_cases, metadata_results)
         >= metadata["thresholds"]["metadata_disclosure_accuracy"]
     )
+    retention = json.loads((ROOT / "retention_events.json").read_text(encoding="utf-8"))
+    retention_records = replay(
+        retention["events"], reference_time=retention["reference_time"]
+    )
+    active_ids = [
+        record["id"] for record in retention_records if record["state"] == "active"
+    ]
+    assert active_ids == retention["expected"]["active_memory_ids"]
     print(
         json.dumps(
             {
@@ -87,6 +96,7 @@ def main() -> None:
                 "cases": len(case_ids),
                 "continuity_cases": len(continuity_cases),
                 "metadata_cases": len(metadata_cases),
+                "retention_events": len(retention["events"]),
                 "digest": first,
             }
         )
