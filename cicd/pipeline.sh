@@ -241,6 +241,17 @@ stage_build() {
     podman compose --env-file "$deploy_env" \
     --profile tool-images --profile tool-authoring build || die "compose build failed"
 
+  # Fail closed on a stale build cache: buildah's classic builder caches
+  # ENV-from-ARG layers without the arg value (see the Containerfile's
+  # cache-bust RUN), so verify the freshly built image carries this run's
+  # SHA before tagging/deploying it.
+  local baked_commit
+  baked_commit="$(podman image inspect "${COMPOSE_PROJECT_NAME}-webapp:latest" \
+    --format '{{.Config.Env}}' | grep -o 'GIT_COMMIT=[0-9a-f]\{7,40\}' | cut -d= -f2- || true)"
+  if [[ "$baked_commit" != "$SHORT_SHA" ]]; then
+    die "built webapp reports GIT_COMMIT='$baked_commit', expected '$SHORT_SHA' (stale build-cache layer?)"
+  fi
+
   local image
   for image in "${compose_images[@]}"; do
     if podman image exists "$image:latest"; then
