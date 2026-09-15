@@ -1,4 +1,4 @@
-import { useRef, useCallback, useMemo } from 'react'
+import { useRef, useCallback, useEffect, useMemo } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import type { GraphNode, GraphLink } from '../api/client'
 
@@ -18,6 +18,7 @@ interface FgNode {
   type: string
   description: string
   sources: GraphNode['sources']
+  degree: number
   x?: number
   y?: number
 }
@@ -45,6 +46,16 @@ export function KnowledgeGraph({
   selectedNodeName,
 }: Props) {
   const graphRef = useRef<any>(null)
+  const fittedRef = useRef(false)
+
+  const degreeByName = useMemo(() => {
+    const degrees = new Map<string, number>()
+    for (const link of links) {
+      degrees.set(link.source, (degrees.get(link.source) || 0) + 1)
+      degrees.set(link.target, (degrees.get(link.target) || 0) + 1)
+    }
+    return degrees
+  }, [links])
 
   // 转换数据格式
   const fgNodes: FgNode[] = useMemo(
@@ -55,8 +66,9 @@ export function KnowledgeGraph({
         type: n.type,
         description: n.description,
         sources: n.sources,
+        degree: degreeByName.get(n.name) || 0,
       })),
-    [nodes]
+    [nodes, degreeByName]
   )
 
   const fgLinks: FgLink[] = useMemo(
@@ -92,6 +104,24 @@ export function KnowledgeGraph({
     return set
   }, [selectedNodeName, fgLinks])
 
+  const defaultLabelSet = useMemo(() => {
+    if (fgNodes.length <= 30) return new Set(fgNodes.map((node) => node.id))
+    return new Set(
+      [...fgNodes]
+        .sort((left, right) => right.degree - left.degree || left.name.localeCompare(right.name))
+        .slice(0, 12)
+        .map((node) => node.id),
+    )
+  }, [fgNodes])
+
+  useEffect(() => {
+    fittedRef.current = false
+    const graph = graphRef.current
+    graph?.d3Force('charge')?.strength(-110)
+    graph?.d3Force('link')?.distance(70)
+    graph?.d3ReheatSimulation()
+  }, [fgNodes, fgLinks])
+
   const nodeColor = useCallback(
     (node: any) => {
       const n = node as FgNode
@@ -120,9 +150,10 @@ export function KnowledgeGraph({
   const nodeCanvasObject = useCallback(
     (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
       const n = node as FgNode
+      const identity = n.id || n.name
       const label = n.name
       const fontSize = Math.max(10 / globalScale, 2)
-      const r = 6 / globalScale
+      const r = (6 + Math.min(4, Math.log2((n.degree || 0) + 1))) / globalScale
 
       // 节点圆
       ctx.beginPath()
@@ -131,23 +162,29 @@ export function KnowledgeGraph({
       ctx.fill()
 
       // 选中节点的边框
-      if (n.id === selectedNodeName) {
+      if (identity === selectedNodeName) {
         ctx.strokeStyle = '#333'
         ctx.lineWidth = 2 / globalScale
         ctx.stroke()
       }
 
-      // 标签
+      const showLabel = globalScale >= 1.8
+        || defaultLabelSet.has(identity)
+        || Boolean(matchSet?.has(identity))
+        || Boolean(neighborSet?.has(identity))
+      if (!showLabel) return
+
+      // 密集图默认只标注枢纽；搜索、选中邻域和放大后显示其余标签。
       ctx.font = `${fontSize}px Sans-Serif`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'top'
       ctx.fillStyle =
-        matchSet && !matchSet.has(n.id)
+        matchSet && !matchSet.has(identity)
           ? 'rgba(100,100,100,0.15)'
           : '#333'
       ctx.fillText(label, node.x + r + 2 / globalScale, node.y - fontSize / 2)
     },
-    [nodeColor, selectedNodeName, matchSet]
+    [nodeColor, selectedNodeName, matchSet, neighborSet, defaultLabelSet]
   )
 
   const linkColor = useCallback(
@@ -179,6 +216,12 @@ export function KnowledgeGraph({
     [onNodeClick]
   )
 
+  const handleEngineStop = useCallback(() => {
+    if (fittedRef.current || fgNodes.length === 0) return
+    fittedRef.current = true
+    graphRef.current?.zoomToFit(600, 60)
+  }, [fgNodes.length])
+
   return (
     <ForceGraph2D
       ref={graphRef}
@@ -193,7 +236,9 @@ export function KnowledgeGraph({
       linkDirectionalArrowRelPos={0.9}
       onNodeClick={handleClick}
       onBackgroundClick={() => onNodeClick(null)}
-      cooldownTicks={100}
+      onEngineStop={handleEngineStop}
+      cooldownTicks={180}
+      d3VelocityDecay={0.35}
     />
   )
 }

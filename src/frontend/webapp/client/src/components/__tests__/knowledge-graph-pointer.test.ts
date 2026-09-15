@@ -15,22 +15,24 @@ import { KnowledgeGraph } from '../KnowledgeGraph'
 
 function recordingCtx() {
   const arcs: number[] = []
+  const labels: string[] = []
   return {
     arcs,
+    labels,
     beginPath() {},
     arc(_x: number, _y: number, r: number) {
       arcs.push(r)
     },
     fill() {},
     stroke() {},
-    fillText() {},
+    fillText(value: string) { labels.push(value) },
     set fillStyle(_v: string) {},
     set strokeStyle(_v: string) {},
     set lineWidth(_v: number) {},
     set font(_v: string) {},
     set textAlign(_v: string) {},
     set textBaseline(_v: string) {},
-  } as unknown as CanvasRenderingContext2D & { arcs: number[] }
+  } as unknown as CanvasRenderingContext2D & { arcs: number[]; labels: string[] }
 }
 
 function renderGraph() {
@@ -73,5 +75,36 @@ describe('graph node pointer hit area', () => {
 
     expect(nodeRadius).toBeGreaterThan(0)
     expect(pointerRadius).toBeGreaterThanOrEqual(2 * nodeRadius)
+  })
+
+  it('auto-fits once and limits default labels in a dense graph', () => {
+    const nodes = Array.from({ length: 50 }, (_, index) => ({
+      name: `Node ${index}`,
+      type: 'Company',
+      description: '',
+      sources: [],
+    }))
+    const links = nodes.slice(1).map((node) => ({
+      source: 'Node 0',
+      target: node.name,
+      type: 'related',
+      description: '',
+    }))
+    renderToStaticMarkup(
+      createElement(KnowledgeGraph, {
+        nodes,
+        links,
+        searchQuery: '',
+        onNodeClick: () => {},
+        selectedNodeName: null,
+      }),
+    )
+    expect(typeof captured.props.onEngineStop).toBe('function')
+    const ctx = recordingCtx()
+    for (const node of nodes) {
+      captured.props.nodeCanvasObject({ ...node, x: 0, y: 0 }, ctx, 1)
+    }
+    expect(ctx.labels.length).toBe(12)
+    expect(ctx.labels).toContain('Node 0')
   })
 })
