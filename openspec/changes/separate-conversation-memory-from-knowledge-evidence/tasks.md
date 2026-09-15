@@ -89,7 +89,7 @@
 ## 10. Integrated acceptance and rollout evidence
 
 - [ ] 10.1 Run `uv run ruff check`, `uv run pytest`, explicit `uv run pytest src/engine/hindsight_components/tests`, and Pi `npm test`; verify all applicable unit, contract, and component suites pass without modifying unrelated user files.
-- [ ] 10.2 Run isolated PostgreSQL/pgvector and Neo4j integration tests for source filters, indexes, hierarchy, revision fencing, cleanup invalidation, cancellation, and rollback; verify resources are cleaned up and reports persist.
+- [x] 10.2 Run isolated PostgreSQL/pgvector and Neo4j integration tests for source filters, indexes, hierarchy, revision fencing, cleanup invalidation, cancellation, and rollback; verify resources are cleaned up and reports persist.
 - [ ] 10.3 Replay the prior automatic-driving incident and representative knowledge/continuity/mixed/no-answer conversations through MCP and Pi/SSE; verify both target documents surface, irrelevant history does not, citations are correct, and turns settle within budgets.
 - [x] 10.4 Validate every search payload remains within configured whole-response bounds after adding grouping and trace fields; verify trimming removes lowest-ranked optional content first and remains self-describing.
 - [ ] 10.5 Rehearse schema preparation, dual write, dry-run, backfill, validation, read switch, cleanup, dependency rebuild, rollback, and resume on an isolated production-shaped copy; verify stage counts and protected checksums at every transition.
