@@ -147,9 +147,7 @@ def _bound_search_payload(
     sources = payload.get(source_key)
     sources = sources if isinstance(sources, list) else []
     document_evidence = payload.get("document_evidence")
-    document_evidence = (
-        document_evidence if isinstance(document_evidence, list) else []
-    )
+    document_evidence = document_evidence if isinstance(document_evidence, list) else []
     conversation_context = payload.get("conversation_context")
     conversation_context = (
         conversation_context if isinstance(conversation_context, list) else []
@@ -247,6 +245,8 @@ async def enqueue_conversation_turn(
     require_durable_acceptance: bool = False,
     source_timestamp: str | None = None,
     reference_timezone: str = "UTC",
+    confirmed_by_turn_id: str | None = None,
+    derived_from_evidence_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Internal runtime operation; not intended for model-selected tools."""
     if not session_id.strip() or not turn_id.strip():
@@ -270,6 +270,8 @@ async def enqueue_conversation_turn(
                 assistant_text=assistant_text,
                 source_timestamp=source_timestamp,
                 reference_timezone=reference_timezone,
+                confirmed_by_turn_id=confirmed_by_turn_id,
+                derived_from_evidence_ids=tuple(derived_from_evidence_ids or ()),
             )
         )
     except (ValueError, RuntimeError) as error:
@@ -290,6 +292,16 @@ async def enqueue_conversation_turn(
             content_hash=hashlib.sha256(
                 json.dumps(
                     [user_text, assistant_text],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest(),
+            provenance_hash=hashlib.sha256(
+                json.dumps(
+                    [
+                        confirmed_by_turn_id,
+                        sorted(set(derived_from_evidence_ids or ())),
+                    ],
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ).encode()
@@ -677,9 +689,7 @@ async def list_documents(
     from config.settings import settings
 
     effective_page_size = min(page_size, settings.engine_tools_list_page_max)
-    return await _get_kb().list_documents(
-        page, effective_page_size, file_type, status
-    )
+    return await _get_kb().list_documents(page, effective_page_size, file_type, status)
 
 
 async def remove_document(doc_id: str, approved: bool = False) -> dict[str, Any]:

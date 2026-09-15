@@ -13,11 +13,14 @@ async function fixture() {
   const store = new TranscriptStore(directory);
   await store.initialize("s1");
   const { turn } = await store.accept("s1", "问题", "request-1");
-  const intent = completedTurnDelivery("scope-A", "s1", turn.id, "问题", "answer");
+  const intent = completedTurnDelivery("scope-A", "s1", turn.id, "问题", "answer", {
+    confirmedByTurnId: turn.id,
+    derivedFromEvidenceIds: ["doc:2", "doc:1", "doc:2"],
+  });
   await store.append({ type: "assistant.completed", sessionId: "s1", turnId: turn.id,
     messageId: "m1", text: "answer", timestamp: new Date().toISOString(), delivery: intent });
   const enqueue = vi.fn(async () => ({ document_id: "d1", status: "pending", durable_acceptance: true,
-    content_hash: intent.contentHash }));
+    content_hash: intent.contentHash, provenance_hash: intent.provenanceHash }));
   const client = { enqueueConversationTurn: enqueue } as unknown as TkbMcpClient;
   const worker = () => new ConversationDeliveryWorker(new TranscriptStore(directory), client, "scope-A",
     { pollMs: 5000, batchSize: 20, maxAttempts: 2, timeoutMs: 1000 });
@@ -41,6 +44,34 @@ it("replays accepted remote delivery after a crash before its local acknowledgem
   expect(enqueue).toHaveBeenCalledTimes(2);
 });
 
+it("delivers trusted provenance out of band and rejects journal tampering", async () => {
+  const legitimate = await fixture();
+  await legitimate.worker().run();
+  expect(legitimate.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+    confirmedByTurnId: legitimate.turn.id,
+    derivedFromEvidenceIds: ["doc:1", "doc:2"],
+  }), expect.anything());
+
+  const tampered = await fixture();
+  const snapshot = (await tampered.store.snapshot("s1"))!;
+  snapshot.turns[0].delivery!.derivedFromEvidenceIds = ["forged:evidence"];
+  await tampered.store.append({
+    type: "assistant.completed",
+    sessionId: "s1",
+    turnId: tampered.turn.id,
+    messageId: "m2",
+    text: "answer",
+    timestamp: new Date().toISOString(),
+    delivery: snapshot.turns[0].delivery,
+  });
+  await tampered.worker().run();
+  expect(tampered.enqueue).not.toHaveBeenCalled();
+  expect((await tampered.store.snapshot("s1"))?.turns[0].deliveryResult).toMatchObject({
+    status: "conflict",
+    errorCode: "content_conflict",
+  });
+});
+
 it("retains retry intent across history deletion and keeps incomplete turns out", async () => {
   const { store, worker, enqueue } = await fixture();
   await store.accept("s1", "incomplete", "request-2");
@@ -57,7 +88,8 @@ it("retains retry intent across history deletion and keeps incomplete turns out"
 
 it("requires explicit matching acknowledgement, backs off and stops at its attempt limit", async () => {
   const { store, worker, enqueue } = await fixture();
-  enqueue.mockResolvedValue({ document_id: "d1", status: "pending", durable_acceptance: false, content_hash: "wrong" });
+  enqueue.mockResolvedValue({ document_id: "d1", status: "pending", durable_acceptance: false,
+    content_hash: "wrong", provenance_hash: "wrong" });
   const runner = worker();
   await runner.run();
   expect((await runner.status()).pending).toBe(1);

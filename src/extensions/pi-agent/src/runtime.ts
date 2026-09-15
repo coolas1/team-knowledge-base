@@ -241,6 +241,11 @@ function textFromMessage(message: unknown): string {
     .join("\n");
 }
 
+function userExplicitlyConfirms(text: string): boolean {
+  return /(?:^|[\s，。,.!?！？])(?:确认|同意|就按这个|决定采用|yes|confirmed|agreed|approve|はい|同意します)(?:$|[\s，。,.!?！？])/iu
+    .test(text.trim());
+}
+
 export function terminalPptFailureFrom(message: unknown): string | undefined {
   if (!message || typeof message !== "object") return undefined;
   const record = message as {
@@ -627,16 +632,28 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       const answerText = terminalPptFailure ?? terminalLengthFailure ?? textFromMessage(answer).trim();
       if (!answerText) throw new Error("agent returned no answer");
       const assistantMessageId = randomUUID();
+      const retentionProvenance = {
+        ...(userExplicitlyConfirms(accepted.userText)
+          ? { confirmedByTurnId: accepted.id }
+          : {}),
+        derivedFromEvidenceIds: [...citations].sort().slice(0, 50),
+      };
       await this.transcripts.append({
         type: "assistant.completed", sessionId: id, turnId: accepted.id,
         messageId: assistantMessageId, text: answerText, timestamp: new Date().toISOString(),
         ...(this.adapterConfig.conversationMemoryEnabled && this.adapterConfig.conversationMemoryReliableDelivery ? {
           delivery: completedTurnDelivery(this.adapterConfig.scopeKey ?? "default-team", id,
-            accepted.id, accepted.userText, answerText),
+            accepted.id, accepted.userText, answerText, retentionProvenance),
         } : {}),
       });
       this.logTranscript("completed", id, accepted.id);
-      await this.enqueueCompletedTurn(id, accepted.id, accepted.userText, answerText);
+      await this.enqueueCompletedTurn(
+        id,
+        accepted.id,
+        accepted.userText,
+        answerText,
+        retentionProvenance,
+      );
       await emit({
         type: "message.completed",
         sessionId: id,
@@ -801,6 +818,10 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     turnId: string,
     userText: string,
     assistantText: string,
+    provenance: {
+      confirmedByTurnId?: string;
+      derivedFromEvidenceIds: string[];
+    } = { derivedFromEvidenceIds: [] },
   ): Promise<void> {
     if (!this.adapterConfig.conversationMemoryEnabled) return;
     if (this.delivery) {
@@ -815,6 +836,8 @@ export class PiAgentRuntime implements AgentRuntimeApi {
           userText,
           assistantText,
           sourceTimestamp: (await this.findSubmissionByTurn(sessionId, turnId))?.timestamp,
+          confirmedByTurnId: provenance.confirmedByTurnId,
+          derivedFromEvidenceIds: provenance.derivedFromEvidenceIds,
         },
         { timeoutMs: this.adapterConfig.defaultToolTimeoutMs },
       );

@@ -175,6 +175,20 @@ class ConversationMemoryService:
             raise ValueError("session_id and turn_id must not be empty")
         if not user_text or not assistant_text:
             raise ValueError("user_text and assistant_text must not be empty")
+        if turn.confirmed_by_turn_id not in {None, turn_id}:
+            raise ValueError("confirmed_by_turn_id must match turn_id")
+        if len(turn.derived_from_evidence_ids) > 50 or any(
+            not value
+            or len(value) > 128
+            or any(
+                character
+                not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
+                for character in value
+            )
+            for value in turn.derived_from_evidence_ids
+        ):
+            raise ValueError("derived_from_evidence_ids contains an invalid identifier")
+        evidence_ids = tuple(sorted(set(turn.derived_from_evidence_ids)))
         from src.engine.scope import MemoryScope
         from .types import RetainInput
         from datetime import datetime
@@ -231,6 +245,8 @@ class ConversationMemoryService:
                         "retained_types": retained_types,
                         "origin": "user",
                         "authority": "user_confirmed",
+                        "confirmed_by_turn_id": turn.confirmed_by_turn_id,
+                        "derived_from_evidence_ids": evidence_ids,
                     }
                     if self._selective_retention_enabled
                     else {}
@@ -238,7 +254,12 @@ class ConversationMemoryService:
             },
             request_fingerprint=sha256(
                 json.dumps(
-                    [turn.user_text, turn.assistant_text],
+                    [
+                        turn.user_text,
+                        turn.assistant_text,
+                        turn.confirmed_by_turn_id,
+                        evidence_ids,
+                    ],
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ).encode()

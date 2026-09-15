@@ -53,6 +53,14 @@ export interface DeliveryIntent {
   key: string;
   scopeKey: string;
   contentHash: string;
+  provenanceHash?: string;
+  confirmedByTurnId?: string;
+  derivedFromEvidenceIds?: string[];
+}
+
+export interface RetentionProvenance {
+  confirmedByTurnId?: string;
+  derivedFromEvidenceIds?: Iterable<string>;
 }
 
 export interface DeliveryResultEvent {
@@ -69,11 +77,20 @@ export interface DeliveryResultEvent {
 
 export function completedTurnDelivery(
   scopeKey: string, sessionId: string, turnId: string, userText: string, assistantText: string,
+  provenance: RetentionProvenance = {},
 ): DeliveryIntent {
+  const evidenceIds = [...new Set(provenance.derivedFromEvidenceIds ?? [])].sort();
   return {
     key: createHash("sha256").update(JSON.stringify([scopeKey, sessionId, turnId])).digest("hex"),
     scopeKey,
     contentHash: createHash("sha256").update(JSON.stringify([userText, assistantText])).digest("hex"),
+    provenanceHash: createHash("sha256")
+      .update(JSON.stringify([provenance.confirmedByTurnId ?? null, evidenceIds]))
+      .digest("hex"),
+    ...(provenance.confirmedByTurnId
+      ? { confirmedByTurnId: provenance.confirmedByTurnId }
+      : {}),
+    derivedFromEvidenceIds: evidenceIds,
   };
 }
 

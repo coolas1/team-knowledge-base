@@ -27,7 +27,7 @@
 ## 4. Selective retention and memory lifecycle
 
 - [x] 4.1 Define a versioned retention-policy model covering eligible user facts/preferences/decisions/commitments/state and disallowed assistant summaries, tool results, document excerpts, acknowledgments, generic advice, transient discussion, and unsupported claims; verify policy parsing and invalid-policy rejection.
-- [ ] 4.2 Capture trusted tool-evidence identifiers and user-confirmation state out of band with the completed turn, without parsing assistant prose for provenance; verify Pi-to-MCP contract and tamper-resistant binding tests.
+- [x] 4.2 Capture trusted tool-evidence identifiers and user-confirmation state out of band with the completed turn, without parsing assistant prose for provenance; verify Pi-to-MCP contract and tamper-resistant binding tests.
 - [x] 4.3 Apply retention policy before extraction/publication while preserving reliable queue delivery and idempotent turn identity; verify eligible and ineligible turns reach the correct terminal state without duplicate work.
 - [ ] 4.4 Store memory origin, authority, policy version, confirmed-by turn, derived-from evidence IDs, expiry, and current/superseded state; verify schema migration, round-trip repository tests, and scope isolation.
 - [x] 4.5 Reject authoritative publication of assistant-derived records lacking allowed type, explicit confirmation when required, or valid visible evidence provenance; verify adversarial assistant-summary and hallucination tests.
