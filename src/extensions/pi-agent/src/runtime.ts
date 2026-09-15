@@ -790,7 +790,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       // swallowed failure must still be diagnosable.
       console.warn(
         JSON.stringify({
-          event: "conversation_memory_retention",
+          event: "conversation_memory_retention_failed",
           outcome: "failed_open",
           failure_category: error instanceof Error ? error.name : "UnknownError",
         }),

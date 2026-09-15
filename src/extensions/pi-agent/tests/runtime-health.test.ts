@@ -91,6 +91,7 @@ describe("conversation memory health reporting", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("conversation_memory_retention_failed"),
     );
-    expect(warn.mock.calls[0][0]).toContain("retention endpoint down");
+    expect(warn.mock.calls[0][0]).not.toContain("retention endpoint down");
+    expect(warn.mock.calls[0][0]).toContain('"failure_category":"Error"');
   });
 });
