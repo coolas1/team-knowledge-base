@@ -73,7 +73,7 @@
 - [x] 8.4 Implement a conversation cleanup classifier and manifest for keep, duplicate, superseded, expired, disallowed-assistant-derived, and unknown records; verify unknown provenance blocks automatic retirement.
 - [x] 8.5 Export rollback-safe IDs, hashes, states, derivation edges, and counts without unnecessary source text or credentials; verify export integrity and restoration preconditions.
 - [x] 8.6 Execute authorized cleanup as forward-only retirement from ordinary recall and invalidate dependent cache/graph/observation/mental-model state; verify transcripts, uploaded documents, unrelated scopes, and retained audit history remain unchanged.
-- [ ] 8.7 Add post-migration verification and rollback commands for completeness, active-target absence, protected checksums, index state, vector model identity, dependency queues, and read-switch status; verify them against an isolated database rehearsal.
+- [x] 8.7 Add post-migration verification and rollback commands for completeness, active-target absence, protected checksums, index state, vector model identity, dependency queues, and read-switch status; verify them against an isolated database rehearsal.
 
 ## 9. Retrieval quality and regression suite
 

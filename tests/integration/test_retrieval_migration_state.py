@@ -22,6 +22,7 @@ from src.engine.retrieval_migration import (
     RetrievalBackfillWorker,
     RetrievalMigrationStore,
 )
+from src.engine.migration_verification import RetrievalMigrationVerifier
 from src.engine.scope import MemoryScope
 
 pytestmark = pytest.mark.integration
@@ -368,6 +369,107 @@ async def test_backfill_resumes_without_duplicates_and_fences_concurrent_edit() 
                 )
                 == 1
             )
+    finally:
+        async with async_session_factory() as session, session.begin():
+            await session.execute(
+                delete(RetrievalMigrationRun).where(
+                    RetrievalMigrationRun.bank_id == bank_id
+                )
+            )
+            await session.execute(delete(Document).where(Document.bank_id == bank_id))
+            await session.execute(delete(MemoryBank).where(MemoryBank.id == bank_id))
+        await engine.dispose()
+
+
+async def test_post_migration_verification_and_feature_off_rollback(
+    monkeypatch,
+) -> None:
+    from config.settings import settings
+
+    await init_db()
+    bank_id = f"migration-verify-{uuid.uuid4().hex[:8]}"
+    document_id = uuid.uuid4()
+    generation = uuid.uuid4()
+    try:
+        async with async_session_factory() as session, session.begin():
+            session.add(MemoryBank(id=bank_id, name=bank_id))
+            await session.flush()
+            session.add(
+                Document(
+                    id=document_id,
+                    bank_id=bank_id,
+                    title="verified document",
+                    file_type="markdown",
+                    raw_text="original verified passage",
+                    status="indexed",
+                    processing_generation=generation,
+                )
+            )
+            await session.flush()
+            session.add(
+                Chunk(
+                    doc_id=document_id,
+                    bank_id=bank_id,
+                    chunk_index=0,
+                    chunk_text="original verified passage",
+                    doc_uri=f"{document_id}:0",
+                )
+            )
+            session.add(
+                MemoryUnit(
+                    id=uuid.uuid4(),
+                    bank_id=bank_id,
+                    document_id=document_id,
+                    chunk_index=0,
+                    memory_index=0,
+                    text="verified fact",
+                    source_text="verified fact",
+                    lexical_tokens=["verified"],
+                )
+            )
+
+        store = RetrievalMigrationStore(
+            async_session_factory, scope=MemoryScope(bank_id=bank_id)
+        )
+        run_id = await store.prepare([str(document_id)], token_limit=10_000)
+        lease = await store.claim(run_id)
+        assert lease is not None
+
+        async def embed(values):
+            return [[0.3] * 768 for _ in values]
+
+        worker = RetrievalBackfillWorker(
+            store, embed, embedding_model="verified-v2", batch_size=1
+        )
+        assert (await worker.process_next(lease)).status == "backfilled"
+        await store.release(lease)
+        verifier = RetrievalMigrationVerifier(
+            async_session_factory, scope=MemoryScope(bank_id=bank_id)
+        )
+        monkeypatch.setattr(settings, "hindsight_hierarchical_retrieval_enabled", True)
+        monkeypatch.setattr(settings, "hindsight_keyword_index_enabled", True)
+        enabled = await verifier.enable_reads(run_id, embedding_model="verified-v2")
+        assert enabled["passed"] is True
+        verified = await verifier.verify(run_id, embedding_model="verified-v2")
+        assert verified["stage"] == "verified"
+        assert all(verified["index_state"].values())
+        assert verified["dependency_queues"] == {
+            "graph": 0,
+            "mental_models": 0,
+            "consolidation": 0,
+        }
+        assert verified["cleanup"]["protected_checksum_match"] is True
+
+        rollback = await verifier.rollback_reads(run_id)
+        assert rollback["read_enabled"] is False
+        after = await verifier.inspect(run_id, embedding_model="verified-v2")
+        assert after["checks"]["scope_read_switch"] is False
+        assert after["checks"]["parents"] and after["checks"]["chunks"]
+        async with async_session_factory() as session:
+            assert await session.get(DocumentRetrieval, document_id)
+            assert (
+                await session.scalar(select(Chunk).where(Chunk.doc_id == document_id))
+            ).embedding_model == "verified-v2"
     finally:
         async with async_session_factory() as session, session.begin():
             await session.execute(
