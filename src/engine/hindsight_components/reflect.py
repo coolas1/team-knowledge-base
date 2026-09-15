@@ -422,6 +422,8 @@ class ReflectEngine:
             "Reuse relevant cached facts when sufficient. Expansion returns a bounded "
             "subset of source facts; change query or recall for missing evidence. "
             "Stale summaries require current fact lookup. Cite only retrieved current IDs. "
+            "A metadata_only result identifies a possibly relevant document but is not "
+            "passage evidence; never infer its body and explicitly disclose that limitation. "
             f"Trusted directives:\n{trusted}"
         )
 
@@ -432,7 +434,15 @@ class ReflectEngine:
                 "question": query,
                 "remaining_tokens": remaining_tokens,
                 "tool_results": trace,
-                "retrieved_memory_ids": list(memories),
+                "retrieved_memories": [
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "metadata_only": bool(item.metadata.get("metadata_only")),
+                        "passage_confidence": item.metadata.get("passage_confidence"),
+                    }
+                    for item in memories.values()
+                ],
                 "retrieved_model_ids": list(models),
                 "directive_ids": [item.id for item in directives],
             },
@@ -508,6 +518,17 @@ class ReflectEngine:
             )
         if not evidence:
             return ReflectResult(NOT_FOUND_ANSWER, {}, trace)
+        if all(item.metadata.get("metadata_only") for item in evidence.values()):
+            grouped: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+            for item in evidence.values():
+                grouped[item.memory_type].append(item.as_evidence())
+            titles = ", ".join(dict.fromkeys(item.title for item in evidence.values()))
+            return ReflectResult(
+                f"仅文档元数据与问题相关（{titles}），但未找到可靠正文段落，"
+                "因此无法依据文档内容作答；请打开相关文档核实。",
+                dict(grouped),
+                trace,
+            )
         embeddings = await self._providers.embed([query])
         if not embeddings:
             raise ValueError("embedding provider returned no reflection embedding")
@@ -568,7 +589,12 @@ class ReflectEngine:
             )
             + "\nEVIDENCE:\n"
             + "\n".join(
-                f"[{item.id}] {item.text} (source: {item.title})"
+                (
+                    f"[{item.id}] [METADATA ONLY; NOT PASSAGE EVIDENCE] "
+                    f"source={item.title}; limitation={item.context}"
+                    if item.metadata.get("metadata_only")
+                    else f"[{item.id}] {item.text} (source: {item.title})"
+                )
                 for item in evidence.values()
             )
         )

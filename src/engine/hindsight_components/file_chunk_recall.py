@@ -70,6 +70,11 @@ def fielded_lexical_scores(query, fields, scorer, weights):
     return totals, contributions
 
 
+def reliable_passage(score: float, threshold: float) -> bool:
+    """Keep passage text only when its independently measured score is reliable."""
+    return float(score) >= threshold
+
+
 async def search_file_chunks(sessions, scope, embedding, limit, source_type, filters):
     filters = filters or RecallFilter()
     if _excluded(source_type, filters):
@@ -173,19 +178,27 @@ async def _search_hierarchical_chunks(sessions, scope, embedding, limit, filters
 
     candidates = []
     per_document = {}
+    best_passage_scores = {}
     for chunk, document, passage_value in passage_rows:
         doc_id = str(document.id)
+        passage_value = float(passage_value)
+        best_passage_scores[doc_id] = max(
+            passage_value, best_passage_scores.get(doc_id, -1.0)
+        )
+        if not reliable_passage(passage_value, settings.hindsight_min_passage_score):
+            continue
         used = per_document.get(doc_id, 0)
         if used >= settings.hindsight_max_passages_per_document:
             continue
         per_document[doc_id] = used + 1
         parent_value = parent_scores[doc_id]
         candidate = _candidate(
-            chunk, document, 0.4 * parent_value + 0.6 * float(passage_value)
+            chunk, document, 0.4 * parent_value + 0.6 * passage_value
         )
         candidate.metadata.update(
             parent_score=parent_value,
-            passage_score=float(passage_value),
+            passage_score=passage_value,
+            passage_confidence="reliable",
             retrieval_level="parent_then_passage",
         )
         candidates.append(candidate)
@@ -208,6 +221,8 @@ async def _search_hierarchical_chunks(sessions, scope, embedding, limit, filters
         if doc_id in per_document:
             continue
         document = documents[doc_id]
+        best_passage_score = best_passage_scores.get(doc_id)
+        confidence = "low" if best_passage_score is not None else "unavailable"
         candidates.append(
             RecallCandidate(
                 id=f"parent:{doc_id}",
@@ -217,14 +232,25 @@ async def _search_hierarchical_chunks(sessions, scope, embedding, limit, filters
                 source_text="",
                 chunk_index=-1,
                 source_type="upload",
-                context="Document metadata matched; no reliable passage available",
+                context=(
+                    "Document metadata matched; available passages scored below the "
+                    "reliability threshold"
+                    if confidence == "low"
+                    else "Document metadata matched; no passage is available"
+                ),
                 mentioned_at=document.updated_at.isoformat(),
                 updated_at=document.updated_at.isoformat(),
                 metadata={
                     "source_kind": "document_metadata",
                     "metadata_only": True,
                     "parent_score": parent_value,
-                    "passage_confidence": "unavailable",
+                    "passage_confidence": confidence,
+                    "passage_score_threshold": settings.hindsight_min_passage_score,
+                    **(
+                        {"best_passage_score": best_passage_score}
+                        if best_passage_score is not None
+                        else {}
+                    ),
                     "safety_lane_candidates": safety_lane_count,
                 },
                 semantic_score=parent_value,
@@ -232,7 +258,11 @@ async def _search_hierarchical_chunks(sessions, scope, embedding, limit, filters
         )
     return sorted(
         candidates,
-        key=lambda item: (-(item.semantic_score or 0.0), item.id),
+        key=lambda item: (
+            -(item.semantic_score or 0.0),
+            bool(item.metadata.get("metadata_only")),
+            item.id,
+        ),
     )[:limit]
 
 

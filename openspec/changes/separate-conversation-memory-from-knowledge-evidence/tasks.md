@@ -52,7 +52,7 @@
 - [x] 6.3 Change new chunk embeddings to use original chunk text while retaining the existing user-visible text; verify embedding inputs no longer repeat document metadata and reading/citation behavior is unchanged.
 - [x] 6.4 Implement bounded document lexical/dense retrieval and field-aware fusion; verify metadata-only, noisy-OCR, filename, tag/entity, and ordinary body-topic cases select the expected parent documents.
 - [x] 6.5 Search and rerank original chunks only inside selected parents, enforce the configured per-document passage cap, and expose parent and passage scores; verify implicit-topic chunks are returned under the correct document.
-- [ ] 6.6 Handle metadata-relevant documents with no reliable passage by returning an explicit metadata-only or low-passage-confidence result without fabricating text; verify answer generation discloses the limitation.
+- [x] 6.6 Handle metadata-relevant documents with no reliable passage by returning an explicit metadata-only or low-passage-confidence result without fabricating text; verify answer generation discloses the limitation.
 - [ ] 6.7 Add hierarchical trace fields for parent candidates, passage candidates, field contributions, safety-lane use, document coverage, caps, and collapse; verify trace is bounded and content-safe.
 
 ## 7. Adaptive deep search and deadlines

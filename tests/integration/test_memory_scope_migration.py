@@ -2516,6 +2516,11 @@ async def test_hybrid_safety_lane_ablation_recovers_global_chunk_with_caps(
         "upload",
         RecallFilter(),
     )
+    assert disabled
+    assert all(item.text == "" and item.source_text == "" for item in disabled)
+    assert all(item.metadata["metadata_only"] is True for item in disabled)
+    assert all(item.metadata["passage_confidence"] == "low" for item in disabled)
+    assert all(item.metadata["best_passage_score"] == pytest.approx(0.0) for item in disabled)
     monkeypatch.setattr(settings, "hindsight_hybrid_safety_lane_enabled", True)
     enabled = await search_file_chunks(
         sessions,

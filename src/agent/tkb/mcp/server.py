@@ -546,7 +546,9 @@ async def search_knowledge_fast(
     """快速知识检索。用于简单事实、定义、明确关键词、指定文件内容和文件定位。
 
     只返回检索证据，不在服务端生成最终答案；调用此工具的模型应根据 sources
-    组织回答。不要用于跨文档比较、多跳关系、时间线或复杂综合分析。
+    组织回答。metadata.metadata_only=true 表示仅文档元数据相关、没有可靠正文，
+    不得推断或引用不存在的正文，回答中必须明确披露该限制。不要用于跨文档比较、
+    多跳关系、时间线或复杂综合分析。
     """
     return await query_knowledge(
         query,
@@ -566,7 +568,8 @@ async def search_knowledge_deep(
     """深度知识检索。用于跨文档比较、多跳关系、时间线、原因分析和综合总结。
 
     只返回检索证据，不在服务端生成最终答案；调用此工具的模型应综合 sources
-    和 related_entities 回答。简单事实查询应优先使用 search_knowledge_fast。
+    和 related_entities 回答。metadata.metadata_only=true 不是正文证据，必须明确说明
+    未找到可靠段落且不得补写文档内容。简单事实查询应优先使用 search_knowledge_fast。
     """
     from src.engine.hindsight_components.errors import DeepSearchError
 
