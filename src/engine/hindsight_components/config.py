@@ -51,6 +51,7 @@ class HindsightOptions:
     max_passages_per_document: int = 3
     max_memories_per_turn: int = 1
     trace_candidate_limit: int = 20
+    evidence_sufficiency_min_margin: float = 0.01
     # Relevance gates: queries without KB coverage must not surface unrelated
     # memories. semantic gate applies to every mode; score gate applies to the
     # neural-rerank path (deep mode).
@@ -125,6 +126,8 @@ class HindsightOptions:
             raise ValueError("recall_min_term_coverage must be in (0, 1]")
         if self.recall_min_term_count < 1:
             raise ValueError("recall_min_term_count must be at least 1")
+        if self.evidence_sufficiency_min_margin < 0:
+            raise ValueError("evidence_sufficiency_min_margin cannot be negative")
         for name, value in (
             (
                 "conversation_min_freshness_factor",

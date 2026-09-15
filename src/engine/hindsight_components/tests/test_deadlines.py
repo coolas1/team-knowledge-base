@@ -112,7 +112,18 @@ async def test_rerank_timeout_uses_deterministic_rrf() -> None:
 
 
 async def test_adaptive_simple_query_skips_analysis_graph_temporal_and_rerank() -> None:
-    repository = FakeRepository()
+    class StrongRepository(FakeRepository):
+        async def semantic_search(self, *args, **kwargs):
+            self.calls["semantic"] += 1
+            self.a.text = "autonomous driving algorithm"
+            return [self.a]
+
+        async def keyword_search(self, *args, **kwargs):
+            self.calls["keyword"] += 1
+            self.a.text = "autonomous driving algorithm"
+            return [self.a]
+
+    repository = StrongRepository()
     providers = FakeProviders()
     result = await RecallEngine(
         repository,
@@ -124,9 +135,45 @@ async def test_adaptive_simple_query_skips_analysis_graph_temporal_and_rerank() 
     assert phases["query_analysis_llm"]["category"] == "adaptive_simple_query"
     assert phases["graph_expansion"]["category"] == "not_required"
     assert phases["temporal_search"]["category"] == "not_required"
-    assert phases["neural_rerank_llm"]["outcome"] in {"skipped", "succeeded"}
+    assert phases["neural_rerank_llm"]["outcome"] == "skipped"
     assert repository.calls["graph"] == 0
     assert repository.calls["temporal"] == 0
+    gate = result.trace["evidence_sufficiency"]
+    assert gate["decision"] == "stop"
+    assert gate["sufficient"] is True
+    assert all(gate["checks"].values())
+
+
+async def test_adaptive_ambiguous_candidates_escalate_to_reranker() -> None:
+    repository = FakeRepository()
+    providers = FakeProviders()
+    # Both rows occur in the same two arms, producing no decisive RRF margin.
+    result = await RecallEngine(
+        repository,
+        providers,
+        HindsightOptions(adaptive_deep_search_enabled=True),
+    ).recall("Alice survey")
+
+    gate = result.trace["evidence_sufficiency"]
+    assert gate["decision"] == "escalate"
+    assert gate["checks"]["score_margin"] is False
+    assert result.trace["phase_outcomes"]["neural_rerank_llm"]["outcome"] == "succeeded"
+
+
+async def test_adaptive_complex_query_escalates_despite_strong_evidence() -> None:
+    repository = FakeRepository()
+    providers = FakeProviders()
+    result = await RecallEngine(
+        repository,
+        providers,
+        HindsightOptions(adaptive_deep_search_enabled=True),
+    ).recall("Compare Alice survey versus the report")
+
+    gate = result.trace["evidence_sufficiency"]
+    assert gate["decision"] == "escalate"
+    assert gate["query_features"]["comparison"] is True
+    assert gate["checks"]["simple_query"] is False
+    assert result.trace["phase_outcomes"]["neural_rerank_llm"]["outcome"] == "succeeded"
 
 
 async def test_adaptive_temporal_and_comparison_queries_start_needed_phases() -> None:

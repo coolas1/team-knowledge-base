@@ -57,7 +57,7 @@
 
 ## 7. Adaptive deep search and deadlines
 
-- [ ] 7.1 Implement a deterministic evidence-sufficiency gate using query features, score margin, term coverage, passage confidence, and document coverage; verify simple queries stop early and complex/ambiguous fixtures escalate.
+- [x] 7.1 Implement a deterministic evidence-sufficiency gate using query features, score margin, term coverage, passage confidence, and document coverage; verify simple queries stop early and complex/ambiguous fixtures escalate.
 - [x] 7.2 Start temporal expansion only for temporal cues and graph/query-analysis expansion only for entity, relation, multi-hop, or cross-document needs; verify skipped/started phase traces for each query class.
 - [x] 7.3 Run neural reranking only when multiple plausible candidates remain or comparison/synthesis requires it; verify timeout retains calibrated deterministic evidence and marks degradation.
 - [ ] 7.4 Preserve one monotonic total budget across routing, optional phases, evidence loading, and cleanup; verify every phase receives the lesser of configured and remaining time and cancellation closes descendant tasks.

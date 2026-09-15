@@ -234,6 +234,7 @@ class RecallEngine:
                 rerank_truncated,
                 ranking_method,
                 rerank_submitted_count,
+                sufficiency,
             ) = await self._rerank(
                 query,
                 ordered,
@@ -426,6 +427,7 @@ class RecallEngine:
                 "rerank_truncated": rerank_truncated,
                 "rerank_original_count": len(ordered),
                 "rerank_submitted_count": rerank_submitted_count,
+                "evidence_sufficiency": sufficiency,
                 "hierarchical_retrieval": self._hierarchical_trace(
                     candidates.values(),
                     selected,
@@ -876,7 +878,7 @@ class RecallEngine:
         budget: DeadlineBudget,
         phase_outcomes: dict[str, dict[str, Any]],
         phase_ms: dict[str, float],
-    ) -> tuple[bool, str, int]:
+    ) -> tuple[bool, str, int, dict[str, Any]]:
         for item in ordered:
             item.final_score = rrf[item.id]
         if not ordered:
@@ -884,19 +886,15 @@ class RecallEngine:
                 "neural_rerank_llm", PhaseStatus.EMPTY, 0.0, phase_outcomes
             )
             phase_ms["neural_rerank_llm"] = 0.0
-            return False, "rrf", 0
-        deterministic_margin = (
-            rrf[ordered[0].id] - rrf[ordered[1].id] if len(ordered) > 1 else 1.0
-        )
+            return False, "rrf", 0, {
+                "decision": "stop",
+                "sufficient": False,
+                "reason_codes": ["no_candidates"],
+            }
+        sufficiency = self._evidence_sufficiency(query, ordered, rrf)
+        sufficiency["gate_enabled"] = self._options.adaptive_deep_search_enabled
         if mode == "fast" or (
-            self._options.adaptive_deep_search_enabled
-            and (
-                len(ordered) <= 1
-                or (
-                    deterministic_margin >= 0.01
-                    and not self._query_features(query)["comparison"]
-                )
-            )
+            self._options.adaptive_deep_search_enabled and sufficiency["sufficient"]
         ):
             self._record_local_phase(
                 "neural_rerank_llm",
@@ -906,7 +904,20 @@ class RecallEngine:
                 "fast_mode" if mode == "fast" else "deterministic_evidence_sufficient",
             )
             phase_ms["neural_rerank_llm"] = 0.0
-            return False, "rrf", 0
+            if mode == "fast":
+                sufficiency = {
+                    **sufficiency,
+                    "decision": "stop",
+                    "reason_codes": ["fast_mode"],
+                }
+            return False, "rrf", 0, sufficiency
+
+        if not self._options.adaptive_deep_search_enabled:
+            sufficiency = {
+                **sufficiency,
+                "decision": "escalate",
+                "reason_codes": ["gate_disabled"],
+            }
 
         payload_lines, supplied_ids, truncated = self._bounded_rerank_lines(ordered)
         phase = await self._run_phase(
@@ -952,12 +963,70 @@ class RecallEngine:
                 )
         ordered.sort(key=lambda item: (-item.final_score, item.id))
         if not scores:
-            return truncated, "rrf", len(supplied_ids)
+            return truncated, "rrf", len(supplied_ids), sufficiency
         return (
             truncated,
             "neural+rrf" if len(scores) < len(ordered) else "neural",
             len(supplied_ids),
+            sufficiency,
         )
+
+    def _evidence_sufficiency(
+        self,
+        query: str,
+        ordered: list[RecallCandidate],
+        scores: dict[str, float],
+    ) -> dict[str, Any]:
+        """Deterministically decide whether optional neural ranking is unnecessary."""
+        features = self._query_features(query)
+        top = ordered[0]
+        margin = (
+            float(scores[top.id]) - float(scores[ordered[1].id])
+            if len(ordered) > 1
+            else 1.0
+        )
+        query_terms = list(dict.fromkeys(lexical_tokens(query)))
+        candidate_terms = set(lexical_tokens(f"{top.title}\n{top.text}"))
+        matched_terms = sum(term in candidate_terms for term in query_terms)
+        term_coverage = matched_terms / len(query_terms) if query_terms else 0.0
+        passage_confidence = str(
+            top.metadata.get("passage_confidence") or "legacy_or_reliable"
+        )
+        passage_reliable = (
+            not top.metadata.get("metadata_only")
+            and passage_confidence not in {"low", "unavailable"}
+        )
+        document_coverage = len(
+            {item.document_id for item in ordered[:5] if item.document_id}
+        )
+        complex_query = any(features.values())
+        coverage_ok = (
+            term_coverage >= self._options.recall_min_term_coverage
+            or (top.semantic_score or 0.0) >= 0.8
+        )
+        checks = {
+            "simple_query": not complex_query,
+            "score_margin": margin >= self._options.evidence_sufficiency_min_margin,
+            "term_coverage": coverage_ok,
+            "passage_confidence": passage_reliable,
+            "document_coverage": document_coverage >= 1,
+        }
+        sufficient = bool(ordered) and all(checks.values())
+        return {
+            "decision": "stop" if sufficient else "escalate",
+            "sufficient": sufficient,
+            "query_features": features,
+            "score_margin": round(margin, 6),
+            "score_margin_threshold": self._options.evidence_sufficiency_min_margin,
+            "matched_term_count": matched_terms,
+            "query_term_count": len(query_terms),
+            "term_coverage": round(term_coverage, 6),
+            "term_coverage_threshold": self._options.recall_min_term_coverage,
+            "passage_confidence": passage_confidence,
+            "document_coverage": document_coverage,
+            "checks": checks,
+            "reason_codes": [name for name, passed in checks.items() if not passed],
+        }
 
     @staticmethod
     def _query_features(query: str) -> dict[str, bool]:
