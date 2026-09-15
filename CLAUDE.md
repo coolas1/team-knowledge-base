@@ -4,11 +4,16 @@ A GraphRAG-powered team knowledge base: ingest documents into a three-layer
 knowledge graph (entities → relations → chunks), retrieve via semantic search
 with reranking, and query through a CLI, an MCP server, or a web UI.
 
-Three independently switchable modules live under `src/`:
+Three independently switchable modules live under `src/`, plus two extensions
+under `src/extensions/`:
 
 - **engine** — GraphRAG storage/retrieval (Postgres+pgvector, Neo4j), CLI.
 - **agent** — plugin-based skills + LLM orchestration (see `src/agent/CLAUDE.md`).
 - **frontend** — FastAPI BFF + React SPA (see `src/frontend/CLAUDE.md`).
+- **extensions/tool-runner** — sandboxed tool-job builder/gateway for
+  agent-authored tools (see `src/extensions/tool-runner/README.md`).
+- **extensions/pi-agent** — the pi-agent chat sidecar (Node; see
+  `src/extensions/pi-agent/README.md`).
 
 ## Commands
 
@@ -36,7 +41,8 @@ Two long-lived branches on `origin`:
   staging LAN pipeline deploys it continuously.
 
 A change is a feature branch off `develop`; its PR carries the spec delta plus
-the code. After a PR merges to `develop`, the maintainer archives the change —
+the code, described with `.github/PULL_REQUEST_TEMPLATE.md`. After a PR merges
+to `develop`, the maintainer archives the change —
 fold the delta into `specs/` and move the change into `archive/` — with a direct
 push to `develop`. Archive-after-merge is the maintainer's job, once per merge,
 never the PR author's.
@@ -108,12 +114,19 @@ git push origin develop
 src/
 ├── engine/        # GraphRAG engine — see src/engine/CLAUDE.md
 ├── agent/         # skills + LLM orchestration — see src/agent/CLAUDE.md
-└── frontend/      # BFF + SPA — see src/frontend/CLAUDE.md
+├── frontend/      # BFF + SPA — see src/frontend/CLAUDE.md
+└── extensions/    # tool-runner + pi-agent — see src/extensions/*/README.md
 ```
 
 Backing services (`docker-compose.yml`): Postgres+pgvector (vectors, chunks) and
 Neo4j (entity/relation graph). Ollama is opt-in via the compose `ollama`
 profile. Config flows through `.env` → `config/settings.py` (pydantic-settings).
+
+User-facing manuals live in `docs/` (the README's appendix): `start.md`
+(quick start), `config-reference.md` (the single home for `.env` / `app.yaml`
+prose), `architecture.md`, `ark-image-ppt.md`, `deep-search-operations.md`.
+Historical design/validation records live in
+`openspec/changes/archive/<change>/docs/`.
 
 ## Validity check
 
