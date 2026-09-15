@@ -57,12 +57,13 @@ belongs in `docs/`.
 | `ark-image-ppt.md` | Keep (Chinese ops manual) |
 | `deep-search-operations.md` | Keep (English ops manual) |
 | `config-reference.md` | **New** — Chinese; absorbs all prose from `.env.example` + `config/app.yaml` |
-| `versioned-documents-design.md` | Move into archive of the matching change as supplemental material |
+| `versioned-documents-design.md` | Keep in `docs/` — decided during apply (2026-09-15): PR #6 predates the openspec workflow, no matching archived change exists |
 | `hindsight-capability-matrix.md` | Move → `archive/2026-09-15-align-hindsight-memory-capabilities/docs/` |
 | `session-transcript-validation.md` | Move → `archive/2026-09-15-preserve-session-transcript-history/docs/` |
 | `file-memory-migration-2026-09-11.md` | Move → `archive/2026-09-15-reduce-memory-cost-and-rebuild-file-observations/docs/` |
 | `memory-cost-controls.md` | Move → same archive dir as above |
 | `memory-scope.md` | Move → `archive/2026-09-15-align-hindsight-memory-capabilities/docs/` |
+| `deep-search-validation.md` | Keep in `docs/` — decided during apply (2026-09-15): missed by the original table; user chose to keep |
 | `issues.md`, `todos.md` | Delete (stale scratch; superseded by openspec) |
 | `superpowers/` (plans, specs) | Delete (agent-workflow scratch, regenerable) |
 
