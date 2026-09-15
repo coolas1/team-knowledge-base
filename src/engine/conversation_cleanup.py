@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import hashlib
 import json
 import uuid
@@ -418,3 +420,70 @@ class ConversationCleanupExecutor:
             "retired": len(retirement_ids),
             "protected": len(manifest.items) - len(retirement_ids),
         }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Plan or execute rollback-safe conversation-memory cleanup."
+    )
+    parser.add_argument("action", choices=("plan", "execute"))
+    parser.add_argument("--bank-id", default="default-team")
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--authorize-retirement", action="store_true")
+    return parser
+
+
+def validate_cli_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.action == "plan":
+        if args.output is None:
+            parser.error("plan requires --output")
+        if args.manifest is not None or args.authorize_retirement:
+            parser.error("plan accepts only --output and --bank-id")
+    else:
+        if args.manifest is None:
+            parser.error("execute requires --manifest")
+        if not args.authorize_retirement:
+            parser.error("execute requires --authorize-retirement")
+        if args.output is not None:
+            parser.error("execute does not accept --output")
+
+
+async def _run_cli(args: argparse.Namespace) -> dict:
+    from src.engine.components.store.postgres import async_session_factory
+
+    scope = MemoryScope(bank_id=args.bank_id)
+    if args.action == "plan":
+        manifest = await ConversationCleanupPlanner(
+            async_session_factory, scope=scope
+        ).build_manifest()
+        export_cleanup_manifest(manifest, args.output)
+        return {
+            "action": "plan",
+            "bank_id": manifest.bank_id,
+            "counts": manifest.counts,
+            "unknown_blocks_retirement": manifest.unknown_blocks_retirement,
+            "manifest": str(args.output),
+            "checksum": manifest.checksum,
+        }
+    manifest = load_cleanup_manifest(args.manifest, expected_bank_id=args.bank_id)
+    result = await ConversationCleanupExecutor(
+        async_session_factory, scope=scope
+    ).execute(manifest)
+    return {
+        "action": "execute",
+        "bank_id": manifest.bank_id,
+        "checksum": manifest.checksum,
+        **result,
+    }
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    validate_cli_args(parser, args)
+    print(json.dumps(asyncio.run(_run_cli(args)), sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

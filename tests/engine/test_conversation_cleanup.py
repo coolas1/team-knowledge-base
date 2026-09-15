@@ -8,14 +8,34 @@ from types import SimpleNamespace
 import pytest
 
 from src.engine.conversation_cleanup import (
+    build_parser,
     classify_conversation_memories,
     export_cleanup_manifest,
     load_cleanup_manifest,
+    validate_cli_args,
     validate_restoration_preconditions,
 )
 
 
 NOW = datetime(2026, 9, 15, tzinfo=timezone.utc)
+
+
+def test_cleanup_cli_requires_manifest_and_explicit_authorization() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        validate_cli_args(parser, parser.parse_args(["plan"]))
+    with pytest.raises(SystemExit):
+        validate_cli_args(
+            parser,
+            parser.parse_args(["execute", "--manifest", "cleanup.json"]),
+        )
+
+    plan = parser.parse_args(["plan", "--output", "cleanup.json"])
+    validate_cli_args(parser, plan)
+    execute = parser.parse_args(
+        ["execute", "--manifest", "cleanup.json", "--authorize-retirement"]
+    )
+    validate_cli_args(parser, execute)
 
 
 def _row(kind: str, **overrides):
