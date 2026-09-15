@@ -36,6 +36,15 @@ class HindsightOptions:
     rerank_total_chars: int = 60_000
     keyword_candidate_limit: int = 300
     rrf_k: int = 60
+    # semantic, keyword, graph, temporal weights. Ranks are computed within
+    # each source pool before these route-specific weights are applied.
+    knowledge_arm_weights: tuple[float, float, float, float] = (1.0, 1.1, 0.8, 0.7)
+    conversation_arm_weights: tuple[float, float, float, float] = (
+        1.1,
+        0.8,
+        0.5,
+        0.9,
+    )
     semantic_link_threshold: float = 0.78
     semantic_neighbor_limit: int = 3
     mmr_redundancy_penalty: float = 0.2
@@ -68,6 +77,8 @@ class HindsightOptions:
     conversation_max_turn_chars: int = 100_000
 
     def __post_init__(self) -> None:
+        import math
+
         if self.entity_candidate_limit > 100:
             raise ValueError("entity_candidate_limit cannot exceed 100")
         if self.fact_cache_capacity < 0:
@@ -107,3 +118,11 @@ class HindsightOptions:
             raise ValueError("recall_min_term_coverage must be in (0, 1]")
         if self.recall_min_term_count < 1:
             raise ValueError("recall_min_term_count must be at least 1")
+        for name, weights in (
+            ("knowledge_arm_weights", self.knowledge_arm_weights),
+            ("conversation_arm_weights", self.conversation_arm_weights),
+        ):
+            if len(weights) != 4 or any(
+                not math.isfinite(weight) or weight <= 0 for weight in weights
+            ):
+                raise ValueError(f"{name} must contain four positive finite weights")

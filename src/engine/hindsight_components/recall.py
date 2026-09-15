@@ -165,8 +165,22 @@ class RecallEngine:
             names = ("semantic", "keyword", "graph", "temporal")
             candidates: dict[str, RecallCandidate] = {}
             rrf: defaultdict[str, float] = defaultdict(float)
+            pool_ranks: defaultdict[tuple[str, str], int] = defaultdict(int)
+            route_weights = {
+                "upload": dict(zip(names, self._options.knowledge_arm_weights)),
+                "conversation": dict(
+                    zip(names, self._options.conversation_arm_weights)
+                ),
+            }
             for arm_name, rows in zip(names, arms, strict=True):
-                for rank, raw in enumerate(rows, start=1):
+                for raw in rows:
+                    pool = (
+                        "conversation"
+                        if raw.source_type == "conversation"
+                        else "upload"
+                    )
+                    pool_ranks[(pool, arm_name)] += 1
+                    rank = pool_ranks[(pool, arm_name)]
                     candidate = candidates.get(raw.id)
                     if candidate is None:
                         candidate = replace(
@@ -181,7 +195,10 @@ class RecallEngine:
                         candidate, f"{arm_name}_score", self._raw_score(raw, arm_name)
                     )
                     candidate.source_ranks[arm_name] = rank
-                    rrf[candidate.id] += 1 / (self._options.rrf_k + rank)
+                    candidate.source_ranks[f"{pool}:{arm_name}"] = rank
+                    rrf[candidate.id] += route_weights[pool][arm_name] / (
+                        self._options.rrf_k + rank
+                    )
 
             if not candidates:
                 failed_retrieval = [
@@ -368,6 +385,15 @@ class RecallEngine:
                 "token_budget": token_limit,
                 "analysis": analysis,
                 "arm_counts": dict(zip(names, map(len, arms), strict=True)),
+                "source_local_fusion": {
+                    "method": "weighted_rrf",
+                    "rrf_k": self._options.rrf_k,
+                    "route_weights": route_weights,
+                    "pool_arm_counts": {
+                        f"{pool}:{arm}": count
+                        for (pool, arm), count in sorted(pool_ranks.items())
+                    },
+                },
                 "candidate_count": len(candidates),
                 "duplicate_collapsed": duplicate_collapsed,
                 "selected_count": len(selected),
