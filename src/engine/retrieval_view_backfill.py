@@ -67,6 +67,15 @@ async def backfill_retrieval_views(
         "skipped_changed_revision": 0,
         "dry_run": int(dry_run),
     }
+    logger.info(
+        "retrieval.migration.start",
+        extra={
+            "migration_state": "dry_run" if dry_run else "executing",
+            "scope_kind": "document" if document_id else "bank" if bank_id else "all",
+            "document_count": len(documents),
+            "batch_size": batch_size,
+        },
+    )
     for document in documents:
         filename = _filename_of(getattr(document, "file_path", None))
         overview = (getattr(document, "overview", None) or "").strip()
@@ -159,8 +168,25 @@ async def backfill_retrieval_views(
             rebuild_tokens=True,
         )
         logger.info(
-            "retrieval view rebuilt for %s (%s)", document.id, document.title
+            "retrieval.migration.document.complete",
+            extra={
+                "migration_state": "ready",
+                "revision": document.version_number,
+                "chunk_count": chunk_count,
+                "memory_count": memory_count,
+            },
         )
+    logger.info(
+        "retrieval.migration.complete",
+        extra={
+            "migration_state": "dry_run_complete" if dry_run else "completed",
+            "document_count": stats["documents"],
+            "parent_record_count": stats["parent_records"],
+            "chunk_count": stats["chunks"],
+            "memory_count": stats["memories"],
+            "skipped_changed_revision_count": stats["skipped_changed_revision"],
+        },
+    )
     return stats
 
 

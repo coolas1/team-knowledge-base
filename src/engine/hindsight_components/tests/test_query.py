@@ -247,6 +247,7 @@ async def test_query_diagnostics_are_structured_and_do_not_log_content(caplog) -
     )
     assert record.query_route == "knowledge"
     assert record.conversation_leakage_count == 0
+    assert record.source_pool_counts == {"upload": 1, "conversation": 0}
     assert hasattr(record, "document_coverage")
 
 

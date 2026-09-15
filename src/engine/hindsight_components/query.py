@@ -265,6 +265,10 @@ class HindsightQueryService:
                     "requested_route": requested_route,
                     "document_result_count": len(document_evidence),
                     "conversation_result_count": len(conversation_context),
+                    "source_pool_counts": {
+                        "upload": len(document_evidence),
+                        "conversation": len(conversation_context),
+                    },
                     "conversation_leakage_count": sum(
                         source.authority == "conversation"
                         for source in document_evidence

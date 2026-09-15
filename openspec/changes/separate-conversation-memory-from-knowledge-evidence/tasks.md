@@ -4,7 +4,7 @@
 - [x] 1.2 Extend the engine query contract with additive route, source-group, authority, provenance, and trace fields while preserving existing required fields; verify serialization and compatibility contract tests for legacy requests and responses.
 - [x] 1.3 Add independent kill switches for automatic conversation recall, mixed-source search, hierarchical reads, adaptive deep phases, and new retention publication; verify each switch restores its documented safe fallback without disabling document search.
 - [x] 1.4 Change integrated deployment defaults so automatic conversation injection is off until routing acceptance passes, while explicit conversation-memory tools remain available; verify rendered compose configuration and Pi startup behavior.
-- [ ] 1.5 Add sanitized metrics/log fields for route, confidence band, source pool counts, leakage, duplicate collapse, document coverage, phase outcome, fallback, and migration state; verify logs contain no query, evidence, credentials, or hidden prompts.
+- [x] 1.5 Add sanitized metrics/log fields for route, confidence band, source pool counts, leakage, duplicate collapse, document coverage, phase outcome, fallback, and migration state; verify logs contain no query, evidence, credentials, or hidden prompts.
 
 ## 2. Query routing and source isolation
 

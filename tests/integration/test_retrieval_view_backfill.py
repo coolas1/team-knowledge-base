@@ -10,6 +10,7 @@ original extraction.
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 import pytest
@@ -117,10 +118,11 @@ async def _semantic_scores(
     return {item.document_id: float(item.semantic_score or 0.0) for item in candidates}
 
 
-async def test_backfill_surfaces_noisy_documents_by_title(monkeypatch) -> None:
+async def test_backfill_surfaces_noisy_documents_by_title(monkeypatch, caplog) -> None:
     from config.settings import settings
 
     monkeypatch.setattr(settings, "hindsight_hierarchical_retrieval_enabled", True)
+    caplog.set_level(logging.INFO)
     await init_db()
     bank_id = f"backfill-test-{uuid.uuid4().hex[:8]}"
     scope = MemoryScope(bank_id=bank_id)
@@ -200,6 +202,18 @@ async def test_backfill_surfaces_noisy_documents_by_title(monkeypatch) -> None:
         assert "自动" in units[0].lexical_tokens  # title bigram, absent from the body
         assert units[0].text == NOISY_BODY
         assert chunk_texts == [NOISY_BODY]
+        migration_records = [
+            record
+            for record in caplog.records
+            if record.getMessage().startswith("retrieval.migration")
+        ]
+        assert migration_records
+        assert any(
+            getattr(record, "migration_state", None) == "completed"
+            for record in migration_records
+        )
+        assert all(title not in caplog.text for _, title, _, _ in DOCS)
+        assert NOISY_BODY not in caplog.text
     finally:
         async with async_session_factory() as session:
             await session.execute(delete(Document).where(Document.bank_id == bank_id))
