@@ -1,23 +1,91 @@
 .archive-page {
   flex: 1;
   overflow: auto;
-  padding: 24px;
+  padding: 30px clamp(18px, 4vw, 56px) 48px;
+  background: radial-gradient(circle at 92% 0%, rgba(15, 118, 110, 0.09), transparent 28rem), #f6f8f8;
+}
+
+.archive-hero {
+  display: flex;
+  max-width: 1180px;
+  margin: 0 auto 24px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+}
+
+.archive-hero-copy { min-width: 0; }
+
+.archive-eyebrow {
+  display: block;
+  margin-bottom: 9px;
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+}
+
+.archive-hero h1 {
+  margin: 0;
+  color: #102a2a;
+  font-size: clamp(26px, 3vw, 34px);
+  letter-spacing: -0.03em;
+}
+
+.archive-hero p { margin: 8px 0 0; color: #64717a; font-size: 14px; }
+
+.archive-hero-stats {
+  display: flex;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid #dce8e5;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 8px 24px rgba(28, 59, 57, 0.06);
+}
+
+.archive-stat {
+  display: grid;
+  min-width: 82px;
+  gap: 3px;
+  padding: 13px 16px;
+  border-right: 1px solid #e6efed;
+}
+
+.archive-stat:last-child { border-right: 0; }
+.archive-stat strong { color: #164e4a; font-size: 21px; line-height: 1; }
+.archive-stat span { color: #7a898c; font-size: 11px; }
 }
 
 .archive-toolbar {
   display: flex;
+  max-width: 1180px;
+  margin-right: auto;
+  margin-left: auto;
   align-items: center;
   gap: 12px;
   margin-bottom: 16px;
+  padding: 5px;
+  border: 1px solid #e1eae8;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 5px 18px rgba(28, 59, 57, 0.04);
+}
+
+.archive-page > section,
+.archive-page > .archive-management {
+  max-width: 1180px;
+  margin-right: auto;
+  margin-left: auto;
 }
 
 .archive-tabs {
   display: flex;
   gap: 4px;
   padding: 4px;
-  border: 1px solid #dfe5e8;
+  border: 0;
   border-radius: 8px;
-  background: #ffffff;
+  background: transparent;
 }
 
 .archive-tab {
@@ -25,14 +93,16 @@
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #17212b;
+  color: #64717a;
+  font-weight: 600;
   font-size: 14px;
   cursor: pointer;
 }
 
 .archive-tab.is-active {
-  background: #1890ff;
+  background: #0f766e;
   color: #ffffff;
+  box-shadow: 0 3px 9px rgba(15, 118, 110, 0.2);
 }
 
 .archive-mode {
@@ -145,9 +215,17 @@
 .archive-card {
   margin-bottom: 10px;
   padding: 14px 16px;
-  border: 1px solid #dfe5e8;
-  border-radius: 10px;
-  background: #ffffff;
+  border: 1px solid #e1eae8;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 4px 14px rgba(28, 59, 57, 0.035);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.archive-card:hover {
+  border-color: #b8d8d2;
+  box-shadow: 0 8px 22px rgba(28, 59, 57, 0.08);
+  transform: translateY(-1px);
 }
 
 .archive-card-head {
@@ -219,8 +297,8 @@
 }
 
 .archive-actions .is-primary {
-  border-color: #1890ff;
-  background: #1890ff;
+  border-color: #0f766e;
+  background: #0f766e;
   color: #ffffff;
 }
 
@@ -376,4 +454,14 @@ button.archive-tree-node-head:focus-visible {
 
 .archive-tree-document-arrow {
   color: #8a97a5;
+}
+
+@media (max-width: 620px) {
+  .archive-page { padding: 22px 12px 36px; }
+  .archive-hero { display: block; margin-bottom: 18px; }
+  .archive-hero-stats { width: 100%; margin-top: 18px; }
+  .archive-stat { min-width: 0; flex: 1; }
+  .archive-toolbar { align-items: stretch; flex-direction: column; }
+  .archive-tabs { overflow-x: auto; }
+  .archive-mode { justify-content: flex-end; padding: 4px 6px 2px; }
 }
