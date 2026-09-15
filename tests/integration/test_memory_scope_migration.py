@@ -2435,6 +2435,11 @@ async def test_supersession_invalidates_cache_graph_observation_and_model_depend
             await session.scalars(select(HindsightGraphOutbox.document_id))
         )
         assert {old_document, new_document, observation_document} <= projected_documents
+    assert await repo.retire_memories([str(new_id)]) == 1
+    assert await repo.load_cached_facts([str(new_id)]) == {}
+    assert (await repo.graph_projection(str(new_document))).memories == ()
+    retired_audit = await repo.expand_memory_record(str(new_id))
+    assert retired_audit["memory"]["metadata"]["lifecycle_state"] == "retired"
 
 
 async def test_backfill_resume_constraints_and_count_preservation(scope_database):

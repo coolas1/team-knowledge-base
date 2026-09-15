@@ -1277,6 +1277,37 @@ class PostgresMemoryRepository:
             )
             return len(rows)
 
+    async def retire_memories(
+        self, memory_ids: list[str], *, reason: str = "memory_retired"
+    ) -> int:
+        if not memory_ids:
+            return 0
+        identities = [uuid.UUID(value) for value in dict.fromkeys(memory_ids)]
+        async with self._session_factory() as session, session.begin():
+            rows = list(
+                (
+                    await session.execute(
+                        select(MemoryUnit.id, MemoryUnit.document_id)
+                        .where(
+                            self._memory_scope(),
+                            MemoryUnit.id.in_(identities),
+                            MemoryUnit.lifecycle_state == "current",
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            if not rows:
+                return 0
+            ids = [memory_id for memory_id, _ in rows]
+            await session.execute(
+                update(MemoryUnit)
+                .where(MemoryUnit.id.in_(ids), self._memory_scope())
+                .values(lifecycle_state="retired")
+            )
+            await self._invalidate_lifecycle_dependents(session, rows, reason=reason)
+            return len(rows)
+
     async def _invalidate_lifecycle_dependents(
         self,
         session: AsyncSession,
