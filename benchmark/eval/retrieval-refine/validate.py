@@ -128,6 +128,19 @@ def main() -> None:
     assert {"empty", "degraded", "timeout", "unavailable", "fallback"} <= {
         result["outcome"] for result in failures["results"]
     }
+    replay_cases = json.loads((ROOT / "replay_cases.json").read_text(encoding="utf-8"))[
+        "cases"
+    ]
+    assert {case["route"] for case in replay_cases} == {
+        "knowledge",
+        "conversation",
+        "mixed",
+    }
+    autonomy = next(
+        case for case in replay_cases if case["id"] == "automatic-driving-incident"
+    )
+    assert len(autonomy["document_ids"]) == 2
+    assert set(autonomy["citations"]) == set(autonomy["document_ids"])
     print(
         json.dumps(
             {
@@ -140,6 +153,7 @@ def main() -> None:
                 "ablation_variants": len(ablation["variants"]),
                 "scale_records": scale["fixture"]["records"],
                 "failure_cases": len(failures["results"]),
+                "replay_cases": len(replay_cases),
                 "digest": first,
             }
         )

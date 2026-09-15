@@ -50,3 +50,7 @@ response bytes.
 routing, embedding, lexical storage, graph, temporal ranking, reranking,
 evidence loading, MCP, and cancellation. It records truthful typed outcomes and
 fallbacks and proves that all child tasks are cancelled and awaited.
+
+`replay_cases.json` is shared by the MCP and Pi HTTP/SSE acceptance tests. It
+freezes the automatic-driving incident plus knowledge, continuity, mixed, and
+no-answer behavior, including exact document and citation identities.
