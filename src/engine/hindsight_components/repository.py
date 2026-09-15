@@ -1971,24 +1971,30 @@ class PostgresMemoryRepository:
             )
             raw_rows = list(result.all())
             if self._keyword_index_enabled:
-                # Score the stored retrieval view: lexical_tokens are built
-                # from title|filename|overview + text, so a document whose
-                # body is OCR noise still ranks when its metadata matches.
-                # " ".join round-trips lexical_tokens losslessly.
-                scoring_texts = [" ".join(row[3] or []) for row in raw_rows]
+                # The enabled path is SQL-indexed end to end: candidate
+                # generation and deterministic overlap ranking are already
+                # complete in the bounded query above. Never rebuild a Python
+                # BM25 corpus from these rows (or from the full table).
+                ranked_ids = [
+                    (memory_id, float(overlap))
+                    for memory_id, _text, overlap, _tokens in raw_rows
+                    if float(overlap or 0) > 0
+                ][:limit]
             else:
+                # Rollback-only compatibility path. It intentionally preserves
+                # the former behavior while the indexed read switch is off.
                 scoring_texts = [str(row[1]) for row in raw_rows]
-            scores = self._bm25(query, scoring_texts)
-            ranked_ids = sorted(
-                (
-                    (memory_id, score)
-                    for (memory_id, _text, *_), score in zip(
-                        raw_rows, scores, strict=True
-                    )
-                    if score > 0
-                ),
-                key=lambda item: (-item[1], str(item[0])),
-            )[:limit]
+                scores = self._bm25(query, scoring_texts)
+                ranked_ids = sorted(
+                    (
+                        (memory_id, score)
+                        for (memory_id, _text, *_), score in zip(
+                            raw_rows, scores, strict=True
+                        )
+                        if score > 0
+                    ),
+                    key=lambda item: (-item[1], str(item[0])),
+                )[:limit]
             if not ranked_ids:
                 return file_candidates
             score_by_id = dict(ranked_ids)
@@ -2010,6 +2016,14 @@ class PostgresMemoryRepository:
             unit.id: self._candidate(unit, document, keyword_score=score_by_id[unit.id])
             for unit, document in rows
         }
+        for candidate in candidates.values():
+            candidate.metadata.update(
+                keyword_index_mode=(
+                    "indexed_sql" if self._keyword_index_enabled else "legacy_python"
+                ),
+                keyword_candidate_count=len(raw_rows),
+                keyword_candidate_limit=self._keyword_candidate_limit,
+            )
         return sorted(
             [*candidates.values(), *file_candidates],
             key=lambda candidate: candidate.keyword_score or 0,
