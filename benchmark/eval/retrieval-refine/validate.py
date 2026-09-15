@@ -20,6 +20,7 @@ from retention_replay import replay
 
 
 ROOT = Path(__file__).parent
+CHANGE_ROOT = ROOT.parents[2] / "openspec/changes/separate-conversation-memory-from-knowledge-evidence"
 REQUIRED_RESULT_FIELDS = {
     "case_id",
     "source_types",
@@ -151,6 +152,11 @@ def main() -> None:
         stage["checksum"] == rehearsal["protected_checksum"]
         for stage in rehearsal["stages"]
     )
+    release = json.loads(
+        (CHANGE_ROOT / "release-acceptance.json").read_text(encoding="utf-8")
+    )
+    assert all(release["mandatory_gates"].values())
+    assert release["production_reads_enabled"] is False
     print(
         json.dumps(
             {
@@ -165,6 +171,7 @@ def main() -> None:
                 "failure_cases": len(failures["results"]),
                 "replay_cases": len(replay_cases),
                 "rehearsal_stages": len(rehearsal["stages"]),
+                "release_gates": len(release["mandatory_gates"]),
                 "digest": first,
             }
         )

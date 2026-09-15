@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "build_sha": "2018e3ec2fcff5f4ffa062a92ee9b144d462f59b",
+  "configuration_versions": {
+    "retrieval_fixture": "retrieval-refine-v1",
+    "failure_contract": "retrieval-failure-contract-v1",
+    "rollout_rehearsal": "retrieval-rollout-rehearsal-v1",
+    "selected_ranking": "safety_lane"
+  },
+  "policy_versions": {
+    "scope": 1,
+    "retention": 1,
+    "conversation_authority": "user-originated-only-v1"
+  },
+  "corpus_hashes": {
+    "retrieval": "fafca05d9bfde45e38e9f49f01f4d37b8fc38f82228901a08433b6d4bcaa7b2c",
+    "continuity": "78f2018efa4339d82f52191ced672d89e35f0a6b75d3fd957f4b59e50d292ce6",
+    "metadata": "66449bc1f64ae704e0c9652a92e6a829ae7642391e7d3b35024bb130a5ed0de1",
+    "replay": "dd660f68b52db3ddf12c851df280c65ff0297aa55bc6b3099e381c14cb0783d2",
+    "scale": "75c9617f8bf4908699a357a6bc70c079139bd808f19d83df8a71c9f5bd59c142"
+  },
+  "quality": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "document_recall_at_5": 1.0,
+    "metadata_recall_at_5": 1.0,
+    "passage_usefulness": 1.0,
+    "route_accuracy": 1.0,
+    "conversation_precision_at_3": 1.0,
+    "automatic_driving_document_recall": 1.0,
+    "conversation_to_document_leakage": 0.0,
+    "unsupported_answer_rate": 0.0,
+    "fabricated_citation_rate": 0.0
+  },
+  "provenance": {
+    "document_citation_precision": 1.0,
+    "assistant_derived_active_memories": 0,
+    "protected_checksum_continuity": true,
+    "source_groups_separate": true
+  },
+  "latency_ms": {
+    "route": {"p50": 0.0006, "p95": 0.0008, "p99": 0.0011},
+    "indexed_lookup": {"p50": 0.0016, "p95": 0.0021, "p99": 0.0076},
+    "fusion": {"p50": 0.0058, "p95": 0.0066, "p99": 0.0117},
+    "payload": {"p50": 0.0317, "p95": 0.0359, "p99": 0.0632}
+  },
+  "phase_outcomes": {
+    "early_return": 153,
+    "escalated_success": 38,
+    "degraded": 6,
+    "timeout": 3,
+    "failure_injection_cases": 10,
+    "task_leaks": 0
+  },
+  "resource_bounds": {
+    "scale_records": 30000,
+    "candidate_max": 31,
+    "candidate_limit": 300,
+    "peak_memory_mb": 5.605,
+    "payload_max_bytes": 179,
+    "payload_limit_bytes": 65536
+  },
+  "migration": {
+    "integration_tests_passed": 18,
+    "rehearsal_tests_passed": 6,
+    "rehearsal_stages": 10,
+    "remaining_scope_schemas": 0,
+    "remaining_scoped_graph_nodes": 0,
+    "dependency_queues_pending": 0
+  },
+  "rollback": {
+    "verified": true,
+    "read_enabled_after_rollback": false,
+    "indexed_parents_preserved": 2,
+    "indexed_chunks_preserved": 2,
+    "evidence": "benchmark/eval/retrieval-refine/rollout_rehearsal.json"
+  },
+  "test_evidence": {
+    "full_pytest_passed": 530,
+    "component_passed": 260,
+    "pi_passed": 129,
+    "integration_passed": 18,
+    "ruff": "passed",
+    "typecheck": "passed"
+  },
+  "exceptions": [
+    {
+      "severity": "non_blocking",
+      "code": "windows_asyncio_teardown_warning",
+      "scope": "test-only stalling SSE fixture"
+    },
+    {
+      "severity": "operational",
+      "code": "production_rollout_pending",
+      "scope": "task 10.7 requires pipeline and production authority"
+    }
+  ],
+  "mandatory_gates": {
+    "unit_contract_component": true,
+    "isolated_database": true,
+    "quality": true,
+    "zero_source_leakage": true,
+    "provenance": true,
+    "latency_and_payload": true,
+    "migration_completeness": true,
+    "rollback": true,
+    "recoverable_audit": true
+  },
+  "production_reads_enabled": false,
+  "status": "passed_for_bounded_rollout"
+}
