@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import importlib.util
 import json
 from pathlib import Path
 
@@ -35,6 +37,15 @@ def canonical_digest(value: object) -> str:
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def load_failure_runner():
+    path = ROOT / "failure_injection.py"
+    spec = importlib.util.spec_from_file_location("retrieval_failure_injection", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def main() -> None:
@@ -112,6 +123,11 @@ def main() -> None:
     assert (
         scale["response_budget"]["max_bytes"] <= scale["response_budget"]["limit_bytes"]
     )
+    failures = asyncio.run(load_failure_runner().run_matrix())
+    assert all(result["task_leaks"] == 0 for result in failures["results"])
+    assert {"empty", "degraded", "timeout", "unavailable", "fallback"} <= {
+        result["outcome"] for result in failures["results"]
+    }
     print(
         json.dumps(
             {
@@ -123,6 +139,7 @@ def main() -> None:
                 "honesty_cases": len(honesty_cases),
                 "ablation_variants": len(ablation["variants"]),
                 "scale_records": scale["fixture"]["records"],
+                "failure_cases": len(failures["results"]),
                 "digest": first,
             }
         )

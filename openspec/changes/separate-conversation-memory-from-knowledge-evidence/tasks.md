@@ -84,7 +84,7 @@
 - [x] 9.5 Add no-answer and weak-overlap cases; verify false positives, unsupported-answer rate, and fabricated citations do not exceed versioned tolerances.
 - [x] 9.6 Run ranking ablations for current retrieval, source isolation only, source-local fusion, hierarchical retrieval, and safety lane; record MRR/nDCG/Recall@k, unique-document coverage, latency, and selected configuration.
 - [x] 9.7 Build a >=30,000-record scale fixture with realistic source and length distributions; verify indexed candidate bounds, database plans, memory use, p50/p95/p99 per phase, deep outcome rates, and response budgets.
-- [ ] 9.8 Add deterministic failure injection for routing, embedding, lexical DB, graph, temporal, reranker, evidence load, MCP, and cancellation; verify truthful empty/degraded/timeout/unavailable/fallback outcomes and no task leaks.
+- [x] 9.8 Add deterministic failure injection for routing, embedding, lexical DB, graph, temporal, reranker, evidence load, MCP, and cancellation; verify truthful empty/degraded/timeout/unavailable/fallback outcomes and no task leaks.
 
 ## 10. Integrated acceptance and rollout evidence
 

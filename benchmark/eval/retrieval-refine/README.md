@@ -45,3 +45,8 @@ and the selected configuration.
 distribution and records bounded indexed candidates, the required live SQL-plan
 assertion, peak memory, per-phase p50/p95/p99, deep outcome counts, and maximum
 response bytes.
+
+`failure_injection.py` executes the versioned `failure_matrix.json` contract for
+routing, embedding, lexical storage, graph, temporal ranking, reranking,
+evidence loading, MCP, and cancellation. It records truthful typed outcomes and
+fallbacks and proves that all child tasks are cancelled and awaited.
