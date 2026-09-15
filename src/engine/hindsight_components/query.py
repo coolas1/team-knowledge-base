@@ -880,12 +880,6 @@ def build_query_service(
     repository = repository or PostgresMemoryRepository(
         keyword_index_enabled=settings.hindsight_keyword_index_enabled,
         keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
-        trace_candidate_limit=settings.hindsight_trace_candidate_limit,
-        evidence_sufficiency_min_margin=(
-            settings.hindsight_evidence_sufficiency_min_margin
-        ),
-        max_passages_per_document=settings.hindsight_max_passages_per_document,
-        max_memories_per_turn=settings.hindsight_max_memories_per_turn,
     )
     app_config = load_config(os.getenv("APP_CONFIG", "config/app.yaml"))
     memory_config = app_config.engine.memory

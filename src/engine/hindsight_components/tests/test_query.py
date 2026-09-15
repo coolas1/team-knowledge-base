@@ -287,3 +287,34 @@ async def test_build_query_service_accepts_repository(monkeypatch):
 
     service = build_query_service(repository=repo)
     assert service is not None
+
+
+def test_build_query_service_constructs_default_repository(monkeypatch):
+    """Runtime construction passes only repository-owned settings."""
+    from config.settings import settings
+    from src.engine.hindsight_components import query
+    from src.engine.hindsight_components.tests.fakes import FakeRepository
+
+    captured = {}
+
+    def repository_factory(*, keyword_index_enabled, keyword_candidate_limit):
+        captured.update(
+            keyword_index_enabled=keyword_index_enabled,
+            keyword_candidate_limit=keyword_candidate_limit,
+        )
+        return FakeRepository()
+
+    monkeypatch.setattr(query, "PostgresMemoryRepository", repository_factory)
+    monkeypatch.setattr(
+        query,
+        "HindsightService",
+        lambda repository, providers, options=None: object(),
+    )
+
+    service = query.build_query_service()
+
+    assert service is not None
+    assert captured == {
+        "keyword_index_enabled": settings.hindsight_keyword_index_enabled,
+        "keyword_candidate_limit": settings.hindsight_keyword_candidate_limit,
+    }
