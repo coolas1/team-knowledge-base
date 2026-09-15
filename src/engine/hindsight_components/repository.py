@@ -1689,10 +1689,17 @@ class PostgresMemoryRepository:
 
     @staticmethod
     def _state_from_row(row: HindsightDocumentState) -> DocumentMemoryState:
+        from .document_diagnostics import document_state_diagnostic
+
+        status, error_msg = document_state_diagnostic(
+            row.status,
+            row.error_msg,
+            row.stage_results,
+        )
         return DocumentMemoryState(
             document_id=str(row.document_id),
-            status=row.status,
-            error_msg=row.error_msg,
+            status=status,
+            error_msg=error_msg,
             memory_count=row.memory_count,
             link_count=row.link_count,
             updated_at=row.updated_at.isoformat() if row.updated_at else None,

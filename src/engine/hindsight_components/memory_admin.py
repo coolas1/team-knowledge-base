@@ -12,6 +12,7 @@ from src.engine.components.store.models import Document
 from src.engine.components.store.scope import scope_predicate
 from src.engine.scope import MemoryScope
 
+from .document_diagnostics import document_state_diagnostic
 from .models import (
     ConsolidationJob,
     ConversationMemorySource,
@@ -178,20 +179,25 @@ class PostgresMemoryAdminRepository:
             # They are document history, not actionable diagnostic tasks.
             if state.status == "indexed" and not state.stage_results:
                 continue
+            diagnostic_status, diagnostic_error = document_state_diagnostic(
+                state.status,
+                state.error_msg,
+                state.stage_results,
+            )
             item = output.setdefault(
                 str(state.operation_id),
                 OperationView(
                     id=str(state.operation_id),
-                    status=state.status,
-                    stages={"retain": state.status},
+                    status=diagnostic_status,
+                    stages={"retain": diagnostic_status},
                     kind="document",
                     subject=document.title,
                     document_id=str(state.document_id),
                 ),
             )
             item.stages.update(dict(state.stage_results or {}))
-            item.status = self._merge_status(item.status, state.status)
-            item.error = item.error or state.error_msg
+            item.status = self._merge_status(item.status, diagnostic_status)
+            item.error = item.error or diagnostic_error
         for job in consolidation:
             diagnostic_status, diagnostic_error = _consolidation_diagnostic(
                 job.status,
