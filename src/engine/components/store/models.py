@@ -75,6 +75,9 @@ class Document(BankOwned, Base):
         Text, nullable=False, default="pending", server_default="pending"
     )  # pending → processing → indexed / failed
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processing_generation: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
     # ── 版本链（纵向迭代管理）───────────────────────────────────
     # 同一逻辑文档的多个版本共享 version_group；每行是组内一个具体版本。

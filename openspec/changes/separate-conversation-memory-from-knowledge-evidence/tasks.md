@@ -48,7 +48,7 @@
 ## 6. Hierarchical document retrieval
 
 - [x] 6.1 Add a revision-aware document retrieval record containing independent title, filename, overview, tags, entities, field tokens, embedding, model identity, and generation state; verify schema creation, uniqueness, current-version fencing, and scope predicates.
-- [ ] 6.2 Dual-write the document record on upload, edit, reingest, retry, and summary/metadata changes; verify every successful current-document path produces one matching retrieval record and failed/stale revisions cannot publish.
+- [x] 6.2 Dual-write the document record on upload, edit, reingest, retry, and summary/metadata changes; verify every successful current-document path produces one matching retrieval record and failed/stale revisions cannot publish.
 - [x] 6.3 Change new chunk embeddings to use original chunk text while retaining the existing user-visible text; verify embedding inputs no longer repeat document metadata and reading/citation behavior is unchanged.
 - [x] 6.4 Implement bounded document lexical/dense retrieval and field-aware fusion; verify metadata-only, noisy-OCR, filename, tag/entity, and ordinary body-topic cases select the expected parent documents.
 - [x] 6.5 Search and rerank original chunks only inside selected parents, enforce the configured per-document passage cap, and expose parent and passage scores; verify implicit-topic chunks are returned under the correct document.

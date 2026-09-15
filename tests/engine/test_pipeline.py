@@ -384,8 +384,10 @@ class _PipelineSession:
     async def __aexit__(self, *_args):
         return None
 
-    async def get(self, _model, key):
-        return self.docs.get(key)
+    async def get(self, model, key, **_kwargs):
+        from src.engine.components.store.models import Document
+
+        return self.docs.get(key) if model is Document else None
 
     async def execute(self, statement):
         self.statements.append(statement)
@@ -394,6 +396,9 @@ class _PipelineSession:
         return SimpleNamespace(scalar_one_or_none=lambda: None)
 
     async def commit(self):
+        return None
+
+    async def rollback(self):
         return None
 
     def add(self, obj):

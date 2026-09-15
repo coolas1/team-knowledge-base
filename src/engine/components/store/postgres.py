@@ -32,7 +32,8 @@ async def init_db() -> None:
                 "ADD COLUMN IF NOT EXISTS version_group UUID, "
                 "ADD COLUMN IF NOT EXISTS version_number INTEGER NOT NULL DEFAULT 1, "
                 "ADD COLUMN IF NOT EXISTS version_of UUID, "
-                "ADD COLUMN IF NOT EXISTS is_current BOOLEAN NOT NULL DEFAULT true"
+                "ADD COLUMN IF NOT EXISTS is_current BOOLEAN NOT NULL DEFAULT true, "
+                "ADD COLUMN IF NOT EXISTS processing_generation UUID"
             )
         )
         await conn.execute(

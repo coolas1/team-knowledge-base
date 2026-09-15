@@ -1697,6 +1697,7 @@ async def test_document_access_and_background_chunk_ownership(
 ):
     from types import SimpleNamespace
     from src.engine.graphrag import backend as backend_module
+    from src.engine.graphrag import pipeline as pipeline_module
     from src.engine.graphrag.backend import GraphRAGBackend
     from src.engine.graphrag.pipeline import Pipeline
     from src.engine.components.store.models import Chunk, MemoryBank
@@ -1877,6 +1878,9 @@ async def test_document_access_and_background_chunk_ownership(
 
     # The background pipeline has no request scope: ownership must come from DB.
     pipeline = Pipeline(SimpleNamespace(), analyzer=SimpleNamespace())
+    monkeypatch.setattr(pipeline_module, "async_session_factory", sessions)
+    fence = await pipeline._begin_processing(ids[1])
+    assert fence is not None
     async with sessions() as session:
         await pipeline._persist_chunks(
             session,
@@ -1885,15 +1889,18 @@ async def test_document_access_and_background_chunk_ownership(
             raw_text="same content",
             content_hash="same-hash",
             overview="",
+            filename="same.md",
+            entities=[],
+            document_embedding=[0.1] * 768,
             chunks=[SimpleNamespace(index=0, text="same content", token_count=2)],
             embeddings=[[0.1] * 768],
+            fence=fence,
         )
     async with sessions() as session:
         chunk = (await session.execute(select(Chunk))).scalar_one()
         assert chunk.bank_id == "B"
         assert chunk.tags == ["user:1"]
         assert (await session.get(Document, ids[2])).raw_text == "same content"
-    from src.engine.graphrag import pipeline as pipeline_module
     from src.engine.hindsight_components.hook import HindsightRetainHook
     from src.engine.hindsight_components.service import HindsightService
 
