@@ -6,16 +6,16 @@ backed by Postgres+pgvector and Neo4j. Hindsight's memory features are
 *capability flags* on the single engine, not a separate stack.
 
 ```
-browser ──► SPA (src/tkb/client)
+browser ──► SPA (src/frontend/webapp/client)
    │  /api/*                     /mcp
    ▼                               ▼
-tkb BFF (src/tkb/server)      MCP server (src/agent/tkb/mcp)
+tkb BFF (src/frontend/webapp/server)   MCP server (src/agent/tkb/mcp)
    │  in-process                    │  in-process
    ▼                                ▼
 engine (src/engine)  ◄──────────────┘
    └─ GraphRAGBackend (+ optional memory capabilities)
 
-pi-agent sidecar (src/tkb/agent, TS) ──MCP──► backend:8000/mcp
+pi-agent sidecar (src/extensions/pi-agent, TS) ──MCP──► backend:8000/mcp
 BFF /api/agent/* ──HTTP proxy──► pi-agent:8010
 ```
 
@@ -38,12 +38,13 @@ BFF /api/agent/* ──HTTP proxy──► pi-agent:8010
 - **`src/plugin`** - stateless agent-facing seam. `PluginLoader` reads
   `plugin.yaml` + `skills/` + `hooks/`; `HookPolicy` evaluates hook YAML as
   data. One plugin (`tkb`), selected by `plugin.impl`.
-- **`src/tkb`** - the app. `server/` is the FastAPI BFF (all API under `/api`,
-  MCP mounted at `/mcp`, SPA served from `client/dist`); `client/` is the
-  React SPA; `agent/` is the pi-agent sidecar. `server/deps.py:startup()` is
-  the single wiring path: `init_db` -> `build_engine` -> optional query
-  service -> load plugin -> `build_llm` -> MCP `set_*` -> optional graph
-  worker.
+- **`src/frontend`** - the webapp. `webapp/server/` is the FastAPI BFF (all
+  API under `/api`, MCP mounted at `/mcp`, SPA served from
+  `webapp/client/dist`); `webapp/client/` is the React SPA. The pi-agent
+  sidecar lives separately in `src/extensions/pi-agent`.
+  `webapp/server/deps.py:startup()` is the single wiring path: `init_db` ->
+  `build_engine` -> optional query service -> load plugin -> `build_llm` ->
+  MCP `set_*` -> optional graph worker.
 
 ## Memory capabilities
 
@@ -65,7 +66,7 @@ The worker additionally honors the `HINDSIGHT_GRAPH_WORKER_*` env kill switch.
 
 | Surface | Path | Backed by |
 |---|---|---|
-| SPA | `/` (fallback to `index.html`) | `src/tkb/client` build |
+| SPA | `/` (fallback to `index.html`) | `src/frontend/webapp/client` build |
 | REST API | `/api/documents`, `/api/search`, `/api/graph/*`, `/api/config`, `/api/agent/*` | engine in-process; agent proxy -> pi-agent |
 | MCP | `/mcp` | `src/agent/tkb/mcp` (single tool surface; hook-guarded `remove_document`) |
 | Health | `/health` | - |

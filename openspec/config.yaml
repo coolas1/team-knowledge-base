@@ -1,32 +1,42 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Stack: Python 3.12+ (async-first, pydantic-settings, asyncpg/SQLAlchemy async),
+  React 19 + TypeScript + Vite SPA, Node pi-agent sidecar, Postgres+pgvector,
+  Neo4j, docker compose / podman. Python tooling uses uv.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Modules: src/engine (GraphRAG storage/retrieval + CLI), src/agent (skills +
+  LLM orchestration), src/frontend (FastAPI BFF + SPA),
+  src/extensions/tool-runner + src/extensions/pi-agent. Each module has its
+  own CLAUDE.md/README.
 
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+  Commits: Conventional Commits, scoped to the module touched —
+  type(scope): subject. Scopes in use: engine agent frontend webapp reranker
+  compose config infra. Subject ≤50 chars, imperative, no trailing period.
+
+  Workflow: two long-lived branches — main (stable, production LAN pipeline
+  deploys it, :8000) and develop (integration branch, staging pipeline deploys
+  it, :8001). Feature branches off develop carry the spec delta plus the code
+  in one PR (template: .github/PULL_REQUEST_TEMPLATE.md). After merge, the
+  maintainer archives the change (fold delta into openspec/specs/, move the
+  change into openspec/changes/archive/) with a direct push to develop.
+  Releases are maintainer-owned: merge develop into main, bump VERSION +
+  pyproject.toml, tag v*. Run `uv run ruff check` and `uv run pytest` before
+  pushing; SPA tests via `cd src/frontend/webapp/client && npm test`.
+
+  Config prose lives in docs/config-reference.md (Chinese user manuals live
+  in docs/; CLAUDE.md is the canonical English dev doc).
+
+rules:
+  proposal:
+    - "Keep it concise: Why / What Changes / Capabilities / Impact."
+    - The Capabilities section must honestly reflect whether spec deltas are
+      included (this repo often uses skip_specs for docs/tooling-only
+      changes — say so explicitly).
+    - Name concrete files and paths that will be touched.
+  tasks:
+    - One verifiable outcome per checkbox; group related tasks under numbered
+      section headers.
+    - Every task states its own verification (command to run or grep to
+      check), phrased so done/not-done is unambiguous.
+    - "Validation comes last: lint + tests before pushing, then the PR task."

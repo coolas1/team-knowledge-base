@@ -45,6 +45,33 @@ def _host_service_url(url: str) -> str:
     )
 
 
+@pytest.fixture(scope="session")
+def _uploads_tmp_root(tmp_path_factory):
+    """Session-scoped temp root for uploaded document originals."""
+    return tmp_path_factory.mktemp("uploads")
+
+
+@pytest.fixture(autouse=True)
+def _uploads_in_tmp_dir(request, _uploads_tmp_root, monkeypatch):
+    """Point upload-original storage at a temp dir for every test.
+
+    src.engine.graphrag.backend binds UPLOAD_DIR at import time but resolves
+    it per call on the write paths, and the PPT generator reads
+    settings.uploads_dir per call — patch both so tests never write
+    uploads/<uuid>/... into the working tree (pipeline gate clones were
+    accumulating one per run). The default stays a relative "uploads/" for
+    non-compose runs; only tests are redirected. Tests about the binding
+    itself opt out with @pytest.mark.no_uploads_redirect.
+    """
+    if request.node.get_closest_marker("no_uploads_redirect"):
+        return
+    from config.settings import settings
+    from src.engine.graphrag import backend
+
+    monkeypatch.setattr(backend, "UPLOAD_DIR", _uploads_tmp_root)
+    monkeypatch.setattr(settings, "uploads_dir", str(_uploads_tmp_root))
+
+
 @pytest.fixture
 def integration_host_config(monkeypatch):
     """Make host-run integration tests use host-reachable service URLs."""

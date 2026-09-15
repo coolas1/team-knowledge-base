@@ -1,6 +1,6 @@
 [project]
 name = "team-knowledge-base"
-version = "0.3.0"
+version = "0.3.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -41,6 +41,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: requires live Postgres+Neo4j+Ollama (set RUN_INTEGRATION=1)",
+    "no_uploads_redirect: keep the real backend.UPLOAD_DIR binding (binding-behavior tests)",
 ]
 
 [tool.ruff]

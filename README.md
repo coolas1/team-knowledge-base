@@ -1,123 +1,68 @@
 # Team Knowledge Base
 
-A GraphRAG-powered knowledge base for teams. Ingest documents (PDF, DOCX, PPTX,
-Markdown, CSV, images) and the engine builds a **three-layer knowledge graph** -
-entities, relations, and text chunks - indexed for semantic search with
-reranking. Query it through a CLI, an MCP server, or a web UI. Deployed as one
-app, with optional memory capabilities (reflective search, memory graph).
+面向团队的 GraphRAG 知识库:文档入库后构建**三层知识图谱**(实体 → 关系 →
+文本块),经 pgvector 语义检索与可选 rerank,通过 Web UI、MCP 服务或 CLI
+查询;可选记忆能力(反思式检索、记忆图谱)。
 
-## Features
+## 功能
 
-- **GraphRAG retrieval** - vector search (Postgres + pgvector) over a knowledge
-  graph (Neo4j) of extracted entities and relations.
-- **Multi-format ingestion** - PDF, DOCX, PPTX, Markdown, CSV, and image (OCR) extractors.
-- **Pluggable reranker** - external `/v1/rerank` API (default), a local
-  CrossEncoder (optional, torch), or none.
-- **Memory capabilities** - toggleable via `engine.memory.*` in
-  `config/app.yaml`: retain pipeline, reflective query, Neo4j memory-graph
-  worker. Off by default; on = the full reflective stack.
-- **Four interfaces** - web UI (SPA + BFF), MCP server (mounted at `/mcp`),
-  CLI (`src.engine.cli`), and a pi-agent chat sidecar.
-- **Single-app deployment** - one backend container + pi-agent sidecar +
-  Postgres/Neo4j (Ollama optional).
+- **GraphRAG 检索** — 基于 Postgres + pgvector 的向量检索,叠加 Neo4j
+  实体/关系图谱。
+- **多格式入库** — Web 上传支持 Markdown / TXT / PDF / DOCX / PPTX 及
+  常见图片格式(OCR)。
+- **可插拔 reranker** — 外部 `/v1/rerank` API、本地 CrossEncoder(需
+  `uv sync --extra reranker`)或关闭。
+- **记忆能力** — `config/app.yaml` 的 `engine.memory.*` 开关:留存管线、
+  反思式查询、Neo4j 记忆图谱 worker。
+- **四个入口** — Web UI(SPA + BFF)、MCP 服务(挂载于 `/mcp`)、CLI
+  (`src.engine.cli`)、对话 Agent(Pi Agent sidecar)。
+- **Agent 文档生成** — 对话中可直接生成可下载的 Word / PDF / PowerPoint
+  文件(PPT 同时附带可编辑的 Slidev Markdown 源码)。
 
-## Agent document generation
+## 快速开始(本地开发)
 
-The conversation Agent can generate downloadable Word (`.docx`), PDF, and
-PowerPoint (`.pptx`) files. Ask for the desired format and content in the chat;
-the Agent retrieves knowledge when needed, calls the `generate_document` MCP
-tool, and returns a link under `/api/artifacts/{id}/download`.
-
-PowerPoint requests also produce an editable Slidev Markdown file. Use `---` on
-its own line to separate slides, then run the downloaded source with Slidev if
-you want to restyle or present it. Generated files are stored in the
-`artifactsdata` Compose volume so Webapp container rebuilds do not remove them.
-
-## Installation
-
-### Prerequisites
-
-- Python ≥ 3.12 and [`uv`](https://docs.astral.sh/uv/)
-- Node.js (for the SPA and pi-agent)
-- Docker or Podman (for backing services)
-
-### Steps
-
-1. Clone and install Python dependencies:
-   ```bash
-   git clone https://github.com/Cried1/team-knowledge-base.git
-   cd team-knowledge-base
-   uv sync                       # add --extra reranker only for a local torch reranker
-   ```
-2. Configure environment:
-   ```bash
-   cp .env.example .env          # then edit, especially EMBEDDING_BASE_URL and LLM_BASE_URL
-   ```
-3. Start backing services (Postgres+pgvector, Neo4j):
-   ```bash
-   docker compose up -d          # team-kb-postgres :5433, team-kb-neo4j :7687/:7474
-   docker compose ps             # wait until both are "healthy"
-   ```
-
-## Usage
-
-### Run the full stack containerized
+前置:Python ≥ 3.12 与 [`uv`](https://docs.astral.sh/uv/)、Node.js、
+Docker 或 Podman。
 
 ```bash
-docker compose up -d --build
-docker compose logs -f backend
-open http://localhost:8000      # SPA + /api/* + /mcp + /health
+git clone https://github.com/coolas1/team-knowledge-base.git
+cd team-knowledge-base
+uv sync                        # 本地 torch reranker 才需要 --extra reranker
+cp .env.example .env           # 编辑 .env,至少设置 EMBEDDING_BASE_URL 与 LLM_BASE_URL
+docker compose up -d           # 后备服务:Postgres+pgvector(:5433)、Neo4j(:7687/:7474)
 ```
 
-The backend (BFF + engine + plugin, one process) runs on :8000; the pi-agent
-sidecar on :8010 (chat with it via `node src/extensions/pi-agent/scripts/chat.mjs`).
-Ollama is opt-in: append `--profile ollama` to run a bundled Ollama, otherwise
-the services use the LLM/embedding endpoints from `.env`. The reranker reuses
-your host HuggingFace cache (`BAAI/bge-reranker-v2-m3` must be cached) via the
-compose volume mount.
-
-### Run the app on the host
+启动应用:
 
 ```bash
-# App server: BFF + engine + plugin (port 8000, mounts /mcp)
-uv run uvicorn src.frontend.webapp.server.app:app --reload
-
-# Engine CLI
-uv run python -m src.engine.cli recall --query "acme"
-
-# SPA (port 5173, proxies /api -> :8000)
-cd src/tkb/client && npm install && npm run dev
-
-# pi-agent sidecar (port 8010)
-cd src/tkb/agent && npm ci && npm run build && npm start
+uv run uvicorn src.frontend.webapp.server.app:app --reload   # BFF + 引擎,:8000,含 /mcp
+cd src/frontend/webapp/client && npm install && npm run dev   # SPA,:5173,代理 /api → :8000
+uv run python -m src.engine.cli recall --query "示例查询"     # CLI
 ```
 
-### Toggle memory capabilities
+配置项说明见 [`docs/config-reference.md`](docs/config-reference.md);
+容器化完整启动步骤见 [`docs/start.md`](docs/start.md)。
 
-`config/app.yaml`:
+## 访问部署(局域网)
 
-```yaml
-engine:
-  memory:
-    enabled: true       # retain + reflective query + memory MCP tools
-    graph_worker: true  # Neo4j memory-graph projection worker
-```
+LAN 部署由 `cicd/` 的两条独立流水线管理:**生产**跟随 `main`(:8000),
+**预发**跟随 `develop`(:8001),每 5 分钟轮询、lint + 测试通过后自动
+SHA 标签镜像并重新部署。请以客户端身份访问已发布端口,不要手工
+`docker/podman compose up` 操作流水线的 compose 项目;流水线细节与回滚
+手册见 [`cicd/README.md`](cicd/README.md)。
 
-### Tests
+## 使用手册
 
-```bash
-uv run pytest                                # unit + contract + BFF tests
-cd src/tkb/client && npm test                # SPA api-client tests
-cd src/tkb/agent && npm run check            # pi-agent typecheck + tests
-RUN_INTEGRATION=1 uv run pytest              # graphrag + MCP vs live services
-```
+- [快速启动(容器化)](docs/start.md) — 完整启动步骤、模型准备、常用入口
+- [配置参考](docs/config-reference.md) — `.env` 与 `config/app.yaml` 全部配置项
+- [架构概览](docs/architecture.md)(English)
+- [图片/PPT 生成运维](docs/ark-image-ppt.md)
+- [深度检索运维](docs/deep-search-operations.md)(English)
 
-## Contributing
+## 参与贡献
 
-Development conventions, commands, and architecture notes live in
-[`CLAUDE.md`](CLAUDE.md) (mirrored to Codex and other harnesses via the tracked
-`AGENTS.md` symlink). Quick rules:
-
-- Lint and test before pushing: `uv run ruff check && uv run pytest`.
-- Follow Conventional Commits, scoped to the module touched - for example
-  `feat(engine): ...`, `fix(plugin): ...`, `refactor(tkb): ...`.
+从 `develop` 切出特性分支,PR 合回 `develop`(PR 描述请使用
+[模板](.github/PULL_REQUEST_TEMPLATE.md));推送前跑
+`uv run ruff check && uv run pytest`。`develop` 由维护者定期合入 `main`
+并发版(版本号在 `VERSION` 与 `pyproject.toml`)。完整开发约定、命令与
+架构说明见 [`CLAUDE.md`](CLAUDE.md)。

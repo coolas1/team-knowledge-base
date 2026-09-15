@@ -27,7 +27,7 @@ The system SHALL bound recalled memory context by configured result and characte
 - **THEN** retention excludes the injected block and does not create an authoritative duplicate of that context
 
 ### Requirement: Automatic post-response retention
-The system SHALL evaluate each successfully completed visible user/assistant turn for durable-memory eligibility without requiring a model tool call. It SHALL retain user-originated durable facts, preferences, decisions, commitments, and state with stable provenance, but MUST NOT retain ordinary assistant summaries, tool results, document excerpts, transient discussion, or unsupported generated claims as authoritative conversation memory. Cancelled or failed turns MUST NOT be retained.
+The system SHALL evaluate each successfully completed visible user/assistant turn for durable-memory eligibility without requiring a model tool call. It SHALL retain user-originated durable facts, preferences, decisions, commitments, and state with stable provenance, but MUST NOT retain ordinary assistant summaries, tool results, document excerpts, transient discussion, or unsupported generated claims as authoritative conversation memory. Cancelled or failed turns MUST NOT be retained. Retained turn content SHALL remain bounded by the configured maximum (default 100,000 characters), with oversized eligible content truncated using an explicit marker.
 
 #### Scenario: Successful response completes
 - **WHEN** a completed turn contains a stable user fact, preference, decision, commitment, or state that passes the retention policy
@@ -40,6 +40,10 @@ The system SHALL evaluate each successfully completed visible user/assistant tur
 #### Scenario: Response is cancelled or fails
 - **WHEN** response generation is cancelled or terminates with an error before completion
 - **THEN** the system does not retain an incomplete assistant turn
+
+#### Scenario: Oversized turn is retained bounded
+- **WHEN** a completed turn contains eligible durable content far exceeding the configured maximum
+- **THEN** the retained memory contains at most the configured maximum of text, ends with a truncation marker, and is retained exactly once
 
 ## ADDED Requirements
 

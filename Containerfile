@@ -128,6 +128,13 @@ COPY VERSION ./
 # Source commit this image was built from (the pipeline passes SHORT_SHA;
 # empty = unknown, which /version reports as commit: null).
 ARG GIT_COMMIT=""
+# buildah's classic builder (podman 4.9) caches ENV-from-ARG layers WITHOUT
+# keying on the arg value: when every earlier layer is a cache hit (e.g. a
+# docs/pipeline-only commit), the ENV below would keep the PREVIOUS build's
+# GIT_COMMIT baked into the new tag. RUN layers are keyed on the arg value
+# correctly, so this line forces the ENV to recompute whenever the commit
+# changes. /app/.git-commit is a harmless side artifact.
+RUN echo "$GIT_COMMIT" > /app/.git-commit
 ENV PYTHONPATH=/app \
     SPA_DIST=/app/src/frontend/webapp/client/dist \
     PYTHONUNBUFFERED=1 \

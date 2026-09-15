@@ -1,23 +1,13 @@
+# 各配置项详细说明:docs/config-reference.md
 engine:
   impl: graphrag
   config: config/engine/graphrag
-  # tkb_* 工具负载上限（经 .env / config.settings 提供，env 前缀 ENGINE_TOOLS_，
-  # 本节仅作文档；Rest API 不受限，只有 MCP 工具层读取这些值）：
-  #   window_chars        tkb_get_document 单次正文窗口（默认 8000 字符）
-  #   list_page_max       tkb_list_documents page_size 封顶（默认 50）
-  #   deep_excerpt_chars  deep 检索单条证据摘录上限（默认 2000 字符）
-  #   deep_total_chars    deep 检索证据总预算（默认 12000 字符）
-  #   entities_max        检索响应 related_entities 条数上限（默认 10）
-  #   response_max_chars  检索工具整个序列化响应的字符预算
-  #                       （默认 24000；超出时先丢弃排名最低的 sources，
-  #                       并在 trace 中以 payload_trimmed/payload_kept/
-  #                       payload_dropped 报告裁剪）
+  # tkb_* 工具负载上限:env 前缀 ENGINE_TOOLS_(Rest API 不受限,仅 MCP 工具层)。
   ingest:
     vector_only: true
     chunk_concurrency: 4
     doc_concurrency: 2
-    # 模型端点瞬时失败（超时/连接错误/HTTP 429/5xx）的有界重试：
-    # 指数退避 + 抖动，单次退避上限 30s。llm_retries=0 关闭重试。
+    # 模型端点瞬时失败的有界重试(指数退避+抖动,上限 30s;retries=0 关闭)。
     llm_retries: 3
     llm_backoff_base_seconds: 2
   memory:

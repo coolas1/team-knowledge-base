@@ -4,11 +4,16 @@ A GraphRAG-powered team knowledge base: ingest documents into a three-layer
 knowledge graph (entities → relations → chunks), retrieve via semantic search
 with reranking, and query through a CLI, an MCP server, or a web UI.
 
-Three independently switchable modules live under `src/`:
+Three independently switchable modules live under `src/`, plus two extensions
+under `src/extensions/`:
 
 - **engine** — GraphRAG storage/retrieval (Postgres+pgvector, Neo4j), CLI.
 - **agent** — plugin-based skills + LLM orchestration (see `src/agent/CLAUDE.md`).
 - **frontend** — FastAPI BFF + React SPA (see `src/frontend/CLAUDE.md`).
+- **extensions/tool-runner** — sandboxed tool-job builder/gateway for
+  agent-authored tools (see `src/extensions/tool-runner/README.md`).
+- **extensions/pi-agent** — the pi-agent chat sidecar (Node; see
+  `src/extensions/pi-agent/README.md`).
 
 ## Commands
 
@@ -30,12 +35,14 @@ Run from the repo root unless noted. Python tooling uses `uv`.
 
 Two long-lived branches on `origin`:
 
-- `main` — the stable, versioned branch the LAN pipeline watches and deploys.
-  Nothing lands here except via a maintainer-owned release.
-- `develop` — the integration branch every collaborator branches from.
+- `main` — the stable, versioned branch the production LAN pipeline watches
+  and deploys. Nothing lands here except via a maintainer-owned release.
+- `develop` — the integration branch every collaborator branches from; the
+  staging LAN pipeline deploys it continuously.
 
 A change is a feature branch off `develop`; its PR carries the spec delta plus
-the code. After a PR merges to `develop`, the maintainer archives the change —
+the code, described with `.github/PULL_REQUEST_TEMPLATE.md`. After a PR merges
+to `develop`, the maintainer archives the change —
 fold the delta into `specs/` and move the change into `archive/` — with a direct
 push to `develop`. Archive-after-merge is the maintainer's job, once per merge,
 never the PR author's.
@@ -73,12 +80,15 @@ git push origin develop
 ### Day-to-day
 
 1. Run `uv run ruff check` and `uv run pytest` before pushing.
-2. **The LAN deployment is pipeline-managed** (`cicd/`): a systemd user timer
-   polls `origin/main` every 5 min, gates on lint + tests, builds SHA-tagged
-   images, and redeploys via `podman compose`. Do NOT run
-   `docker/podman compose up` by hand — the pipeline is the sole operator of
-   the `team-kb` compose project; use the published ports (5433/7687/8000)
-   as a client instead. Runbook, rollback, and install steps: `cicd/README.md`.
+2. **The LAN deployment is pipeline-managed** (`cicd/`): two independent
+   pipeline instances — a systemd user timer each — poll `origin/main`
+   (production, :8000) and `origin/develop` (staging, :8001) every 5 min,
+   gate on lint + tests, build SHA-tagged images, and redeploy their own
+   stack via `podman compose`. Do NOT run `docker/podman compose up` by
+   hand — each pipeline is the sole operator of its compose project
+   (`team-kb` / `team-kb-dev`); use the published ports as a client instead
+   (production 5433/7687/8000, staging 5434/7688/8001). Runbook, rollback,
+   and install steps: `cicd/README.md`.
 3. Local dev backing services (`docker compose up -d` in the dev checkout)
    are separate from the LAN deployment; copy `.env.example` to `.env` and
    set `EMBEDDING_BASE_URL` and `LLM_BASE_URL` first.
@@ -104,12 +114,19 @@ git push origin develop
 src/
 ├── engine/        # GraphRAG engine — see src/engine/CLAUDE.md
 ├── agent/         # skills + LLM orchestration — see src/agent/CLAUDE.md
-└── frontend/      # BFF + SPA — see src/frontend/CLAUDE.md
+├── frontend/      # BFF + SPA — see src/frontend/CLAUDE.md
+└── extensions/    # tool-runner + pi-agent — see src/extensions/*/README.md
 ```
 
 Backing services (`docker-compose.yml`): Postgres+pgvector (vectors, chunks) and
 Neo4j (entity/relation graph). Ollama is opt-in via the compose `ollama`
 profile. Config flows through `.env` → `config/settings.py` (pydantic-settings).
+
+User-facing manuals live in `docs/` (the README's appendix): `start.md`
+(quick start), `config-reference.md` (the single home for `.env` / `app.yaml`
+prose), `architecture.md`, `ark-image-ppt.md`, `deep-search-operations.md`.
+Historical design/validation records live in
+`openspec/changes/archive/<change>/docs/`.
 
 ## Validity check
 

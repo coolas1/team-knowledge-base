@@ -30,7 +30,15 @@ while IFS= read -r line; do
 done < "$home/deploy.env"
 
 if [[ ! -d "$home/repo/.git" ]]; then
-  git clone --branch main \
+  # Initial clone: the branch this stack watches comes from its own
+  # deploy.env (TKB_CICD_BRANCH, default main) — read without exporting,
+  # same discipline as the proxy keys above. pipeline.sh keeps the clone
+  # synced to that branch afterwards.
+  branch=""
+  if [[ -f "$home/deploy.env" ]]; then
+    branch="$(grep -E '^TKB_CICD_BRANCH=' "$home/deploy.env" | tail -1 | cut -d= -f2- || true)"
+  fi
+  git clone --branch "${branch:-main}" \
     https://github.com/coolas1/team-knowledge-base.git "$home/repo"
 fi
 
