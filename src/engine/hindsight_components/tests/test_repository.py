@@ -132,6 +132,7 @@ def test_lifecycle_values_validate_and_normalize_metadata() -> None:
             "expires_at": "2027-01-01T00:00:00Z",
             "lifecycle_state": "superseded",
             "superseded_by": str(superseded_by),
+            "lifecycle_key": "User:Response-Style",
         }
     )
 
@@ -145,6 +146,7 @@ def test_lifecycle_values_validate_and_normalize_metadata() -> None:
     assert values["expires_at"].isoformat() == "2027-01-01T00:00:00+00:00"
     assert values["lifecycle_state"] == "superseded"
     assert values["superseded_by"] == superseded_by
+    assert values["lifecycle_key"] == "user:response-style"
 
 
 @pytest.mark.parametrize(
@@ -155,6 +157,7 @@ def test_lifecycle_values_validate_and_normalize_metadata() -> None:
         {"expires_at": "2027-01-01T00:00:00"},
         {"lifecycle_state": "active"},
         {"superseded_by": "not-a-uuid"},
+        {"lifecycle_key": " "},
     ],
 )
 def test_lifecycle_values_reject_invalid_metadata(metadata) -> None:

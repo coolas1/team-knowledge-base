@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Text, bindparam, case, delete, func, or_, select, text
+from sqlalchemy import Text, bindparam, case, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -993,10 +993,13 @@ class PostgresMemoryRepository:
                 },
             )
             if row.id not in retained_ids and self._deduplicates(row):
+                await self._lock_memory_lifecycle(session)
                 duplicate_of = await self._find_conversation_duplicate(session, row)
                 if duplicate_of is not None:
                     row.lifecycle_state = "retired"
                     row.duplicate_of = duplicate_of
+                else:
+                    await self._supersede_mutable_memory(session, row)
             if row.id in retained_ids:
                 existing = await session.get(MemoryUnit, row.id)
                 preserved = dict(existing.metadata_json or {})
@@ -1034,6 +1037,7 @@ class PostgresMemoryRepository:
                     "expires_at",
                     "lifecycle_state",
                     "superseded_by",
+                    "lifecycle_key",
                     "content_fingerprint",
                     "duplicate_of",
                     "metadata_json",
@@ -1151,12 +1155,6 @@ class PostgresMemoryRepository:
     async def _find_conversation_duplicate(
         self, session: AsyncSession, row: MemoryUnit
     ) -> uuid.UUID | None:
-        # One bank-level lock closes the race between different canonical
-        # fingerprints that are nevertheless semantic paraphrases.
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-            {"key": f"tkb-conversation-dedup:{self.scope.bank_id}"},
-        )
         conditions = (
             self._memory_scope(),
             MemoryUnit.id != row.id,
@@ -1193,6 +1191,39 @@ class PostgresMemoryRepository:
             if value is not None and 1.0 - float(value) >= 0.94:
                 return memory_id
         return None
+
+    async def _lock_memory_lifecycle(self, session: AsyncSession) -> None:
+        # One bank-level lock closes races between semantic paraphrases and
+        # changed mutable values that have different canonical fingerprints.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"tkb-conversation-dedup:{self.scope.bank_id}"},
+        )
+
+    async def _supersede_mutable_memory(
+        self, session: AsyncSession, row: MemoryUnit
+    ) -> None:
+        metadata = row.metadata_json or {}
+        retained_types = set(metadata.get("retained_types") or ())
+        if not row.lifecycle_key or not retained_types.intersection(
+            {"preference", "state"}
+        ):
+            return
+        await session.execute(
+            update(MemoryUnit)
+            .where(
+                self._memory_scope(),
+                MemoryUnit.id != row.id,
+                MemoryUnit.state == "active",
+                MemoryUnit.lifecycle_state == "current",
+                MemoryUnit.is_source_chunk.is_(False),
+                MemoryUnit.memory_type == row.memory_type,
+                MemoryUnit.origin == row.origin,
+                MemoryUnit.lifecycle_key == row.lifecycle_key,
+                MemoryUnit.metadata_json["source_type"].astext == "conversation",
+            )
+            .values(lifecycle_state="superseded", superseded_by=row.id)
+        )
 
     @staticmethod
     def _lifecycle_values(draft) -> dict[str, Any]:
@@ -1234,6 +1265,11 @@ class PostgresMemoryRepository:
         superseded_by = metadata.get("superseded_by")
         if superseded_by is not None:
             superseded_by = uuid.UUID(str(superseded_by))
+        lifecycle_key = metadata.get("lifecycle_key")
+        if lifecycle_key is not None:
+            lifecycle_key = str(lifecycle_key).strip().casefold()
+            if not lifecycle_key or len(lifecycle_key) > 200:
+                raise ValueError("invalid memory lifecycle_key")
         return {
             "origin": origin,
             "authority": authority,
@@ -1243,6 +1279,7 @@ class PostgresMemoryRepository:
             "expires_at": expires_at,
             "lifecycle_state": lifecycle_state,
             "superseded_by": superseded_by,
+            "lifecycle_key": lifecycle_key,
         }
 
     async def _enqueue_consolidation_changes(
@@ -2241,6 +2278,7 @@ class PostgresMemoryRepository:
                     if getattr(unit, "superseded_by", None)
                     else None
                 ),
+                "lifecycle_key": getattr(unit, "lifecycle_key", None),
                 "content_fingerprint": getattr(unit, "content_fingerprint", None),
                 "duplicate_of": (
                     str(unit.duplicate_of)
@@ -2306,6 +2344,13 @@ class PostgresMemoryRepository:
         )
         if current_lifecycle:
             conditions.append(MemoryUnit.lifecycle_state == "current")
+            reference_time = filters.reference_time or func.clock_timestamp()
+            conditions.append(
+                or_(
+                    MemoryUnit.expires_at.is_(None),
+                    MemoryUnit.expires_at > reference_time,
+                )
+            )
         if source_type is not None:
             conditions.append(
                 or_(

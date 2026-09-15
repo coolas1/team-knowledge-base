@@ -85,6 +85,7 @@ def test_memory_schema_compiles_for_postgresql_with_expected_vector_dimension() 
         "expires_at",
         "lifecycle_state",
         "superseded_by",
+        "lifecycle_key",
         "content_fingerprint",
         "duplicate_of",
     } <= {column.name for column in MemoryUnit.__table__.columns}

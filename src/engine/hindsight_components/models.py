@@ -96,6 +96,7 @@ class MemoryUnit(BankOwned, Base):
         Text, nullable=False, default="current", server_default="current"
     )
     superseded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lifecycle_key: Mapped[str | None] = mapped_column(Text)
     content_fingerprint: Mapped[str | None] = mapped_column(Text)
     duplicate_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     memory_version: Mapped[int] = mapped_column(
@@ -117,6 +118,7 @@ class MemoryUnit(BankOwned, Base):
         Index("idx_memory_units_state", "state"),
         Index("idx_memory_units_lifecycle", "bank_id", "lifecycle_state"),
         Index("idx_memory_units_expires_at", "expires_at"),
+        Index("idx_memory_units_lifecycle_key", "bank_id", "lifecycle_key"),
         Index(
             "idx_memory_units_fingerprint",
             "bank_id",

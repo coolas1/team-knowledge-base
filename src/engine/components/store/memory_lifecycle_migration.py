@@ -30,6 +30,7 @@ async def migrate_memory_lifecycle(
                 "ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ, "
                 "ADD COLUMN IF NOT EXISTS lifecycle_state TEXT NOT NULL DEFAULT 'current', "
                 "ADD COLUMN IF NOT EXISTS superseded_by UUID, "
+                "ADD COLUMN IF NOT EXISTS lifecycle_key TEXT, "
                 "ADD COLUMN IF NOT EXISTS content_fingerprint TEXT, "
                 "ADD COLUMN IF NOT EXISTS duplicate_of UUID"
             )
@@ -74,5 +75,11 @@ async def migrate_memory_lifecycle(
             text(
                 f"CREATE INDEX IF NOT EXISTS idx_memory_units_fingerprint "
                 f"ON {table} (bank_id, content_fingerprint)"
+            )
+        )
+        await connection.execute(
+            text(
+                f"CREATE INDEX IF NOT EXISTS idx_memory_units_lifecycle_key "
+                f"ON {table} (bank_id, lifecycle_key)"
             )
         )

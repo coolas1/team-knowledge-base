@@ -1,12 +1,39 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.retain import RetainEngine
 from src.engine.hindsight_components.types import RetainInput
 
 from src.engine.hindsight_components.tests.fakes import FakeProviders, FakeRepository
+
+
+def test_fact_extraction_preserves_mutable_lifecycle_fields() -> None:
+    context = RetainInput(
+        document_id="conversation-doc",
+        title="turn",
+        content="text",
+        file_type="conversation",
+        source_timestamp=datetime(2026, 9, 15, tzinfo=timezone.utc),
+    )
+    facts = RetainEngine._parse_facts(
+        {
+            "facts": [
+                {
+                    "text": "User prefers concise answers",
+                    "type": "world",
+                    "lifecycle_key": "User:Response-Style",
+                    "expires_at": "2027-01-01T00:00:00Z",
+                }
+            ]
+        },
+        context,
+    )
+
+    assert facts[0].lifecycle_key == "user:response-style"
+    assert facts[0].expires_at == datetime(2027, 1, 1, tzinfo=timezone.utc)
 
 
 async def test_fact_extraction_uses_bounded_chunk_concurrency() -> None:

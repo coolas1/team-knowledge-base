@@ -178,6 +178,8 @@ class ExtractedFact:
     speaker_role: str = "unknown"
     modality: str = "unknown"
     entity_aliases: dict[str, list[str]] = field(default_factory=dict)
+    lifecycle_key: str | None = None
+    expires_at: datetime | None = None
 
 
 @dataclass(slots=True)

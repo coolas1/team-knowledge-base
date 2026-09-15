@@ -382,6 +382,16 @@ class PostgresMemoryAdminRepository:
                 "type": row.memory_type,
                 "text": row.text,
                 "freshness": row.state,
+                "lifecycle_state": row.lifecycle_state,
+                "origin": row.origin,
+                "authority": row.authority,
+                "confirmed_by_turn_id": row.confirmed_by_turn_id,
+                "derived_from_evidence_ids": list(row.derived_from_evidence_ids or []),
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                "superseded_by": (
+                    str(row.superseded_by) if row.superseded_by else None
+                ),
+                "duplicate_of": str(row.duplicate_of) if row.duplicate_of else None,
                 "document_id": str(row.document_id),
                 "document_title": document.title,
                 "source_memory_ids": [str(item) for item in row.source_memory_ids],

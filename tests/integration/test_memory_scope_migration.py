@@ -19,7 +19,7 @@ from src.engine.scope import TagFilter, TagGroup
 from src.engine.scope import MemoryScope
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
 from src.engine.hindsight_components.config import HindsightOptions
-from src.engine.hindsight_components.types import MemoryDraft, RetainPlan
+from src.engine.hindsight_components.types import MemoryDraft, RecallFilter, RetainPlan
 
 pytestmark = pytest.mark.integration
 
@@ -1994,7 +1994,7 @@ async def test_memory_lifecycle_migration_round_trip_and_scope_isolation(
                 "DROP COLUMN origin, DROP COLUMN authority, DROP COLUMN policy_version, "
                 "DROP COLUMN confirmed_by_turn_id, DROP COLUMN derived_from_evidence_ids, "
                 "DROP COLUMN expires_at, DROP COLUMN lifecycle_state, DROP COLUMN superseded_by, "
-                "DROP COLUMN content_fingerprint, DROP COLUMN duplicate_of"
+                "DROP COLUMN lifecycle_key, DROP COLUMN content_fingerprint, DROP COLUMN duplicate_of"
             )
         )
     await migrate_memory_lifecycle(engine, schema=schema)
@@ -2028,6 +2028,7 @@ async def test_memory_lifecycle_migration_round_trip_and_scope_isolation(
                         "expires_at": "2027-01-01T00:00:00Z",
                         "lifecycle_state": "superseded",
                         "superseded_by": str(superseded_by),
+                        "lifecycle_key": "user:response-style",
                     },
                 )
             ],
@@ -2044,6 +2045,7 @@ async def test_memory_lifecycle_migration_round_trip_and_scope_isolation(
         assert row.expires_at == datetime(2027, 1, 1, tzinfo=timezone.utc)
         assert row.lifecycle_state == "superseded"
         assert row.superseded_by == superseded_by
+        assert row.lifecycle_key == "user:response-style"
         candidate = repo._candidate(row, SimpleNamespace(title="lifecycle"))
         assert candidate.metadata["derived_from_evidence_ids"] == ["doc:1", "doc:2"]
         assert candidate.metadata["lifecycle_state"] == "superseded"
@@ -2131,6 +2133,148 @@ async def test_conversation_paraphrases_collapse_to_one_current_audit_chain(
     audit = await repo.expand_memory_record(str(retired.id))
     assert audit is not None
     assert audit["memory"]["metadata"]["duplicate_of"] == str(current.id)
+
+
+async def test_changed_preference_supersedes_without_deleting_history(scope_database):
+    from src.engine.components.store.models import EMBEDDING_DIM
+    from src.engine.hindsight_components.memory_admin import (
+        PostgresMemoryAdminRepository,
+    )
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_ids = [uuid.uuid4(), uuid.uuid4()]
+    memory_ids = [uuid.uuid4(), uuid.uuid4()]
+    async with sessions() as session, session.begin():
+        session.add_all(
+            [
+                Document(
+                    id=document_id,
+                    bank_id="bank-a",
+                    title=f"preference-{index}",
+                    file_type="text",
+                    status="indexed",
+                )
+                for index, document_id in enumerate(document_ids)
+            ]
+        )
+    repo = PostgresMemoryRepository(sessions, scope=MemoryScope(bank_id="bank-a"))
+    values = [
+        ("User prefers verbose answers", [1.0, 0.0]),
+        ("User now prefers concise answers", [0.0, 1.0]),
+    ]
+    for index, ((memory_text, prefix), document_id, memory_id) in enumerate(
+        zip(values, document_ids, memory_ids, strict=True)
+    ):
+        await repo.replace_document(
+            RetainPlan(
+                document_id=str(document_id),
+                title=f"preference-{index}",
+                file_type="text",
+                source_type="conversation",
+                memories=[
+                    MemoryDraft(
+                        id=str(memory_id),
+                        document_id=str(document_id),
+                        chunk_index=0,
+                        memory_index=1,
+                        memory_type="world",
+                        text=memory_text,
+                        source_text=memory_text,
+                        context="conversation",
+                        embedding=prefix + [0.0] * (EMBEDDING_DIM - 2),
+                        metadata={
+                            "source_type": "conversation",
+                            "origin": "user",
+                            "authority": "user_confirmed",
+                            "retained_types": ["preference"],
+                            "lifecycle_key": "user:response-style",
+                        },
+                    )
+                ],
+                links=[],
+            )
+        )
+
+    async with sessions() as session:
+        old = await session.get(MemoryUnit, memory_ids[0])
+        new = await session.get(MemoryUnit, memory_ids[1])
+        assert old.lifecycle_state == "superseded"
+        assert old.superseded_by == new.id
+        assert new.lifecycle_state == "current"
+    stale_results = await repo.keyword_search("verbose answers", 5)
+    assert str(memory_ids[0]) not in {item.id for item in stale_results}
+    assert [item.id for item in await repo.keyword_search("concise answers", 5)] == [
+        str(memory_ids[1])
+    ]
+    audit = await repo.expand_memory_record(str(memory_ids[0]))
+    assert audit is not None
+    assert audit["memory"]["metadata"]["lifecycle_state"] == "superseded"
+    admin_rows = await PostgresMemoryAdminRepository(
+        sessions, scope=MemoryScope(bank_id="bank-a")
+    ).list_facts()
+    old_admin = next(item for item in admin_rows if item["id"] == str(memory_ids[0]))
+    assert old_admin["lifecycle_state"] == "superseded"
+    assert old_admin["superseded_by"] == str(memory_ids[1])
+
+
+async def test_expiry_boundary_filters_ordinary_recall_but_preserves_audit(
+    scope_database,
+):
+    from datetime import datetime, timezone
+    from src.engine.components.store.models import EMBEDDING_DIM
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_id, memory_id = uuid.uuid4(), uuid.uuid4()
+    async with sessions() as session, session.begin():
+        session.add(
+            Document(
+                id=document_id,
+                bank_id="bank-a",
+                title="temporary-state",
+                file_type="text",
+                status="indexed",
+            )
+        )
+    repo = PostgresMemoryRepository(sessions, scope=MemoryScope(bank_id="bank-a"))
+    await repo.replace_document(
+        RetainPlan(
+            document_id=str(document_id),
+            title="temporary-state",
+            file_type="text",
+            source_type="conversation",
+            memories=[
+                MemoryDraft(
+                    id=str(memory_id),
+                    document_id=str(document_id),
+                    chunk_index=0,
+                    memory_index=1,
+                    memory_type="world",
+                    text="User is temporarily on call",
+                    source_text="User is temporarily on call",
+                    context="conversation",
+                    embedding=[1.0] + [0.0] * (EMBEDDING_DIM - 1),
+                    metadata={
+                        "source_type": "conversation",
+                        "origin": "user",
+                        "authority": "user_confirmed",
+                        "retained_types": ["state"],
+                        "lifecycle_key": "user:on-call",
+                        "expires_at": "2027-01-01T00:00:00Z",
+                    },
+                )
+            ],
+            links=[],
+        )
+    )
+    before = RecallFilter(
+        reference_time=datetime(2026, 12, 31, 23, 59, tzinfo=timezone.utc)
+    )
+    boundary = RecallFilter(reference_time=datetime(2027, 1, 1, tzinfo=timezone.utc))
+    assert len(await repo.keyword_search("temporarily on call", 5, filters=before)) == 1
+    assert await repo.keyword_search("temporarily on call", 5, filters=boundary) == []
+    assert await repo.expand_memory_record(str(memory_id)) is not None
 
 
 async def test_backfill_resume_constraints_and_count_preservation(scope_database):
