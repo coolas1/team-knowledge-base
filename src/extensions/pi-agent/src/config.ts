@@ -18,7 +18,10 @@ export interface TkbAdapterConfig {
   conversationMemoryEnabled: boolean;
   /** Independent kill switch for implicit before-turn recall/injection. */
   conversationMemoryAutoRecallEnabled: boolean;
+  /** Use the bounded model fallback only when deterministic routing is ambiguous. */
+  conversationMemoryRoutingModelEnabled: boolean;
   conversationMemoryRoutingTimeoutMs: number;
+  conversationMemoryRoutingContextBudgetChars: number;
   conversationMemoryRecallTimeoutMs: number;
   conversationMemoryRecallLimit: number;
   conversationMemoryContextBudgetChars: number;
@@ -135,11 +138,21 @@ export function loadTkbAdapterConfig(
     conversationMemoryAutoRecallEnabled: enabled(
       env.TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED,
     ),
+    conversationMemoryRoutingModelEnabled: enabled(
+      env.TKB_CONVERSATION_MEMORY_ROUTING_MODEL_ENABLED,
+      true,
+    ),
     conversationMemoryRoutingTimeoutMs: requiredPositiveInteger(
       env.TKB_CONVERSATION_MEMORY_ROUTING_TIMEOUT_MS,
       750,
       "TKB_CONVERSATION_MEMORY_ROUTING_TIMEOUT_MS",
       5_000,
+    ),
+    conversationMemoryRoutingContextBudgetChars: requiredPositiveInteger(
+      env.TKB_CONVERSATION_MEMORY_ROUTING_CONTEXT_BUDGET_CHARS,
+      1_000,
+      "TKB_CONVERSATION_MEMORY_ROUTING_CONTEXT_BUDGET_CHARS",
+      4_000,
     ),
     conversationMemoryReliableDelivery: enabled(env.TKB_CONVERSATION_MEMORY_RELIABLE_DELIVERY),
     conversationMemoryRecallTimeoutMs: requiredPositiveInteger(

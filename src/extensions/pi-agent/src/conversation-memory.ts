@@ -16,6 +16,19 @@ export interface ConversationRouteDecision {
   reason: string;
 }
 
+export interface ConversationRouteClassifierInput {
+  prompt: string;
+  recentVisibleContext: Array<{ role: "user" | "assistant"; text: string }>;
+}
+
+export type ConversationRouteClassifier = (
+  input: ConversationRouteClassifierInput,
+  signal: AbortSignal,
+) => Promise<unknown>;
+
+const ROUTE_CONFIDENCE_MINIMUM = 0.75;
+const RECENT_VISIBLE_MESSAGE_LIMIT = 4;
+
 const KNOWLEDGE_PATTERNS = [
   /(?:文档|文件|知识库|资料|报告|手册|制度|政策|规范|搜索|查找|检索|引用|出处)/iu,
   /\b(?:document|file|knowledge\s*base|report|manual|policy|spec|search|find|retrieve|citation|source)\b/iu,
@@ -43,6 +56,120 @@ export function classifyConversationRoute(prompt: string): ConversationRouteDeci
     return { route: "knowledge", confidence: "high", reason: "explicit_knowledge" };
   }
   return { route: "knowledge", confidence: "low", reason: "ambiguous_default_knowledge" };
+}
+
+function boundedText(value: string, limit: number): string {
+  return value.length <= limit ? value : value.slice(value.length - limit);
+}
+
+export function collectRecentVisibleContext(
+  entries: readonly unknown[],
+  currentPrompt: string,
+  budgetChars: number,
+): Array<{ role: "user" | "assistant"; text: string }> {
+  if (budgetChars < 1) return [];
+  const messages: Array<{ role: "user" | "assistant"; text: string }> = [];
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as { type?: unknown; message?: unknown };
+    if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") continue;
+    const message = entry.message as { role?: unknown; content?: unknown };
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    const text = typeof message.content === "string"
+      ? message.content
+      : Array.isArray(message.content)
+        ? message.content
+          .filter((item): item is { type: "text"; text: string } =>
+            Boolean(item) && typeof item === "object" &&
+            (item as { type?: unknown }).type === "text" &&
+            typeof (item as { text?: unknown }).text === "string")
+          .map((item) => item.text)
+          .join("\n")
+        : "";
+    if (text.trim()) messages.push({ role: message.role, text });
+  }
+  if (messages.at(-1)?.role === "user" && messages.at(-1)?.text === currentPrompt) {
+    messages.pop();
+  }
+  const selected = messages.slice(-RECENT_VISIBLE_MESSAGE_LIMIT);
+  let remaining = budgetChars;
+  const bounded: typeof selected = [];
+  for (const message of selected.reverse()) {
+    if (remaining <= 0) break;
+    const text = boundedText(message.text, remaining);
+    bounded.unshift({ ...message, text });
+    remaining -= text.length;
+  }
+  return bounded;
+}
+
+function parseModelDecision(value: unknown): ConversationRouteDecision | undefined {
+  let parsed = value;
+  if (typeof value === "string") {
+    const match = value.match(/\{[\s\S]*\}/u);
+    if (!match) return undefined;
+    try {
+      parsed = JSON.parse(match[0]);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const record = parsed as Record<string, unknown>;
+  const route = record.route;
+  const confidence = Number(record.confidence);
+  if (
+    !["knowledge", "continuity", "mixed"].includes(String(route)) ||
+    !Number.isFinite(confidence) ||
+    confidence < ROUTE_CONFIDENCE_MINIMUM ||
+    confidence > 1
+  ) return undefined;
+  return {
+    route: route as ConversationRoute,
+    confidence: confidence >= 0.9 ? "high" : "medium",
+    reason: "bounded_model_classifier",
+  };
+}
+
+export async function resolveConversationRoute(
+  prompt: string,
+  recentVisibleContext: ConversationRouteClassifierInput["recentVisibleContext"],
+  config: TkbAdapterConfig,
+  classifier?: ConversationRouteClassifier,
+  signal?: AbortSignal,
+): Promise<ConversationRouteDecision> {
+  const deterministic = classifyConversationRoute(prompt);
+  if (
+    deterministic.confidence !== "low" ||
+    !classifier ||
+    !config.conversationMemoryRoutingModelEnabled
+  ) return deterministic;
+  const timeoutSignal = AbortSignal.timeout(config.conversationMemoryRoutingTimeoutMs);
+  const combinedSignal = signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
+  try {
+    const raw = await classifier(
+      {
+        prompt: boundedText(prompt, config.conversationMemoryRoutingContextBudgetChars),
+        recentVisibleContext,
+      },
+      combinedSignal,
+    );
+    return parseModelDecision(raw) ?? {
+      route: "knowledge",
+      confidence: "low",
+      reason: "invalid_or_low_confidence_model_output",
+    };
+  } catch (error) {
+    return {
+      route: "knowledge",
+      confidence: "low",
+      reason: error instanceof DOMException && error.name === "TimeoutError"
+        ? "model_classifier_timeout"
+        : "model_classifier_failed",
+    };
+  }
 }
 
 export function formatConversationMemoryBlock(
@@ -92,13 +219,21 @@ export async function recallMemoryForPrompt(
   prompt: string,
   config: TkbAdapterConfig,
   signal?: AbortSignal,
+  recentVisibleContext: ConversationRouteClassifierInput["recentVisibleContext"] = [],
+  classifier?: ConversationRouteClassifier,
 ): Promise<string> {
   if (
     !config.conversationMemoryEnabled ||
     !config.conversationMemoryAutoRecallEnabled ||
     !prompt.trim()
   ) return "";
-  const decision = classifyConversationRoute(prompt);
+  const decision = await resolveConversationRoute(
+    prompt,
+    recentVisibleContext,
+    config,
+    classifier,
+    signal,
+  );
   console.info(JSON.stringify({
     event: "conversation_memory_route",
     route: decision.route,
@@ -137,14 +272,22 @@ export async function recallMemoryForPrompt(
 export function buildConversationMemoryExtension(
   client: TkbMcpClient,
   config: TkbAdapterConfig,
+  classifier?: ConversationRouteClassifier,
 ): ExtensionFactory {
   return (pi) => {
     pi.on("before_agent_start", async (event: BeforeAgentStartEvent, ctx) => {
+      const recentVisibleContext = collectRecentVisibleContext(
+        ctx.sessionManager.getBranch(),
+        event.prompt,
+        config.conversationMemoryRoutingContextBudgetChars,
+      );
       const block = await recallMemoryForPrompt(
         client,
         event.prompt,
         config,
         ctx.signal,
+        recentVisibleContext,
+        classifier,
       );
       return block ? { systemPrompt: `${event.systemPrompt}\n\n${block}` } : undefined;
     });

@@ -48,6 +48,8 @@ describe("loadTkbAdapterConfig", () => {
       TKB_CONVERSATION_MEMORY_ENABLED: "true",
       TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
       TKB_CONVERSATION_MEMORY_ROUTING_TIMEOUT_MS: "500",
+      TKB_CONVERSATION_MEMORY_ROUTING_MODEL_ENABLED: "false",
+      TKB_CONVERSATION_MEMORY_ROUTING_CONTEXT_BUDGET_CHARS: "800",
       TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS: "1200",
       TKB_CONVERSATION_MEMORY_RECALL_LIMIT: "10",
       TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS: "4000",
@@ -59,6 +61,8 @@ describe("loadTkbAdapterConfig", () => {
     expect(config.conversationMemoryEnabled).toBe(true);
     expect(config.conversationMemoryAutoRecallEnabled).toBe(true);
     expect(config.conversationMemoryRoutingTimeoutMs).toBe(500);
+    expect(config.conversationMemoryRoutingModelEnabled).toBe(false);
+    expect(config.conversationMemoryRoutingContextBudgetChars).toBe(800);
     expect(config.conversationMemoryRecallTimeoutMs).toBe(1200);
     expect(config.conversationMemoryRecallLimit).toBe(10);
     expect(config.conversationMemoryContextBudgetChars).toBe(4000);

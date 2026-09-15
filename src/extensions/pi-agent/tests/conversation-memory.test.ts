@@ -3,8 +3,10 @@ import { loadTkbAdapterConfig } from "../src/config.js";
 import {
   buildConversationMemoryExtension,
   classifyConversationRoute,
+  collectRecentVisibleContext,
   formatConversationMemoryBlock,
   recallMemoryForPrompt,
+  resolveConversationRoute,
 } from "../src/conversation-memory.js";
 import type { TkbMcpClient } from "../src/mcp-client.js";
 
@@ -134,7 +136,7 @@ describe("conversation memory prompt integration", () => {
 
     const result = await handlers[0](
       { prompt: "Do you remember what I prefer?", systemPrompt: "base prompt" },
-      { signal: undefined },
+      { signal: undefined, sessionManager: { getBranch: () => [] } },
     );
 
     expect(result.systemPrompt).toContain("base prompt");
@@ -266,5 +268,85 @@ describe("conversation route classification", () => {
     expect(await recallMemoryForPrompt(rawClient, "Explain autonomous driving", config)).toBe("");
     expect(await recallMemoryForPrompt(rawClient, "搜索自动驾驶文档", config)).toBe("");
     expect(rawClient.recallConversationMemory).not.toHaveBeenCalled();
+  });
+
+  it("uses a bounded model classifier only for ambiguous prompts", async () => {
+    const rawClient = client();
+    const enabled = loadTkbAdapterConfig({
+      TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_ROUTING_CONTEXT_BUDGET_CHARS: "20",
+    });
+    let classifierPrompt = "";
+    const classifier = vi.fn(async (input: { prompt: string }) => {
+      classifierPrompt = input.prompt;
+      return { route: "continuity", confidence: 0.92 };
+    });
+
+    const block = await recallMemoryForPrompt(
+      rawClient,
+      "Please continue",
+      enabled,
+      undefined,
+      [{ role: "assistant", text: "x".repeat(100) }],
+      classifier,
+    );
+
+    expect(block).toContain("User prefers concise answers.");
+    expect(classifier).toHaveBeenCalledOnce();
+    expect(classifierPrompt.length).toBeLessThanOrEqual(20);
+    expect(rawClient.recallConversationMemory).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to knowledge for invalid or low-confidence model output", async () => {
+    const rawClient = client();
+    const enabled = loadTkbAdapterConfig({
+      TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+    });
+    for (const output of ["invalid", { route: "continuity", confidence: 0.4 }]) {
+      const decision = await resolveConversationRoute(
+        "Please continue",
+        [],
+        enabled,
+        vi.fn(async () => output),
+      );
+      expect(decision.route).toBe("knowledge");
+      expect(decision.confidence).toBe("low");
+    }
+    expect(rawClient.recallConversationMemory).not.toHaveBeenCalled();
+  });
+
+  it("fails closed to knowledge when the model classifier times out", async () => {
+    const enabled = loadTkbAdapterConfig({
+      TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_ROUTING_TIMEOUT_MS: "1",
+    });
+    const decision = await resolveConversationRoute(
+      "Please continue",
+      [],
+      enabled,
+      (_input, signal) => new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }),
+    );
+    expect(decision.route).toBe("knowledge");
+    expect(decision.confidence).toBe("low");
+  });
+
+  it("collects only bounded visible user and assistant history", () => {
+    const current = "current prompt";
+    const context = collectRecentVisibleContext([
+      { type: "custom_message", message: { role: "user", content: "retrieved secret" } },
+      { type: "message", message: { role: "toolResult", content: "tool evidence" } },
+      { type: "message", message: { role: "user", content: "older user" } },
+      { type: "message", message: { role: "assistant", content: "older assistant" } },
+      { type: "message", message: { role: "user", content: current } },
+    ], current, 15);
+
+    expect(context).toEqual([{ role: "assistant", text: "older assistant" }]);
+    expect(JSON.stringify(context)).not.toContain("retrieved secret");
+    expect(JSON.stringify(context)).not.toContain("tool evidence");
   });
 });

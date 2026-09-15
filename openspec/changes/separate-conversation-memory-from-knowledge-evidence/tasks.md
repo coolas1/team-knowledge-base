@@ -9,8 +9,8 @@
 ## 2. Query routing and source isolation
 
 - [x] 2.1 Implement deterministic query-intent rules for explicit document/file/policy/search queries and explicit prior-conversation/preference/decision queries; verify multilingual unit cases classify knowledge and continuity correctly.
-- [ ] 2.2 Implement the bounded ambiguous-query classifier with confidence/reason output and a knowledge-route default on timeout, invalid output, or low confidence; verify failure-path tests never trigger automatic memory recall.
-- [ ] 2.3 Supply only the current prompt and a bounded recent-visible-context window to routing, start the turn deadline before routing, and exclude retrieved memory from classifier input; verify Pi extension tests and deadline accounting.
+- [x] 2.2 Implement the bounded ambiguous-query classifier with confidence/reason output and a knowledge-route default on timeout, invalid output, or low confidence; verify failure-path tests never trigger automatic memory recall.
+- [x] 2.3 Supply only the current prompt and a bounded recent-visible-context window to routing, start the turn deadline before routing, and exclude retrieved memory from classifier input; verify Pi extension tests and deadline accounting.
 - [x] 2.4 Make `tkb_search_fast`, `tkb_search_deep`, legacy search, and default `query_knowledge` recall preserve the full uploaded/current-document quota while independently returning at most the configured auxiliary memories; verify mixed-corpus MCP tests return zero conversation items in compatibility `sources`/`document_evidence` and bounded items in `conversation_context`.
 - [x] 2.5 Preserve explicit conversation-only recall and add explicit mixed-route execution as two independent searches; verify route-specific filters reach semantic, lexical, graph, and temporal repository paths.
 - [x] 2.6 Return `document_evidence` and `conversation_context` separately for mixed queries while keeping compatibility `sources` document-grounded; verify response schemas, payload budgets, and legacy client tests.
