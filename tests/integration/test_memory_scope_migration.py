@@ -2,6 +2,7 @@
 
 import os
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import Text, func, insert, literal, select, text
@@ -1960,6 +1961,99 @@ async def scope_database():
         async with engine.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         await engine.dispose()
+
+
+async def test_memory_lifecycle_migration_round_trip_and_scope_isolation(
+    scope_database,
+):
+    from datetime import datetime, timezone
+    from src.engine.components.store.memory_lifecycle_migration import (
+        migrate_memory_lifecycle,
+    )
+    from src.engine.components.store.models import EMBEDDING_DIM
+
+    engine, schema = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_id = uuid.uuid4()
+    memory_id = uuid.uuid4()
+    superseded_by = uuid.uuid4()
+    async with sessions() as session, session.begin():
+        session.add(
+            Document(
+                id=document_id,
+                bank_id="bank-a",
+                title="lifecycle",
+                file_type="text",
+                status="indexed",
+            )
+        )
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                f'ALTER TABLE "{schema}"."memory_units" '
+                "DROP COLUMN origin, DROP COLUMN authority, DROP COLUMN policy_version, "
+                "DROP COLUMN confirmed_by_turn_id, DROP COLUMN derived_from_evidence_ids, "
+                "DROP COLUMN expires_at, DROP COLUMN lifecycle_state, DROP COLUMN superseded_by"
+            )
+        )
+    await migrate_memory_lifecycle(engine, schema=schema)
+    await migrate_memory_lifecycle(engine, schema=schema)
+
+    repo = PostgresMemoryRepository(sessions, scope=MemoryScope(bank_id="bank-a"))
+    await repo.replace_document(
+        RetainPlan(
+            document_id=str(document_id),
+            title="lifecycle",
+            file_type="text",
+            source_type="conversation",
+            memories=[
+                MemoryDraft(
+                    id=str(memory_id),
+                    document_id=str(document_id),
+                    chunk_index=0,
+                    memory_index=1,
+                    memory_type="preference",
+                    text="prefers concise answers",
+                    source_text="prefers concise answers",
+                    context="conversation",
+                    embedding=[0.0] * EMBEDDING_DIM,
+                    metadata={
+                        "source_type": "conversation",
+                        "origin": "user",
+                        "authority": "user_confirmed",
+                        "retention_policy_version": 7,
+                        "confirmed_by_turn_id": "turn-1",
+                        "derived_from_evidence_ids": ["doc:2", "doc:1"],
+                        "expires_at": "2027-01-01T00:00:00Z",
+                        "lifecycle_state": "superseded",
+                        "superseded_by": str(superseded_by),
+                    },
+                )
+            ],
+            links=[],
+        )
+    )
+    async with sessions() as session:
+        row = await session.get(MemoryUnit, memory_id)
+        assert row.origin == "user"
+        assert row.authority == "user_confirmed"
+        assert row.policy_version == 7
+        assert row.confirmed_by_turn_id == "turn-1"
+        assert row.derived_from_evidence_ids == ["doc:1", "doc:2"]
+        assert row.expires_at == datetime(2027, 1, 1, tzinfo=timezone.utc)
+        assert row.lifecycle_state == "superseded"
+        assert row.superseded_by == superseded_by
+        candidate = repo._candidate(row, SimpleNamespace(title="lifecycle"))
+        assert candidate.metadata["derived_from_evidence_ids"] == ["doc:1", "doc:2"]
+        assert candidate.metadata["lifecycle_state"] == "superseded"
+
+    visible = await repo.keyword_search("concise", 5)
+    assert len(visible) == 1
+    assert visible[0].metadata["confirmed_by_turn_id"] == "turn-1"
+    assert visible[0].metadata["expires_at"] == "2027-01-01T00:00:00+00:00"
+
+    hidden = repo.with_scope(MemoryScope(bank_id="bank-b"))
+    assert await hidden.keyword_search("concise", 5) == []
 
 
 async def test_backfill_resume_constraints_and_count_preservation(scope_database):

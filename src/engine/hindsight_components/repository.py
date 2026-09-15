@@ -188,7 +188,9 @@ class PostgresMemoryRepository:
         overview = (getattr(document, "overview", None) or "").strip() or None
         return {"filename": filename, "overview": overview}
 
-    async def document_retrieval_context(self, document_id: str) -> dict[str, str | None]:
+    async def document_retrieval_context(
+        self, document_id: str
+    ) -> dict[str, str | None]:
         """Best-effort retrieval-view metadata for a retained document."""
         async with self._session_factory() as session:
             document = await session.scalar(
@@ -956,6 +958,7 @@ class PostgresMemoryRepository:
         self, session: AsyncSession, plan: RetainPlan, *, scope_tags=(), retained_ids=()
     ) -> None:
         for draft in plan.memories:
+            lifecycle = self._lifecycle_values(draft)
             row = MemoryUnit(
                 bank_id=self.scope.bank_id,
                 id=uuid.UUID(draft.id),
@@ -977,6 +980,7 @@ class PostgresMemoryRepository:
                 source_memory_ids=[uuid.UUID(item) for item in draft.source_memory_ids],
                 tags=list(draft.tags),
                 scope_tags=list(scope_tags),
+                **lifecycle,
                 memory_version=max(1, plan.revision),
                 metadata_json={
                     **draft.metadata,
@@ -1005,6 +1009,14 @@ class PostgresMemoryRepository:
                     "confidence",
                     "tags",
                     "scope_tags",
+                    "origin",
+                    "authority",
+                    "policy_version",
+                    "confirmed_by_turn_id",
+                    "derived_from_evidence_ids",
+                    "expires_at",
+                    "lifecycle_state",
+                    "superseded_by",
                     "metadata_json",
                 ):
                     setattr(existing, attribute, getattr(row, attribute))
@@ -1106,6 +1118,57 @@ class PostgresMemoryRepository:
                     .on_conflict_do_nothing()
                 )
         await session.flush()
+
+    @staticmethod
+    def _lifecycle_values(draft) -> dict[str, Any]:
+        metadata = draft.metadata
+        source_type = str(metadata.get("source_type") or "upload")
+        origin = str(
+            metadata.get("origin")
+            or ("document" if source_type != "conversation" else "unknown")
+        )
+        authority = str(
+            metadata.get("authority")
+            or ("document" if source_type != "conversation" else "unclassified")
+        )
+        policy_version = metadata.get(
+            "retention_policy_version", metadata.get("policy_version", 1)
+        )
+        if type(policy_version) is not int or policy_version < 1:
+            raise ValueError("memory lifecycle policy_version must be positive")
+        confirmed_by_turn_id = metadata.get("confirmed_by_turn_id")
+        if confirmed_by_turn_id is not None:
+            confirmed_by_turn_id = str(confirmed_by_turn_id).strip()
+            if not confirmed_by_turn_id:
+                raise ValueError("confirmed_by_turn_id must not be empty")
+        evidence_ids = metadata.get("derived_from_evidence_ids", [])
+        if not isinstance(evidence_ids, (list, tuple)) or any(
+            not isinstance(item, str) or not item.strip() for item in evidence_ids
+        ):
+            raise ValueError("derived_from_evidence_ids must contain strings")
+        expires_at = metadata.get("expires_at")
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if expires_at is not None and (
+            not isinstance(expires_at, datetime) or expires_at.tzinfo is None
+        ):
+            raise ValueError("expires_at must include a timezone")
+        lifecycle_state = str(metadata.get("lifecycle_state") or "current")
+        if lifecycle_state not in {"current", "superseded", "expired", "retired"}:
+            raise ValueError("invalid memory lifecycle_state")
+        superseded_by = metadata.get("superseded_by")
+        if superseded_by is not None:
+            superseded_by = uuid.UUID(str(superseded_by))
+        return {
+            "origin": origin,
+            "authority": authority,
+            "policy_version": policy_version,
+            "confirmed_by_turn_id": confirmed_by_turn_id,
+            "derived_from_evidence_ids": sorted(set(evidence_ids)),
+            "expires_at": expires_at,
+            "lifecycle_state": lifecycle_state,
+            "superseded_by": superseded_by,
+        }
 
     async def _enqueue_consolidation_changes(
         self,
@@ -1688,9 +1751,7 @@ class PostgresMemoryRepository:
                 # from title|filename|overview + text, so a document whose
                 # body is OCR noise still ranks when its metadata matches.
                 # " ".join round-trips lexical_tokens losslessly.
-                scoring_texts = [
-                    " ".join(row[3] or []) for row in raw_rows
-                ]
+                scoring_texts = [" ".join(row[3] or []) for row in raw_rows]
             else:
                 scoring_texts = [str(row[1]) for row in raw_rows]
             scores = self._bm25(query, scoring_texts)
@@ -2082,6 +2143,28 @@ class PostgresMemoryRepository:
         metadata = dict(unit.metadata_json or {})
         metadata["memory_version"] = getattr(unit, "memory_version", 1)
         metadata["is_source_chunk"] = bool(getattr(unit, "is_source_chunk", False))
+        metadata.update(
+            {
+                "origin": getattr(unit, "origin", "unknown"),
+                "authority": getattr(unit, "authority", "unclassified"),
+                "policy_version": getattr(unit, "policy_version", 1),
+                "confirmed_by_turn_id": getattr(unit, "confirmed_by_turn_id", None),
+                "derived_from_evidence_ids": list(
+                    getattr(unit, "derived_from_evidence_ids", None) or []
+                ),
+                "expires_at": (
+                    unit.expires_at.isoformat()
+                    if getattr(unit, "expires_at", None)
+                    else None
+                ),
+                "lifecycle_state": getattr(unit, "lifecycle_state", "current"),
+                "superseded_by": (
+                    str(unit.superseded_by)
+                    if getattr(unit, "superseded_by", None)
+                    else None
+                ),
+            }
+        )
         mentioned_at = getattr(unit, "mentioned_at", None)
         return RecallCandidate(
             id=str(unit.id),

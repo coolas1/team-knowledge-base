@@ -142,7 +142,7 @@ class ConversationRetentionWorker:
                                 "authority",
                                 "retention_policy_version",
                                 "retained_types",
-                                "confirmed_by_turn",
+                                "confirmed_by_turn_id",
                                 "derived_from_evidence_ids",
                                 "expires_at",
                                 "lifecycle_state",

@@ -78,6 +78,24 @@ class MemoryUnit(BankOwned, Base):
         ARRAY(Text), nullable=False, default=list, server_default="{}"
     )
     state: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    origin: Mapped[str] = mapped_column(
+        Text, nullable=False, default="unknown", server_default="unknown"
+    )
+    authority: Mapped[str] = mapped_column(
+        Text, nullable=False, default="unclassified", server_default="unclassified"
+    )
+    policy_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    confirmed_by_turn_id: Mapped[str | None] = mapped_column(Text)
+    derived_from_evidence_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lifecycle_state: Mapped[str] = mapped_column(
+        Text, nullable=False, default="current", server_default="current"
+    )
+    superseded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     memory_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
@@ -95,6 +113,8 @@ class MemoryUnit(BankOwned, Base):
         Index("idx_memory_units_document", "document_id"),
         Index("idx_memory_units_type", "memory_type"),
         Index("idx_memory_units_state", "state"),
+        Index("idx_memory_units_lifecycle", "bank_id", "lifecycle_state"),
+        Index("idx_memory_units_expires_at", "expires_at"),
         Index(
             "idx_memory_units_lexical_tokens",
             "lexical_tokens",

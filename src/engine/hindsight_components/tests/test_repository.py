@@ -102,6 +102,49 @@ def test_candidate_mapping_preserves_provenance_and_scores() -> None:
     assert candidate.as_evidence()["session_id"] == "session-1"
 
 
+def test_lifecycle_values_validate_and_normalize_metadata() -> None:
+    superseded_by = uuid.uuid4()
+    draft = SimpleNamespace(
+        metadata={
+            "source_type": "conversation",
+            "origin": "user",
+            "authority": "user_confirmed",
+            "retention_policy_version": 3,
+            "confirmed_by_turn_id": "turn-1",
+            "derived_from_evidence_ids": ["doc:2", "doc:1", "doc:2"],
+            "expires_at": "2027-01-01T00:00:00Z",
+            "lifecycle_state": "superseded",
+            "superseded_by": str(superseded_by),
+        }
+    )
+
+    values = PostgresMemoryRepository._lifecycle_values(draft)
+
+    assert values["origin"] == "user"
+    assert values["authority"] == "user_confirmed"
+    assert values["policy_version"] == 3
+    assert values["confirmed_by_turn_id"] == "turn-1"
+    assert values["derived_from_evidence_ids"] == ["doc:1", "doc:2"]
+    assert values["expires_at"].isoformat() == "2027-01-01T00:00:00+00:00"
+    assert values["lifecycle_state"] == "superseded"
+    assert values["superseded_by"] == superseded_by
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"policy_version": 0},
+        {"derived_from_evidence_ids": [""]},
+        {"expires_at": "2027-01-01T00:00:00"},
+        {"lifecycle_state": "active"},
+        {"superseded_by": "not-a-uuid"},
+    ],
+)
+def test_lifecycle_values_reject_invalid_metadata(metadata) -> None:
+    with pytest.raises((ValueError, TypeError)):
+        PostgresMemoryRepository._lifecycle_values(SimpleNamespace(metadata=metadata))
+
+
 async def test_all_retrieval_arms_filter_source_and_incomplete_conversations() -> None:
     class EmptyResult:
         def __iter__(self):
