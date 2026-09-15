@@ -78,14 +78,18 @@ describe('session transcript reconciliation', () => {
       id: 's1', messageCount: 5, streaming: false,
       messages: [
         { id: 'u1', role: 'user' as const, text: 'question', status: 'failed' as const },
-        { id: 'a1', role: 'assistant' as const, text: '_call search', status: 'completed' as const },
+        { id: 'a1', role: 'assistant' as const, text: 'useful preface\n_call', status: 'completed' as const },
         { id: 'a2', role: 'assistant' as const, text: '我', status: 'cancelled' as const },
         { id: 'u2', role: 'user' as const, text: 'question', status: 'completed' as const },
         { id: 'a3', role: 'assistant' as const, text: 'answer', status: 'completed' as const },
       ],
     }
 
-    expect(messagesFromDetail(detail).map((message) => message.id)).toEqual(['u2', 'a3'])
+    expect(messagesFromDetail(detail).map((message) => [message.id, message.text])).toEqual([
+      ['a1', 'useful preface'],
+      ['u2', 'question'],
+      ['a3', 'answer'],
+    ])
   })
 
   it('keeps a terminal user message when it has not been retried', () => {

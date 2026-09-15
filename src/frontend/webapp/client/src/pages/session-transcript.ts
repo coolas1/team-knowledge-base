@@ -46,10 +46,17 @@ function visibleTranscriptMessages(messages: ChatMessage[]): ChatMessage[] {
   const visible: ChatMessage[] = []
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
-    const text = message.text.trim()
+    let text = message.text.trim()
     if (message.role === 'assistant') {
       if (message.status && message.status !== 'completed') continue
-      if (!text || /^_call\b/i.test(text)) continue
+      text = text
+        .split('\n')
+        .filter((line) => !/^_call(?:\s|$)/i.test(line.trim()))
+        .join('\n')
+        .trim()
+      // v0.2.1 could persist the first streamed character after cancellation
+      // as a completed legacy answer. The original journal remains untouched.
+      if (!text || /^(?:我|I)$/u.test(text)) continue
     } else {
       const retryKey = text.replace(/\s+/g, ' ')
       if (RETRYABLE_TERMINAL.has(message.status || 'completed') && laterUserTexts.has(retryKey)) {
@@ -57,7 +64,7 @@ function visibleTranscriptMessages(messages: ChatMessage[]): ChatMessage[] {
       }
       laterUserTexts.add(retryKey)
     }
-    visible.push(message)
+    visible.push(text === message.text ? message : { ...message, text })
   }
   return visible.reverse()
 }
