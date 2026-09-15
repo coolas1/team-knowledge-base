@@ -73,6 +73,34 @@ describe('session transcript reconciliation', () => {
     expect(messagesFromDetail(detail)[1].text).toContain(download)
   })
 
+  it('hides internal and incomplete legacy assistant artifacts', () => {
+    const detail = {
+      id: 's1', messageCount: 5, streaming: false,
+      messages: [
+        { id: 'u1', role: 'user' as const, text: 'question', status: 'failed' as const },
+        { id: 'a1', role: 'assistant' as const, text: '_call search', status: 'completed' as const },
+        { id: 'a2', role: 'assistant' as const, text: '我', status: 'cancelled' as const },
+        { id: 'u2', role: 'user' as const, text: 'question', status: 'completed' as const },
+        { id: 'a3', role: 'assistant' as const, text: 'answer', status: 'completed' as const },
+      ],
+    }
+
+    expect(messagesFromDetail(detail).map((message) => message.id)).toEqual(['u2', 'a3'])
+  })
+
+  it('keeps a terminal user message when it has not been retried', () => {
+    const detail = {
+      id: 's1', messageCount: 1, streaming: false,
+      messages: [
+        { id: 'u1', role: 'user' as const, text: 'question', status: 'failed' as const },
+      ],
+    }
+
+    expect(messagesFromDetail(detail)).toEqual([
+      expect.objectContaining({ id: 'u1', status: 'failed' }),
+    ])
+  })
+
   it('forgets long-term memory before deleting a conversation', async () => {
     const calls: string[] = []
     const client = {

@@ -34,8 +34,36 @@ export async function deleteConversationWithMemory(
   return { forgotten, deleted }
 }
 
+const RETRYABLE_TERMINAL = new Set<UiMessageStatus>([
+  'unsaved',
+  'failed',
+  'cancelled',
+  'interrupted',
+])
+
+function visibleTranscriptMessages(messages: ChatMessage[]): ChatMessage[] {
+  const laterUserTexts = new Set<string>()
+  const visible: ChatMessage[] = []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    const text = message.text.trim()
+    if (message.role === 'assistant') {
+      if (message.status && message.status !== 'completed') continue
+      if (!text || /^_call\b/i.test(text)) continue
+    } else {
+      const retryKey = text.replace(/\s+/g, ' ')
+      if (RETRYABLE_TERMINAL.has(message.status || 'completed') && laterUserTexts.has(retryKey)) {
+        continue
+      }
+      laterUserTexts.add(retryKey)
+    }
+    visible.push(message)
+  }
+  return visible.reverse()
+}
+
 export function messagesFromDetail(detail: AgentSessionDetail): ChatMessage[] {
-  return (detail.messages || []).map((message, index) => ({
+  return visibleTranscriptMessages((detail.messages || []).map((message, index) => ({
     id: message.id || `legacy-${index}-${message.role}`,
     role: message.role,
     text: message.text,
@@ -43,7 +71,7 @@ export function messagesFromDetail(detail: AgentSessionDetail): ChatMessage[] {
     clientMessageId: message.clientMessageId,
     timestamp: message.timestamp,
     status: message.status,
-  }))
+  })))
 }
 
 export function optimisticMessages(text: string, clientMessageId: string): ChatMessage[] {
