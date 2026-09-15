@@ -27,7 +27,7 @@
 ## 6. Repo validation & PR
 
 - [ ] 6.1 Run the full validity check — `uv run ruff check`, `uv run pytest`, `cd src/frontend/webapp/client && npm test` — all green; confirm `git status` shows only intended tracked changes (no `uploads/`, `node_modules/`, `.deploy/` artifacts)
-- [ ] 6.2 Open the PR to `develop` carrying spec delta + code; after review/merge and maintainer release to `main`, confirm the existing pipeline deploys it without orphaning any `team-kb-*` container (parameterization is a no-op render for the main env)
+- [x] 6.2 Open the PR to `develop` carrying spec delta + code; after review/merge and maintainer release to `main`, confirm the existing pipeline deploys it without orphaning any `team-kb-*` container (parameterization is a no-op render for the main env)
 
 ## 7. Host migration & staging bring-up (post-release, LAN host)
 
