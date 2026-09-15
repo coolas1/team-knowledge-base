@@ -35,6 +35,7 @@ from .models import (
     ObservationHistory,
     ObservationRecord,
 )
+from .memory_identity import memory_content_fingerprint
 from .types import (
     DocumentMemoryState,
     MemoryProfile,
@@ -959,6 +960,9 @@ class PostgresMemoryRepository:
     ) -> None:
         for draft in plan.memories:
             lifecycle = self._lifecycle_values(draft)
+            content_fingerprint = memory_content_fingerprint(
+                draft.text, draft.memory_type, lifecycle["origin"]
+            )
             row = MemoryUnit(
                 bank_id=self.scope.bank_id,
                 id=uuid.UUID(draft.id),
@@ -981,15 +985,28 @@ class PostgresMemoryRepository:
                 tags=list(draft.tags),
                 scope_tags=list(scope_tags),
                 **lifecycle,
+                content_fingerprint=content_fingerprint,
                 memory_version=max(1, plan.revision),
                 metadata_json={
                     **draft.metadata,
                     "entity_mentions": list(draft.entities),
                 },
             )
+            if row.id not in retained_ids and self._deduplicates(row):
+                duplicate_of = await self._find_conversation_duplicate(session, row)
+                if duplicate_of is not None:
+                    row.lifecycle_state = "retired"
+                    row.duplicate_of = duplicate_of
             if row.id in retained_ids:
                 existing = await session.get(MemoryUnit, row.id)
                 preserved = dict(existing.metadata_json or {})
+                if (
+                    existing.lifecycle_state != "current"
+                    and "lifecycle_state" not in draft.metadata
+                ):
+                    row.lifecycle_state = existing.lifecycle_state
+                    row.superseded_by = existing.superseded_by
+                    row.duplicate_of = existing.duplicate_of
                 # A stable fact keeps its manually corrected ownership and source
                 # timestamp. Updating its position must not cascade external links.
                 corrected = "entity_correction_id" in preserved
@@ -1017,6 +1034,8 @@ class PostgresMemoryRepository:
                     "expires_at",
                     "lifecycle_state",
                     "superseded_by",
+                    "content_fingerprint",
+                    "duplicate_of",
                     "metadata_json",
                 ):
                     setattr(existing, attribute, getattr(row, attribute))
@@ -1118,6 +1137,62 @@ class PostgresMemoryRepository:
                     .on_conflict_do_nothing()
                 )
         await session.flush()
+
+    @staticmethod
+    def _deduplicates(row: MemoryUnit) -> bool:
+        metadata = row.metadata_json or {}
+        return bool(
+            metadata.get("source_type") == "conversation"
+            and not row.is_source_chunk
+            and row.memory_type != "observation"
+            and row.lifecycle_state == "current"
+        )
+
+    async def _find_conversation_duplicate(
+        self, session: AsyncSession, row: MemoryUnit
+    ) -> uuid.UUID | None:
+        # One bank-level lock closes the race between different canonical
+        # fingerprints that are nevertheless semantic paraphrases.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"tkb-conversation-dedup:{self.scope.bank_id}"},
+        )
+        conditions = (
+            self._memory_scope(),
+            MemoryUnit.id != row.id,
+            MemoryUnit.state == "active",
+            MemoryUnit.lifecycle_state == "current",
+            MemoryUnit.is_source_chunk.is_(False),
+            MemoryUnit.memory_type == row.memory_type,
+            MemoryUnit.origin == row.origin,
+            MemoryUnit.metadata_json["source_type"].astext == "conversation",
+        )
+        exact = await session.scalar(
+            select(MemoryUnit.id)
+            .where(
+                *conditions,
+                MemoryUnit.content_fingerprint == row.content_fingerprint,
+            )
+            .order_by(MemoryUnit.mentioned_at, MemoryUnit.id)
+            .limit(1)
+        )
+        if exact is not None or row.embedding is None:
+            return exact
+        distance = MemoryUnit.embedding.cosine_distance(row.embedding).label("distance")
+        neighbors = list(
+            (
+                await session.execute(
+                    select(MemoryUnit.id, distance)
+                    .where(*conditions, MemoryUnit.embedding.is_not(None))
+                    .order_by(distance, MemoryUnit.id)
+                    .limit(20)
+                )
+            ).all()
+        )
+        for memory_id, value in neighbors:
+            if value is not None and 1.0 - float(value) >= 0.94:
+                return memory_id
+        return None
 
     @staticmethod
     def _lifecycle_values(draft) -> dict[str, Any]:
@@ -1631,6 +1706,7 @@ class PostgresMemoryRepository:
                     MemoryUnit.document_id != uuid.UUID(exclude_document_id),
                     self._memory_scope(),
                     MemoryUnit.state == "active",
+                    MemoryUnit.lifecycle_state == "current",
                     MemoryUnit.embedding.is_not(None),
                 )
                 .order_by(score.desc())
@@ -2052,7 +2128,9 @@ class PostgresMemoryRepository:
                         MemoryUnit.state.in_(("active", "stale")),
                         Document.status == "indexed",
                         *self._recall_source_conditions(
-                            None, RecallFilter(include_stale=True)
+                            None,
+                            RecallFilter(include_stale=True),
+                            current_lifecycle=False,
                         ),
                     )
                 )
@@ -2163,6 +2241,12 @@ class PostgresMemoryRepository:
                     if getattr(unit, "superseded_by", None)
                     else None
                 ),
+                "content_fingerprint": getattr(unit, "content_fingerprint", None),
+                "duplicate_of": (
+                    str(unit.duplicate_of)
+                    if getattr(unit, "duplicate_of", None)
+                    else None
+                ),
             }
         )
         mentioned_at = getattr(unit, "mentioned_at", None)
@@ -2197,7 +2281,10 @@ class PostgresMemoryRepository:
 
     @staticmethod
     def _recall_source_conditions(
-        source_type: str | None, filters: RecallFilter | None = None
+        source_type: str | None,
+        filters: RecallFilter | None = None,
+        *,
+        current_lifecycle: bool = True,
     ) -> list[Any]:
         filters = filters or RecallFilter()
         completed_conversation = (
@@ -2217,6 +2304,8 @@ class PostgresMemoryRepository:
             if filters.include_stale
             else MemoryUnit.state == "active"
         )
+        if current_lifecycle:
+            conditions.append(MemoryUnit.lifecycle_state == "current")
         if source_type is not None:
             conditions.append(
                 or_(

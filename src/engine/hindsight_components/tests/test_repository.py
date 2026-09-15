@@ -8,6 +8,10 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
+from src.engine.hindsight_components.memory_identity import (
+    canonical_memory_text,
+    memory_content_fingerprint,
+)
 from src.engine.hindsight_components.types import RecallFilter
 from src.engine.hindsight_components.utils import (
     document_lock_key,
@@ -28,6 +32,19 @@ def test_bm25_ranks_matching_english_and_chinese_documents() -> None:
 
     assert english[0] > english[1]
     assert chinese[2] > chinese[0]
+
+
+def test_memory_content_fingerprint_is_canonical_and_type_scoped() -> None:
+    assert canonical_memory_text("  Prefers， concise ANSWERS! ") == (
+        "prefers concise answers"
+    )
+    left = memory_content_fingerprint("Prefers concise answers!", "preference", "user")
+    assert left == memory_content_fingerprint(
+        "  PREFERS concise answers ", "preference", "user"
+    )
+    assert left != memory_content_fingerprint(
+        "Prefers concise answers!", "state", "user"
+    )
 
 
 def test_bounded_prefilter_preserves_frozen_multilingual_top_results() -> None:

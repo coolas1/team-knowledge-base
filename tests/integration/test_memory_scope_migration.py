@@ -1993,7 +1993,8 @@ async def test_memory_lifecycle_migration_round_trip_and_scope_isolation(
                 f'ALTER TABLE "{schema}"."memory_units" '
                 "DROP COLUMN origin, DROP COLUMN authority, DROP COLUMN policy_version, "
                 "DROP COLUMN confirmed_by_turn_id, DROP COLUMN derived_from_evidence_ids, "
-                "DROP COLUMN expires_at, DROP COLUMN lifecycle_state, DROP COLUMN superseded_by"
+                "DROP COLUMN expires_at, DROP COLUMN lifecycle_state, DROP COLUMN superseded_by, "
+                "DROP COLUMN content_fingerprint, DROP COLUMN duplicate_of"
             )
         )
     await migrate_memory_lifecycle(engine, schema=schema)
@@ -2048,12 +2049,88 @@ async def test_memory_lifecycle_migration_round_trip_and_scope_isolation(
         assert candidate.metadata["lifecycle_state"] == "superseded"
 
     visible = await repo.keyword_search("concise", 5)
-    assert len(visible) == 1
-    assert visible[0].metadata["confirmed_by_turn_id"] == "turn-1"
-    assert visible[0].metadata["expires_at"] == "2027-01-01T00:00:00+00:00"
+    assert visible == []
 
     hidden = repo.with_scope(MemoryScope(bank_id="bank-b"))
     assert await hidden.keyword_search("concise", 5) == []
+
+
+async def test_conversation_paraphrases_collapse_to_one_current_audit_chain(
+    scope_database,
+):
+    from src.engine.components.store.models import EMBEDDING_DIM
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_ids = [uuid.uuid4(), uuid.uuid4()]
+    memory_ids = [uuid.uuid4(), uuid.uuid4()]
+    async with sessions() as session, session.begin():
+        session.add_all(
+            [
+                Document(
+                    id=document_id,
+                    bank_id="bank-a",
+                    title=f"turn-{index}",
+                    file_type="text",
+                    status="indexed",
+                )
+                for index, document_id in enumerate(document_ids)
+            ]
+        )
+    repo = PostgresMemoryRepository(sessions, scope=MemoryScope(bank_id="bank-a"))
+    texts = ["User prefers concise answers", "The user likes brief responses"]
+    for index, (document_id, memory_id, memory_text) in enumerate(
+        zip(document_ids, memory_ids, texts, strict=True)
+    ):
+        await repo.replace_document(
+            RetainPlan(
+                document_id=str(document_id),
+                title=f"turn-{index}",
+                file_type="text",
+                source_type="conversation",
+                memories=[
+                    MemoryDraft(
+                        id=str(memory_id),
+                        document_id=str(document_id),
+                        chunk_index=0,
+                        memory_index=1,
+                        memory_type="preference",
+                        text=memory_text,
+                        source_text=memory_text,
+                        context="conversation",
+                        embedding=[1.0] + [0.0] * (EMBEDDING_DIM - 1),
+                        metadata={
+                            "source_type": "conversation",
+                            "origin": "user",
+                            "authority": "user_confirmed",
+                            "session_id": "session-1",
+                            "turn_id": f"turn-{index}",
+                        },
+                    )
+                ],
+                links=[],
+            )
+        )
+
+    async with sessions() as session:
+        rows = list(
+            await session.scalars(
+                select(MemoryUnit)
+                .where(MemoryUnit.id.in_(memory_ids))
+                .order_by(MemoryUnit.mentioned_at, MemoryUnit.id)
+            )
+        )
+        assert [row.lifecycle_state for row in rows].count("current") == 1
+        retired = next(row for row in rows if row.lifecycle_state == "retired")
+        current = next(row for row in rows if row.lifecycle_state == "current")
+        assert retired.duplicate_of == current.id
+        assert retired.content_fingerprint != current.content_fingerprint
+
+    recalled = await repo.keyword_search("concise answers", 10)
+    assert [item.id for item in recalled] == [str(current.id)]
+    audit = await repo.expand_memory_record(str(retired.id))
+    assert audit is not None
+    assert audit["memory"]["metadata"]["duplicate_of"] == str(current.id)
 
 
 async def test_backfill_resume_constraints_and_count_preservation(scope_database):

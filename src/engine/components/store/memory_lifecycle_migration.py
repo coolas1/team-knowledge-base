@@ -29,7 +29,9 @@ async def migrate_memory_lifecycle(
                 "ADD COLUMN IF NOT EXISTS derived_from_evidence_ids TEXT[] NOT NULL DEFAULT '{}', "
                 "ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ, "
                 "ADD COLUMN IF NOT EXISTS lifecycle_state TEXT NOT NULL DEFAULT 'current', "
-                "ADD COLUMN IF NOT EXISTS superseded_by UUID"
+                "ADD COLUMN IF NOT EXISTS superseded_by UUID, "
+                "ADD COLUMN IF NOT EXISTS content_fingerprint TEXT, "
+                "ADD COLUMN IF NOT EXISTS duplicate_of UUID"
             )
         )
         # Recover safe legacy JSON values. Invalid or absent values retain the
@@ -66,5 +68,11 @@ async def migrate_memory_lifecycle(
             text(
                 f"CREATE INDEX IF NOT EXISTS idx_memory_units_expires_at "
                 f"ON {table} (expires_at)"
+            )
+        )
+        await connection.execute(
+            text(
+                f"CREATE INDEX IF NOT EXISTS idx_memory_units_fingerprint "
+                f"ON {table} (bank_id, content_fingerprint)"
             )
         )

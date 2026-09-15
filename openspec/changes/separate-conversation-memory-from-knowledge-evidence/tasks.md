@@ -31,7 +31,7 @@
 - [x] 4.3 Apply retention policy before extraction/publication while preserving reliable queue delivery and idempotent turn identity; verify eligible and ineligible turns reach the correct terminal state without duplicate work.
 - [x] 4.4 Store memory origin, authority, policy version, confirmed-by turn, derived-from evidence IDs, expiry, and current/superseded state; verify schema migration, round-trip repository tests, and scope isolation.
 - [x] 4.5 Reject authoritative publication of assistant-derived records lacking allowed type, explicit confirmation when required, or valid visible evidence provenance; verify adversarial assistant-summary and hallucination tests.
-- [ ] 4.6 Implement canonical fingerprints and bounded semantic duplicate detection across turns; verify repeated paraphrases yield one current representative and preserve audit revisions.
+- [x] 4.6 Implement canonical fingerprints and bounded semantic duplicate detection across turns; verify repeated paraphrases yield one current representative and preserve audit revisions.
 - [ ] 4.7 Implement preference/state supersession and optional expiry/time decay without physically deleting audit history; verify changed-preference, expiration-boundary, and historical-admin-view tests.
 - [ ] 4.8 Invalidate fact cache, graph projection, observations, and mental-model dependents when a memory is superseded, expired, or retired; verify stale content cannot return through any read path.
 
