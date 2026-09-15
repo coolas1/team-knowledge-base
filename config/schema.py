@@ -89,11 +89,34 @@ class PluginCfg(BaseModel):
     impl: str = "tkb"
 
 
+class ArchiveCfg(BaseModel):
+    """自动归档行为旋钮（app.yaml）。
+
+    workspace 路径不在此处：它是部署路径，只来自 .env
+    (ARCHIVE_WORKSPACE_DIR)，避免与 engine 的 UPLOAD_DIR 产生双源。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    # V1 兼容字段；V2 二态分流不再使用 delta。
+    delta: float = Field(default=0.10, ge=0.0, le=0.5)
+    review_all: bool = False
+    poll_seconds: float = Field(default=5.0, gt=0)
+    stability_checks: int = Field(default=2, ge=1)
+    max_attempts: int = Field(default=5, ge=1)
+    top_k: int = Field(default=5, ge=1)
+    # 目标已有同名文件: suffix(确定性加后缀) | block(拒绝)
+    collision_policy: str = Field(default="suffix", pattern="^(suffix|block)$")
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     engine: EngineCfg = Field(default_factory=EngineCfg)
     plugin: PluginCfg = Field(default_factory=PluginCfg)
+    archive: ArchiveCfg = Field(default_factory=ArchiveCfg)
 
 
 def load_config(path: Path | str | None = None) -> AppConfig:

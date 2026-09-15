@@ -35,3 +35,15 @@ engine:
       adaptive_reflect: true
 plugin:
   impl: tkb
+archive:
+  # 自动归档流水线（workspace 路径来自 ARCHIVE_WORKSPACE_DIR env）。
+  # 二态分流: confidence >= threshold 自动执行，否则给出推荐等待确认。
+  enabled: true
+  threshold: 0.75
+  delta: 0.10  # V1 配置兼容，V2 不参与分流
+  review_all: false
+  poll_seconds: 5
+  stability_checks: 2
+  max_attempts: 5
+  top_k: 5
+  collision_policy: suffix

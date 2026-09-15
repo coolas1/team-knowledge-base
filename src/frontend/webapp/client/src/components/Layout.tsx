@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { NavLink, useNavigate, Outlet } from 'react-router-dom'
 import {
   AlertCircle,
+  Archive,
   BookOpen,
   FileUp,
   LoaderCircle,
@@ -110,6 +111,10 @@ export function Layout() {
           <span>团队知识库</span>
         </NavLink>
         <nav className="app-nav" aria-label="主导航">
+          <NavLink to="/archive" className={({ isActive }) => `app-nav-link${isActive ? ' is-active' : ''}`}>
+            <Archive size={17} aria-hidden="true" />
+            <span>归档</span>
+          </NavLink>
           <NavLink to="/graph" className={({ isActive }) => `app-nav-link${isActive ? ' is-active' : ''}`}>
             <Network size={17} aria-hidden="true" />
             <span>知识图谱</span>
