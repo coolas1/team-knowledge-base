@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, func, or_, select
 
@@ -40,6 +41,24 @@ class OperationView:
     duration_ms: int | None = None
     tokens: int = 0
     cost_microusd: int = 0
+
+
+def _consolidation_diagnostic(
+    status: str,
+    error: str | None,
+    lease_expires_at: datetime | None,
+    *,
+    now: datetime | None = None,
+) -> tuple[str, str | None]:
+    """Expose abandoned processing leases as retryable failures."""
+    if error == "cancelled_by_admin":
+        return "cancelled", error
+    if status != "processing":
+        return status, error
+    current = now or datetime.now(timezone.utc)
+    if lease_expires_at is None or lease_expires_at <= current:
+        return "failed", error or "processing_lease_expired"
+    return status, error
 
 
 class PostgresMemoryAdminRepository:
@@ -174,8 +193,10 @@ class PostgresMemoryAdminRepository:
             item.status = self._merge_status(item.status, state.status)
             item.error = item.error or state.error_msg
         for job in consolidation:
-            diagnostic_status = (
-                "cancelled" if job.error_msg == "cancelled_by_admin" else job.status
+            diagnostic_status, diagnostic_error = _consolidation_diagnostic(
+                job.status,
+                job.error_msg,
+                job.lease_expires_at,
             )
             subject = (
                 "默认归纳范围"
@@ -194,7 +215,7 @@ class PostgresMemoryAdminRepository:
             item.stages["consolidation"] = diagnostic_status
             item.status = self._merge_status(item.status, diagnostic_status)
             item.attempts = max(item.attempts, job.attempts)
-            item.error = item.error or job.error_msg
+            item.error = item.error or diagnostic_error
             item.tokens += job.tokens_used
             item.cost_microusd += job.cost_microusd
             item.duration_ms = self._duration(job.created_at, job.updated_at)
