@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadTkbAdapterConfig } from "../src/config.js";
 import {
   buildConversationMemoryExtension,
+  classifyConversationRoute,
   formatConversationMemoryBlock,
   recallMemoryForPrompt,
 } from "../src/conversation-memory.js";
@@ -100,7 +101,10 @@ describe("conversation memory prompt integration", () => {
     const disabled = loadTkbAdapterConfig({});
     expect(await recallMemoryForPrompt(client(), "question", disabled)).toBe("");
     expect(await recallMemoryForPrompt(client(), " ", disabled)).toBe("");
-    const enabled = loadTkbAdapterConfig({ TKB_CONVERSATION_MEMORY_ENABLED: "true" });
+    const enabled = loadTkbAdapterConfig({
+      TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+    });
     expect(
       await recallMemoryForPrompt(
         client({
@@ -108,7 +112,7 @@ describe("conversation memory prompt integration", () => {
             throw new Error("timeout");
           }),
         }),
-        "question",
+        "Do you remember my preference?",
         enabled,
       ),
     ).toBe("");
@@ -121,12 +125,15 @@ describe("conversation memory prompt integration", () => {
         handlers.push(handler);
       }),
     };
-    const config = loadTkbAdapterConfig({ TKB_CONVERSATION_MEMORY_ENABLED: "true" });
+    const config = loadTkbAdapterConfig({
+      TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+    });
     const rawClient = client();
     buildConversationMemoryExtension(rawClient, config)(pi as never);
 
     const result = await handlers[0](
-      { prompt: "What do I prefer?", systemPrompt: "base prompt" },
+      { prompt: "Do you remember what I prefer?", systemPrompt: "base prompt" },
       { signal: undefined },
     );
 
@@ -140,12 +147,13 @@ describe("conversation memory prompt integration", () => {
     const rawClient = client();
     const config = loadTkbAdapterConfig({
       TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
       TKB_CONVERSATION_MEMORY_TYPES: "world, observation",
       TKB_CONVERSATION_MEMORY_SHOW_SOURCE_TIME: "true",
     });
-    await recallMemoryForPrompt(rawClient, "question", config);
+    await recallMemoryForPrompt(rawClient, "What did we decide previously?", config);
     expect(rawClient.recallConversationMemory).toHaveBeenCalledWith(
-      "question",
+      "What did we decide previously?",
       expect.objectContaining({
         memoryTypes: ["world", "observation"],
         includeSourceTime: true,
@@ -182,21 +190,25 @@ describe("conversation memory diagnostics", () => {
   it("logs a swallowed recall failure instead of failing silently", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const enabled = loadTkbAdapterConfig({ TKB_CONVERSATION_MEMORY_ENABLED: "true" });
+      const enabled = loadTkbAdapterConfig({
+        TKB_CONVERSATION_MEMORY_ENABLED: "true",
+        TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+      });
       await recallMemoryForPrompt(
         client({
           recallConversationMemory: vi.fn(async () => {
             throw new Error("recall endpoint offline");
           }),
         }),
-        "question",
+        "Do you remember our earlier discussion?",
         enabled,
       );
 
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("conversation_memory_recall_failed"),
+        expect.stringContaining("conversation_memory_recall"),
       );
-      expect(warn.mock.calls[0][0]).toContain("recall endpoint offline");
+      expect(warn.mock.calls[0][0]).toContain("failed_open");
+      expect(warn.mock.calls[0][0]).not.toContain("recall endpoint offline");
     } finally {
       warn.mockRestore();
     }
@@ -228,5 +240,31 @@ describe("conversation memory diagnostics", () => {
       expect(opening === -1).toBe(closing === -1); // 要么都出现，要么都不出现
       expect(block.length).toBeLessThanOrEqual(budget);
     }
+  });
+});
+
+describe("conversation route classification", () => {
+  it.each([
+    ["请搜索知识库里的自动驾驶报告", "knowledge"],
+    ["Find the policy document", "knowledge"],
+    ["仕様書を検索して", "knowledge"],
+    ["你还记得我上次的偏好吗？", "continuity"],
+    ["Do you remember what we decided last time?", "continuity"],
+    ["前回決めたことを覚えてる？", "continuity"],
+    ["结合我们之前的决定搜索政策文档", "mixed"],
+    ["Explain autonomous driving", "knowledge"],
+  ])("routes %s to %s", (prompt, route) => {
+    expect(classifyConversationRoute(prompt).route).toBe(route);
+  });
+
+  it("does not recall for knowledge or ambiguous prompts", async () => {
+    const rawClient = client();
+    const config = loadTkbAdapterConfig({
+      TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+    });
+    expect(await recallMemoryForPrompt(rawClient, "Explain autonomous driving", config)).toBe("");
+    expect(await recallMemoryForPrompt(rawClient, "搜索自动驾驶文档", config)).toBe("");
+    expect(rawClient.recallConversationMemory).not.toHaveBeenCalled();
   });
 });

@@ -15,6 +15,8 @@ describe("loadTkbAdapterConfig", () => {
     expect(config.enableWriteTools).toBe(false);
     expect(config.enableFullGraph).toBe(false);
     expect(config.conversationMemoryEnabled).toBe(false);
+    expect(config.conversationMemoryAutoRecallEnabled).toBe(false);
+    expect(config.conversationMemoryRoutingTimeoutMs).toBe(750);
     expect(config.conversationMemoryRecallTimeoutMs).toBe(5000);
     expect(config.conversationMemoryRecallLimit).toBe(5);
     expect(config.conversationMemoryContextBudgetChars).toBe(6000);
@@ -44,6 +46,8 @@ describe("loadTkbAdapterConfig", () => {
   it("validates conversation memory limits and context", () => {
     const config = loadTkbAdapterConfig({
       TKB_CONVERSATION_MEMORY_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+      TKB_CONVERSATION_MEMORY_ROUTING_TIMEOUT_MS: "500",
       TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS: "1200",
       TKB_CONVERSATION_MEMORY_RECALL_LIMIT: "10",
       TKB_CONVERSATION_MEMORY_CONTEXT_BUDGET_CHARS: "4000",
@@ -53,6 +57,8 @@ describe("loadTkbAdapterConfig", () => {
       TKB_CONVERSATION_MEMORY_SHOW_SOURCE_TIME: "yes",
     });
     expect(config.conversationMemoryEnabled).toBe(true);
+    expect(config.conversationMemoryAutoRecallEnabled).toBe(true);
+    expect(config.conversationMemoryRoutingTimeoutMs).toBe(500);
     expect(config.conversationMemoryRecallTimeoutMs).toBe(1200);
     expect(config.conversationMemoryRecallLimit).toBe(10);
     expect(config.conversationMemoryContextBudgetChars).toBe(4000);
@@ -69,6 +75,12 @@ describe("loadTkbAdapterConfig", () => {
     ] as const) {
       expect(() => loadTkbAdapterConfig({ [key]: value })).toThrow(key);
     }
+  });
+
+  it("requires memory retention capability before automatic recall", () => {
+    expect(() => loadTkbAdapterConfig({
+      TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+    })).toThrow("requires conversation memory");
   });
 });
 

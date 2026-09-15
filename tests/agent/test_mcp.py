@@ -434,10 +434,7 @@ async def test_deep_search_returns_typed_timeout_payload():
 
 
 async def test_search_tool_returns_only_gated_sources_and_reports_filtering(fake_kb):
-    """End to end through the MCP layer: a mixed corpus (matching doc chunk,
-    matching conversation turn, single-term noise) returns exactly the two
-    relevant sources even though top_k allows more, with filtered_count in
-    the trace."""
+    """Default search keeps memories separate and never treats them as evidence."""
     from src.engine.hindsight_components.config import HindsightOptions
     from src.engine.hindsight_components.query import HindsightQueryService
     from src.engine.hindsight_components.recall import RecallEngine
@@ -506,7 +503,12 @@ async def test_search_tool_returns_only_gated_sources_and_reports_filtering(fake
         async def reflect(self, query, *, mode="deep", top_k=None):  # pragma: no cover
             raise AssertionError("recall strategy must not reflect")
 
-    mcp_mod.set_query_service(HindsightQueryService(RecallCore(MixedCorpusRepository())))
+    mcp_mod.set_query_service(
+        HindsightQueryService(
+            RecallCore(MixedCorpusRepository()),
+            knowledge_memory_context_enabled=True,
+        )
+    )
     try:
         out = await mcp_mod.search_knowledge_fast(
             "autonomous driving control theory trajectory planning prediction", top_k=5
@@ -514,11 +516,13 @@ async def test_search_tool_returns_only_gated_sources_and_reports_filtering(fake
     finally:
         mcp_mod._query_service = None
 
-    assert [source["memory_id"] for source in out["sources"]] == [
-        "doc-chunk",
-        "conversation-turn",
+    assert [source["memory_id"] for source in out["sources"]] == ["doc-chunk"]
+    assert [source["memory_id"] for source in out["conversation_context"]] == [
+        "conversation-turn"
     ]
-    assert out["trace"]["filtered_count"] == 1
+    assert out["document_evidence"] == out["sources"]
+    assert out["trace"]["source_pool_quotas"] == {"upload": 5, "conversation": 2}
+    assert out["trace"]["source_pool_traces"]["upload"]["filtered_count"] == 1
 
 
 async def test_search_response_stays_within_whole_response_budget(monkeypatch):

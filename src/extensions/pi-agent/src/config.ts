@@ -16,6 +16,9 @@ export interface TkbAdapterConfig {
   enableWriteTools: boolean;
   enableFullGraph: boolean;
   conversationMemoryEnabled: boolean;
+  /** Independent kill switch for implicit before-turn recall/injection. */
+  conversationMemoryAutoRecallEnabled: boolean;
+  conversationMemoryRoutingTimeoutMs: number;
   conversationMemoryRecallTimeoutMs: number;
   conversationMemoryRecallLimit: number;
   conversationMemoryContextBudgetChars: number;
@@ -115,6 +118,9 @@ export function loadTkbAdapterConfig(
   if (enabled(env.TKB_CONVERSATION_MEMORY_RELIABLE_DELIVERY) && !enabled(env.TKB_CONVERSATION_MEMORY_ENABLED)) {
     throw new Error("reliable delivery requires conversation memory");
   }
+  if (enabled(env.TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED) && !enabled(env.TKB_CONVERSATION_MEMORY_ENABLED)) {
+    throw new Error("automatic conversation recall requires conversation memory");
+  }
   return {
     mcpUrl: env.TKB_MCP_URL?.trim() || "http://localhost:8000/mcp/",
     connectTimeoutMs: positiveInteger(env.TKB_CONNECT_TIMEOUT_MS, 10_000),
@@ -126,6 +132,15 @@ export function loadTkbAdapterConfig(
     enableWriteTools: enabled(env.TKB_ENABLE_WRITE_TOOLS),
     enableFullGraph: enabled(env.TKB_ENABLE_FULL_GRAPH),
     conversationMemoryEnabled: enabled(env.TKB_CONVERSATION_MEMORY_ENABLED),
+    conversationMemoryAutoRecallEnabled: enabled(
+      env.TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED,
+    ),
+    conversationMemoryRoutingTimeoutMs: requiredPositiveInteger(
+      env.TKB_CONVERSATION_MEMORY_ROUTING_TIMEOUT_MS,
+      750,
+      "TKB_CONVERSATION_MEMORY_ROUTING_TIMEOUT_MS",
+      5_000,
+    ),
     conversationMemoryReliableDelivery: enabled(env.TKB_CONVERSATION_MEMORY_RELIABLE_DELIVERY),
     conversationMemoryRecallTimeoutMs: requiredPositiveInteger(
       env.TKB_CONVERSATION_MEMORY_RECALL_TIMEOUT_MS,
@@ -236,6 +251,17 @@ export function validateDeadlineHierarchy(
   if (toolTimeoutMs + reserveMs >= maxRunMs) {
     throw new Error(
       "Invalid timeout hierarchy: tool timeout + " +
+        "PI_AGENT_TURN_RESERVE_SECONDS must be less than PI_AGENT_MAX_RUN_SECONDS",
+    );
+  }
+  const automaticRecallMs = adapter.conversationMemoryRoutingTimeoutMs
+    + adapter.conversationMemoryRecallTimeoutMs;
+  if (
+    adapter.conversationMemoryAutoRecallEnabled &&
+    automaticRecallMs + reserveMs >= maxRunMs
+  ) {
+    throw new Error(
+      "Invalid timeout hierarchy: conversation routing + recall + " +
         "PI_AGENT_TURN_RESERVE_SECONDS must be less than PI_AGENT_MAX_RUN_SECONDS",
     );
   }

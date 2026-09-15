@@ -57,6 +57,8 @@ def test_infra_settings_postgres_dsn():
     assert s.hindsight_graph_worker_max_attempts == 10
     assert s.hindsight_conversation_memory_enabled is False
     assert s.hindsight_conversation_recall_limit == 20
+    assert s.hindsight_knowledge_memory_context_enabled is True
+    assert s.hindsight_knowledge_memory_context_limit == 2
     assert s.hindsight_conversation_worker_poll_seconds == 1.0
     assert s.hindsight_conversation_worker_lease_seconds == 300
     assert s.hindsight_conversation_worker_max_attempts == 10
@@ -78,6 +80,7 @@ def test_graph_worker_settings_must_be_positive():
     ("field", "value"),
     [
         ("hindsight_conversation_recall_limit", 0),
+        ("hindsight_knowledge_memory_context_limit", -1),
         ("hindsight_conversation_worker_poll_seconds", 0),
         ("hindsight_conversation_worker_lease_seconds", 0),
         ("hindsight_conversation_worker_max_attempts", 0),

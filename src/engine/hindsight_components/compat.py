@@ -97,6 +97,7 @@ class HindsightRecallAdapter:
                 timeout_seconds=request.timeout_seconds,
                 max_tokens=request.max_tokens,
                 max_candidates=request.max_candidates,
+                route=request.route,
             )
         )
 

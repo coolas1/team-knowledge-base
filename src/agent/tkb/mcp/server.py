@@ -146,11 +146,27 @@ def _bound_search_payload(
     budget = settings.engine_tools_response_max_chars
     sources = payload.get(source_key)
     sources = sources if isinstance(sources, list) else []
+    document_evidence = payload.get("document_evidence")
+    document_evidence = (
+        document_evidence if isinstance(document_evidence, list) else []
+    )
+    conversation_context = payload.get("conversation_context")
+    conversation_context = (
+        conversation_context if isinstance(conversation_context, list) else []
+    )
     trace = payload.get("trace")
     trace = dict(trace) if isinstance(trace, dict) else {}
     dropped_sources = 0
+    while conversation_context and _payload_size(payload) > budget:
+        conversation_context.pop()
+        dropped_sources += 1
     while sources and _payload_size(payload) > budget:
-        sources.pop()
+        removed = sources.pop()
+        removed_id = removed.get("memory_id") if isinstance(removed, dict) else None
+        if document_evidence and (
+            removed_id is None or document_evidence[-1].get("memory_id") == removed_id
+        ):
+            document_evidence.pop()
         dropped_sources += 1
     trimmed = dropped_sources > 0
     if _payload_size(payload) > budget:
@@ -168,6 +184,17 @@ def _bound_search_payload(
         payload_chars=min(_payload_size(payload), budget),
     )
     payload["trace"] = trace
+    while sources and _payload_size(payload) > budget:
+        removed = sources.pop()
+        removed_id = removed.get("memory_id") if isinstance(removed, dict) else None
+        if document_evidence and (
+            removed_id is None or document_evidence[-1].get("memory_id") == removed_id
+        ):
+            document_evidence.pop()
+        dropped_sources += 1
+        trace["payload_kept"] = len(sources)
+        trace["payload_dropped"] = dropped_sources
+    trace["payload_chars"] = min(_payload_size(payload), budget)
     return payload
 
 
@@ -369,6 +396,7 @@ async def query_knowledge(
     timeout_seconds: float | None = None,
     max_tokens: int | None = None,
     max_candidates: int | None = None,
+    route: Literal["knowledge", "conversation", "mixed"] = "knowledge",
 ) -> dict[str, Any]:
     """通过 Hindsight 统一入口执行 recall 或 reflect。"""
     result = await _get_query_service().query(
@@ -395,6 +423,7 @@ async def query_knowledge(
             timeout_seconds=timeout_seconds,
             max_tokens=max_tokens,
             max_candidates=max_candidates,
+            route=route,
         )
     )
     return _bound_search_payload(asdict(result))
@@ -513,6 +542,7 @@ async def search_knowledge_fast(
         mode="fast",
         top_k=top_k,
         needs_answer=False,
+        route="knowledge",
     )
 
 
@@ -536,6 +566,7 @@ async def search_knowledge_deep(
             top_k=top_k,
             needs_answer=False,
             correlation_id=correlation_id,
+            route="knowledge",
         )
     except DeepSearchError as error:
         return error.as_payload()

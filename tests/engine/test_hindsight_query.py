@@ -5,7 +5,7 @@ from src.engine.hindsight_components.types import RecallCandidate, RecallResult
 from src.engine.interface import KnowledgeQueryRequest
 
 
-def _candidate(n: int, text: str) -> RecallCandidate:
+def _candidate(n: int, text: str, *, source_type: str = "upload") -> RecallCandidate:
     return RecallCandidate(
         id=f"m{n}",
         document_id=f"doc-{n}",
@@ -14,7 +14,7 @@ def _candidate(n: int, text: str) -> RecallCandidate:
         source_text=text,
         chunk_index=n,
         memory_type="world",
-        source_type="upload",
+        source_type=source_type,
         final_score=1.0 / (n + 1),  # ranked best-first
     )
 
@@ -176,6 +176,63 @@ async def test_related_entities_are_capped(monkeypatch):
         "entity-0",
         "entity-1",
     ]
+
+
+async def test_default_knowledge_keeps_full_document_quota_and_adds_bounded_memory():
+    documents = [_candidate(i, f"document {i}") for i in range(5)]
+    conversations = [
+        _candidate(10 + i, f"conversation {i}", source_type="conversation")
+        for i in range(5)
+    ]
+
+    class RoutingCore:
+        def __init__(self):
+            self.calls = []
+
+        async def recall(self, query, *, mode="deep", top_k=None, filters=None):
+            source_type = filters.source_types[0]
+            self.calls.append((source_type, top_k))
+            pool = conversations if source_type == "conversation" else documents
+            return RecallResult(results=pool[:top_k], chunks={}, entities={}, trace={})
+
+    core = RoutingCore()
+    out = await HindsightQueryService(
+        core,
+        knowledge_memory_context_enabled=True,
+        knowledge_memory_context_limit=2,
+    ).query(
+        KnowledgeQueryRequest(
+            query="compare", strategy="recall", needs_answer=False, top_k=3
+        )
+    )
+
+    assert core.calls == [("upload", 3), ("conversation", 2)]
+    assert [source.memory_id for source in out.sources] == ["m0", "m1", "m2"]
+    assert out.document_evidence == out.sources
+    assert [source.memory_id for source in out.conversation_context] == ["m10", "m11"]
+    assert all(source.authority == "document" for source in out.sources)
+    assert all(
+        source.authority == "conversation" for source in out.conversation_context
+    )
+    assert out.trace["source_pool_quotas"] == {"upload": 3, "conversation": 2}
+
+
+async def test_default_knowledge_auxiliary_memory_has_kill_switch():
+    result = RecallResult(
+        results=[_candidate(0, "document")], chunks={}, entities={}, trace={}
+    )
+    core = FakeCore(result)
+
+    out = await HindsightQueryService(
+        core, knowledge_memory_context_enabled=False
+    ).query(
+        KnowledgeQueryRequest(
+            query="compare", strategy="recall", needs_answer=False
+        )
+    )
+
+    assert [source.memory_id for source in out.sources] == ["m0"]
+    assert out.conversation_context == []
 
 
 async def test_reflect_based_on_keeps_provenance_without_evidence_text():
