@@ -97,6 +97,15 @@ def main() -> None:
     assert all(
         rates[name] <= tolerance for name, tolerance in honesty["tolerances"].items()
     )
+    ablation = json.loads((ROOT / "ablation_report.json").read_text(encoding="utf-8"))
+    assert set(ablation["variants"]) == {
+        "current",
+        "source_isolation",
+        "source_local_fusion",
+        "hierarchical",
+        "safety_lane",
+    }
+    assert ablation["selected_configuration"] == "safety_lane"
     print(
         json.dumps(
             {
@@ -106,6 +115,7 @@ def main() -> None:
                 "metadata_cases": len(metadata_cases),
                 "retention_events": len(retention["events"]),
                 "honesty_cases": len(honesty_cases),
+                "ablation_variants": len(ablation["variants"]),
                 "digest": first,
             }
         )

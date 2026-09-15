@@ -35,3 +35,8 @@ confirmed-plan retention, and expiry.
 `honesty_cases.json` versions zero-tolerance gates for false positives,
 unsupported answers, and fabricated citations on no-answer, weak-overlap, and
 metadata-only queries.
+
+`run_ablation.py` executes current, source-isolated, source-local fusion,
+hierarchical, and safety-lane rankings over one frozen candidate set. It reports
+MRR, nDCG@5, Recall@5, unique-document coverage, measured p50/p95 runner latency,
+and the selected configuration.

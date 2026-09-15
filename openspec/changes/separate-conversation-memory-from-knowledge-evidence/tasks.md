@@ -82,7 +82,7 @@
 - [x] 9.3 Add metadata-only and implicit-topic document cases across title, filename, overview, tags, entities, noisy OCR, and multilingual content; verify document Recall@5 and passage usefulness separately.
 - [x] 9.4 Add retention-contamination replays covering repeated document answers, tool payloads, assistant hallucinations, changed preferences, duplicate turns, confirmed plans, and expiry; verify authoritative active-memory counts and provenance.
 - [x] 9.5 Add no-answer and weak-overlap cases; verify false positives, unsupported-answer rate, and fabricated citations do not exceed versioned tolerances.
-- [ ] 9.6 Run ranking ablations for current retrieval, source isolation only, source-local fusion, hierarchical retrieval, and safety lane; record MRR/nDCG/Recall@k, unique-document coverage, latency, and selected configuration.
+- [x] 9.6 Run ranking ablations for current retrieval, source isolation only, source-local fusion, hierarchical retrieval, and safety lane; record MRR/nDCG/Recall@k, unique-document coverage, latency, and selected configuration.
 - [ ] 9.7 Build a >=30,000-record scale fixture with realistic source and length distributions; verify indexed candidate bounds, database plans, memory use, p50/p95/p99 per phase, deep outcome rates, and response budgets.
 - [ ] 9.8 Add deterministic failure injection for routing, embedding, lexical DB, graph, temporal, reranker, evidence load, MCP, and cancellation; verify truthful empty/degraded/timeout/unavailable/fallback outcomes and no task leaks.
 
