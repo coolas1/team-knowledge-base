@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import json
 
 import pytest
 
@@ -6,6 +7,7 @@ from src.agent.interface import SkillContext
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.file_chunk_recall import reliable_passage
 from src.engine.hindsight_components.reflect import ReflectEngine
+from src.engine.hindsight_components.recall import RecallEngine
 from src.engine.hindsight_components.types import (
     RecallCandidate,
     RecallResult,
@@ -104,3 +106,49 @@ async def test_agent_skill_does_not_ask_llm_to_invent_metadata_only_body():
     assert "没有可靠正文段落" in result.output["answer"]
     assert result.output["sources"][0]["chunk_text"] == ""
     assert result.output["sources"][0]["metadata"]["metadata_only"] is True
+
+
+def test_hierarchical_trace_is_bounded_and_contains_no_source_content():
+    candidates = []
+    for index in range(5):
+        item = RecallCandidate(
+            id=f"candidate-{index}",
+            document_id=f"document-{index}",
+            title="SECRET TITLE",
+            text="SECRET BODY",
+            source_text="SECRET SOURCE",
+            chunk_index=index,
+            metadata={
+                "parent_score": 0.9,
+                "passage_score": 0.8,
+                "passage_confidence": "reliable",
+                "safety_lane": index == 4,
+                "lexical_field_scores": {
+                    "title": 1.2,
+                    "body": 0.4,
+                    "SECRET FIELD": 999,
+                },
+            },
+            final_score=0.7,
+        )
+        candidates.append(item)
+
+    trace = RecallEngine._hierarchical_trace(
+        candidates,
+        candidates[:2],
+        duplicate_collapsed=3,
+        max_records=2,
+        configured_per_document_cap=3,
+    )
+
+    assert trace["parent_candidate_count"] == 5
+    assert trace["passage_candidate_count"] == 5
+    assert len(trace["parent_candidates"]) == 2
+    assert len(trace["passage_candidates"]) == 2
+    assert trace["trace_truncated"] is True
+    assert trace["safety_lane_used"] is True
+    assert trace["safety_lane_count"] == 1
+    assert trace["configured_per_document_cap"] == 3
+    assert trace["collapsed_count"] == 3
+    serialized = json.dumps(trace)
+    assert "SECRET" not in serialized

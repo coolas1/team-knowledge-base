@@ -536,6 +536,16 @@ class HindsightQueryService:
                 document_counts[item.document_id] += 1
             seen.add(identity)
             selected.append(item)
+        hierarchical = dict(recalled.trace.get("hierarchical_retrieval") or {})
+        if hierarchical:
+            hierarchical.update(
+                final_result_count=len(selected),
+                final_document_coverage=len(
+                    {item.document_id for item in selected if item.document_id}
+                ),
+                route_duplicate_collapsed=duplicate_count,
+                route_cap_dropped=cap_count,
+            )
         return RecallResult(
             results=selected,
             chunks=recalled.chunks,
@@ -547,6 +557,9 @@ class HindsightQueryService:
                 "identity_cap_dropped": cap_count,
                 "document_coverage": len(
                     {item.document_id for item in selected if item.document_id}
+                ),
+                **(
+                    {"hierarchical_retrieval": hierarchical} if hierarchical else {}
                 ),
             },
         )
@@ -829,6 +842,7 @@ def build_query_service(
     repository = repository or PostgresMemoryRepository(
         keyword_index_enabled=settings.hindsight_keyword_index_enabled,
         keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
+        trace_candidate_limit=settings.hindsight_trace_candidate_limit,
         max_passages_per_document=settings.hindsight_max_passages_per_document,
         max_memories_per_turn=settings.hindsight_max_memories_per_turn,
     )

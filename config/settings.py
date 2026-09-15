@@ -168,6 +168,7 @@ class InfraSettings(BaseSettings):
     hindsight_selective_retention_enabled: bool = False
     hindsight_max_passages_per_document: int = Field(default=3, ge=1, le=20)
     hindsight_min_passage_score: float = Field(default=0.35, ge=-1.0, le=1.0)
+    hindsight_trace_candidate_limit: int = Field(default=20, ge=1, le=100)
     hindsight_max_memories_per_turn: int = Field(default=1, ge=1, le=10)
     hindsight_lexical_title_weight: float = Field(default=3.0, ge=0)
     hindsight_lexical_filename_weight: float = Field(default=2.5, ge=0)

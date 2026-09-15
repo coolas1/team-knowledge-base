@@ -8,6 +8,7 @@ import re
 import time
 import uuid
 from collections import defaultdict
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any, TypeVar
@@ -191,6 +192,7 @@ class RecallEngine:
                             source_ranks=dict(raw.source_ranks),
                         )
                         candidates[raw.id] = candidate
+                    candidate.metadata.update(dict(raw.metadata))
                     setattr(
                         candidate, f"{arm_name}_score", self._raw_score(raw, arm_name)
                     )
@@ -424,6 +426,13 @@ class RecallEngine:
                 "rerank_truncated": rerank_truncated,
                 "rerank_original_count": len(ordered),
                 "rerank_submitted_count": rerank_submitted_count,
+                "hierarchical_retrieval": self._hierarchical_trace(
+                    candidates.values(),
+                    selected,
+                    duplicate_collapsed=duplicate_collapsed,
+                    max_records=self._options.trace_candidate_limit,
+                    configured_per_document_cap=self._options.max_passages_per_document,
+                ),
             }
             return RecallResult(
                 results=selected,
@@ -455,6 +464,118 @@ class RecallEngine:
                     "fallback": fallback,
                 },
             )
+
+    @staticmethod
+    def _hierarchical_trace(
+        candidates,
+        selected,
+        *,
+        duplicate_collapsed: int,
+        max_records: int,
+        configured_per_document_cap: int,
+    ) -> dict[str, Any]:
+        """Bounded diagnostics containing identifiers and scores, never source text."""
+        field_names = {"title", "filename", "overview", "tags", "entities", "body"}
+        hierarchical = [
+            item
+            for item in candidates
+            if item.source_type == "upload"
+            and any(
+                key in item.metadata
+                for key in (
+                    "parent_score",
+                    "passage_score",
+                    "lexical_field_scores",
+                    "safety_lane",
+                    "metadata_only",
+                )
+            )
+        ]
+        parent_rows: dict[str, dict[str, Any]] = {}
+        passages = []
+        for item in hierarchical:
+            document_id = str(item.document_id)[:128]
+            parent = parent_rows.setdefault(
+                document_id,
+                {
+                    "document_id": document_id,
+                    "parent_score": None,
+                    "field_contributions": {},
+                },
+            )
+            parent_score = item.metadata.get("parent_score")
+            if isinstance(parent_score, (int, float)) and math.isfinite(parent_score):
+                parent["parent_score"] = round(float(parent_score), 6)
+            contributions = item.metadata.get("lexical_field_scores")
+            if isinstance(contributions, dict):
+                parent["field_contributions"].update(
+                    {
+                        str(name): round(float(value), 6)
+                        for name, value in contributions.items()
+                        if name in field_names
+                        and isinstance(value, (int, float))
+                        and math.isfinite(value)
+                    }
+                )
+            passage_score = item.metadata.get("passage_score")
+            passages.append(
+                {
+                    "candidate_id": str(item.id)[:128],
+                    "document_id": document_id,
+                    "chunk_index": int(item.chunk_index),
+                    "passage_score": (
+                        round(float(passage_score), 6)
+                        if isinstance(passage_score, (int, float))
+                        and math.isfinite(passage_score)
+                        else None
+                    ),
+                    "final_score": round(float(item.final_score), 6),
+                    "safety_lane": bool(item.metadata.get("safety_lane")),
+                    "metadata_only": bool(item.metadata.get("metadata_only")),
+                    "passage_confidence": str(
+                        item.metadata.get("passage_confidence") or "unknown"
+                    )[:32],
+                }
+            )
+        selected_ids = {item.id for item in selected}
+        for row in passages:
+            row["selected"] = row["candidate_id"] in {
+                str(value)[:128] for value in selected_ids
+            }
+        parents = list(parent_rows.values())
+        parent_total = len(parents)
+        passage_total = len(passages)
+        safety_lane_count = sum(row["safety_lane"] for row in passages)
+        metadata_only_count = sum(row["metadata_only"] for row in passages)
+        parents = parents[:max_records]
+        passages = passages[:max_records]
+        return {
+            "parent_candidate_count": parent_total,
+            "passage_candidate_count": passage_total,
+            "parent_candidates": parents,
+            "passage_candidates": passages,
+            "safety_lane_used": safety_lane_count > 0,
+            "safety_lane_count": safety_lane_count,
+            "metadata_only_count": metadata_only_count,
+            "selected_document_coverage": len(
+                {
+                    item.document_id
+                    for item in selected
+                    if item.source_type == "upload" and item.document_id
+                }
+            ),
+            "configured_per_document_cap": configured_per_document_cap,
+            "observed_per_document_max": max(
+                (
+                    sum(1 for item in selected if item.document_id == document_id)
+                    for document_id in {item.document_id for item in selected}
+                ),
+                default=0,
+            ),
+            "collapsed_count": duplicate_collapsed,
+            "trace_limit": max_records,
+            "trace_truncated": parent_total > max_records or passage_total > max_records,
+        }
 
     async def _prepare_query(
         self,

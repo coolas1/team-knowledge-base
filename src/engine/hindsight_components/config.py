@@ -50,6 +50,7 @@ class HindsightOptions:
     mmr_redundancy_penalty: float = 0.2
     max_passages_per_document: int = 3
     max_memories_per_turn: int = 1
+    trace_candidate_limit: int = 20
     # Relevance gates: queries without KB coverage must not surface unrelated
     # memories. semantic gate applies to every mode; score gate applies to the
     # neural-rerank path (deep mode).
@@ -109,6 +110,7 @@ class HindsightOptions:
             "recall_max_tokens": self.recall_max_tokens,
             "max_passages_per_document": self.max_passages_per_document,
             "max_memories_per_turn": self.max_memories_per_turn,
+            "trace_candidate_limit": self.trace_candidate_limit,
             "conversation_freshness_half_life_days": self.conversation_freshness_half_life_days,
             "reflect_max_iterations": self.reflect_max_iterations,
             "reflect_max_tokens": self.reflect_max_tokens,
