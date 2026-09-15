@@ -43,7 +43,7 @@
 - [x] 5.4 Add conversation freshness, confirmation/origin authority, and supersession factors after relevance gating; verify short low-quality memories cannot outrank a relevant confirmed memory solely because of text length.
 - [x] 5.5 Collapse source chunk/fact/observation and repeated-turn representations by source, derivation, and semantic identity before reranking; verify the strongest provenance-bearing representative is retained and trace reports collapsed counts.
 - [x] 5.6 Enforce route source quotas, per-document caps, per-turn caps, and final diversity ordering before token selection; verify large conversation and single-document floods cannot exhaust final evidence slots.
-- [ ] 5.7 Add configurable hybrid safety-lane candidates for globally strong original chunks outside parent-document selection; verify an ablation demonstrates added recall without violating document/source caps.
+- [x] 5.7 Add configurable hybrid safety-lane candidates for globally strong original chunks outside parent-document selection; verify an ablation demonstrates added recall without violating document/source caps.
 
 ## 6. Hierarchical document retrieval
 

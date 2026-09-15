@@ -161,6 +161,9 @@ class InfraSettings(BaseSettings):
     hindsight_knowledge_memory_context_enabled: bool = True
     hindsight_knowledge_memory_context_limit: int = Field(default=2, ge=0, le=10)
     hindsight_hierarchical_retrieval_enabled: bool = False
+    hindsight_hybrid_safety_lane_enabled: bool = False
+    hindsight_hybrid_safety_lane_limit: int = Field(default=3, ge=1, le=20)
+    hindsight_hybrid_safety_lane_min_score: float = Field(default=0.8, ge=0.0, le=1.0)
     hindsight_adaptive_deep_search_enabled: bool = False
     hindsight_selective_retention_enabled: bool = False
     hindsight_max_passages_per_document: int = Field(default=3, ge=1, le=20)

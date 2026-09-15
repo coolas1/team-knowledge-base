@@ -2442,6 +2442,92 @@ async def test_supersession_invalidates_cache_graph_observation_and_model_depend
     assert retired_audit["memory"]["metadata"]["lifecycle_state"] == "retired"
 
 
+async def test_hybrid_safety_lane_ablation_recovers_global_chunk_with_caps(
+    scope_database, monkeypatch
+):
+    from config.settings import settings
+    from src.engine.components.store.models import (
+        Chunk,
+        DocumentRetrieval,
+        EMBEDDING_DIM,
+    )
+    from src.engine.hindsight_components.file_chunk_recall import search_file_chunks
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document_ids = [uuid.uuid4() for _ in range(6)]
+    parent_vector = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
+    other_vector = [0.0, 1.0] + [0.0] * (EMBEDDING_DIM - 2)
+    async with sessions() as session, session.begin():
+        for index, document_id in enumerate(document_ids):
+            document = Document(
+                id=document_id,
+                bank_id="bank-a",
+                title=f"document-{index}",
+                file_type="text",
+                status="indexed",
+            )
+            session.add(document)
+            session.add(
+                DocumentRetrieval(
+                    doc_id=document_id,
+                    bank_id="bank-a",
+                    revision=1,
+                    title=document.title,
+                    embedding=parent_vector if index < 5 else other_vector,
+                    embedding_model="test",
+                    generation_state="ready",
+                )
+            )
+            chunk_count = 1 if index < 5 else 4
+            for chunk_index in range(chunk_count):
+                session.add(
+                    Chunk(
+                        doc_id=document_id,
+                        bank_id="bank-a",
+                        chunk_index=chunk_index,
+                        chunk_text=(
+                            "weak parent passage"
+                            if index < 5
+                            else f"globally strong passage {chunk_index}"
+                        ),
+                        doc_uri=f"{document_id}:document-{index}",
+                        embedding=other_vector if index < 5 else parent_vector,
+                    )
+                )
+
+    monkeypatch.setattr(settings, "hindsight_hierarchical_retrieval_enabled", True)
+    monkeypatch.setattr(settings, "hindsight_max_passages_per_document", 1)
+    monkeypatch.setattr(settings, "hindsight_hybrid_safety_lane_limit", 4)
+    monkeypatch.setattr(settings, "hindsight_hybrid_safety_lane_min_score", 0.95)
+    monkeypatch.setattr(settings, "hindsight_hybrid_safety_lane_enabled", False)
+    disabled = await search_file_chunks(
+        sessions,
+        MemoryScope(bank_id="bank-a"),
+        parent_vector,
+        2,
+        "upload",
+        RecallFilter(),
+    )
+    monkeypatch.setattr(settings, "hindsight_hybrid_safety_lane_enabled", True)
+    enabled = await search_file_chunks(
+        sessions,
+        MemoryScope(bank_id="bank-a"),
+        parent_vector,
+        2,
+        "upload",
+        RecallFilter(),
+    )
+
+    target = str(document_ids[-1])
+    assert target not in {item.document_id for item in disabled}
+    recovered = [item for item in enabled if item.document_id == target]
+    assert len(recovered) == 1
+    assert recovered[0].metadata["safety_lane"] is True
+    assert recovered[0].metadata["retrieval_level"] == "global_safety_lane"
+    assert all(item.source_type == "upload" for item in enabled)
+
+
 async def test_backfill_resume_constraints_and_count_preservation(scope_database):
     engine, schema = scope_database
     doc_ids = [uuid.uuid4() for _ in range(4)]

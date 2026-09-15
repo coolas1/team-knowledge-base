@@ -96,9 +96,9 @@ async def _search_hierarchical_chunks(sessions, scope, embedding, limit, filters
     """Select revision-fenced parents, then rank original passages within them."""
     from config.settings import settings
 
-    parent_score = (
-        1 - DocumentRetrieval.embedding.cosine_distance(embedding)
-    ).label("parent_score")
+    parent_score = (1 - DocumentRetrieval.embedding.cosine_distance(embedding)).label(
+        "parent_score"
+    )
     parent_limit = min(max(limit * 2, 5), settings.hindsight_keyword_candidate_limit)
     parent_conditions = [
         public_document_filter(scope),
@@ -152,6 +152,24 @@ async def _search_hierarchical_chunks(sessions, scope, embedding, limit, filters
                 .limit(parent_limit * settings.hindsight_max_passages_per_document)
             )
         )
+        safety_rows = []
+        if settings.hindsight_hybrid_safety_lane_enabled:
+            parent_ids = [row.doc_id for row, _, _ in parents]
+            safety_rows = list(
+                await session.execute(
+                    select(Chunk, Document, passage_score)
+                    .join(Document, Document.id == Chunk.doc_id)
+                    .where(
+                        *_conditions(scope, filters),
+                        Chunk.doc_id.not_in(parent_ids),
+                        Chunk.embedding.is_not(None),
+                        passage_score
+                        >= settings.hindsight_hybrid_safety_lane_min_score,
+                    )
+                    .order_by(passage_score.desc(), Chunk.id)
+                    .limit(settings.hindsight_hybrid_safety_lane_limit)
+                )
+            )
 
     candidates = []
     per_document = {}
@@ -171,6 +189,21 @@ async def _search_hierarchical_chunks(sessions, scope, embedding, limit, filters
             retrieval_level="parent_then_passage",
         )
         candidates.append(candidate)
+    safety_lane_count = 0
+    for chunk, document, passage_value in safety_rows:
+        doc_id = str(document.id)
+        used = per_document.get(doc_id, 0)
+        if used >= settings.hindsight_max_passages_per_document:
+            continue
+        per_document[doc_id] = used + 1
+        candidate = _candidate(chunk, document, float(passage_value))
+        candidate.metadata.update(
+            passage_score=float(passage_value),
+            retrieval_level="global_safety_lane",
+            safety_lane=True,
+        )
+        candidates.append(candidate)
+        safety_lane_count += 1
     for doc_id, parent_value in parent_scores.items():
         if doc_id in per_document:
             continue
@@ -192,6 +225,7 @@ async def _search_hierarchical_chunks(sessions, scope, embedding, limit, filters
                     "metadata_only": True,
                     "parent_score": parent_value,
                     "passage_confidence": "unavailable",
+                    "safety_lane_candidates": safety_lane_count,
                 },
                 semantic_score=parent_value,
             )
@@ -219,7 +253,15 @@ async def search_file_keywords(
     )
     overlap = sum(
         case(
-            (or_(*(field.contains(token, autoescape=True) for field in searchable_fields)), 1),
+            (
+                or_(
+                    *(
+                        field.contains(token, autoescape=True)
+                        for field in searchable_fields
+                    )
+                ),
+                1,
+            ),
             else_=0,
         )
         for token in tokens
@@ -254,9 +296,7 @@ async def search_file_keywords(
     }
     scores, contributions = fielded_lexical_scores(query, fields, scorer, weights)
     candidates = []
-    for index, ((chunk, document), score) in enumerate(
-        zip(rows, scores, strict=True)
-    ):
+    for index, ((chunk, document), score) in enumerate(zip(rows, scores, strict=True)):
         if score > 0:
             candidate = _candidate(chunk, document)
             candidate.semantic_score = None
