@@ -62,7 +62,7 @@
 - [x] 7.3 Run neural reranking only when multiple plausible candidates remain or comparison/synthesis requires it; verify timeout retains calibrated deterministic evidence and marks degradation.
 - [x] 7.4 Preserve one monotonic total budget across routing, optional phases, evidence loading, and cleanup; verify every phase receives the lesser of configured and remaining time and cancellation closes descendant tasks.
 - [x] 7.5 Implement a document-only indexed lexical/dense fallback with no query-analysis or rerank LLM, reserve its budget inside the turn, and allow at most one attempt; verify timeout, unavailable, degraded-without-evidence, fallback-failure, and cancellation cases.
-- [ ] 7.6 Extend startup validation to include routing, automatic memory recall, deep tool, fallback, PPT exception policy, final-answer reserve, and outer turn deadline; verify invalid compositions fail with actionable messages.
+- [x] 7.6 Extend startup validation to include routing, automatic memory recall, deep tool, fallback, PPT exception policy, final-answer reserve, and outer turn deadline; verify invalid compositions fail with actionable messages.
 - [ ] 7.7 Enable indexed keyword reads only after completeness validation and remove full-corpus Python BM25 from the enabled path; verify SQL plans/candidate counts remain bounded at projected scale and the feature-off rollback path still works.
 
 ## 8. Backfill and historical cleanup tooling

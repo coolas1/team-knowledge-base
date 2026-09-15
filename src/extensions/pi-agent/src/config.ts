@@ -127,9 +127,21 @@ export function loadTkbAdapterConfig(
   return {
     mcpUrl: env.TKB_MCP_URL?.trim() || "http://localhost:8000/mcp/",
     connectTimeoutMs: positiveInteger(env.TKB_CONNECT_TIMEOUT_MS, 10_000),
-    defaultToolTimeoutMs: positiveInteger(env.TKB_TOOL_TIMEOUT_MS, 60_000),
-    deepToolTimeoutMs: positiveInteger(env.TKB_DEEP_TOOL_TIMEOUT_MS, 60_000),
-    pptToolTimeoutMs: positiveInteger(env.TKB_PPT_TOOL_TIMEOUT_MS, 900_000),
+    defaultToolTimeoutMs: requiredPositiveInteger(
+      env.TKB_TOOL_TIMEOUT_MS,
+      60_000,
+      "TKB_TOOL_TIMEOUT_MS",
+    ),
+    deepToolTimeoutMs: requiredPositiveInteger(
+      env.TKB_DEEP_TOOL_TIMEOUT_MS,
+      60_000,
+      "TKB_DEEP_TOOL_TIMEOUT_MS",
+    ),
+    pptToolTimeoutMs: requiredPositiveInteger(
+      env.TKB_PPT_TOOL_TIMEOUT_MS,
+      900_000,
+      "TKB_PPT_TOOL_TIMEOUT_MS",
+    ),
     strictContract: enabled(env.TKB_CONTRACT_STRICT, true),
     enableLegacySearch: enabled(env.TKB_ENABLE_LEGACY_SEARCH),
     enableWriteTools: enabled(env.TKB_ENABLE_WRITE_TOOLS),
@@ -247,8 +259,16 @@ export function loadPiAgentConfig(
     contextWindow: positiveInteger(env.PI_AGENT_CONTEXT_WINDOW, 32_768),
     maxOutputTokens: positiveInteger(env.PI_AGENT_MAX_OUTPUT_TOKENS, 8_192),
     maxToolCalls: positiveInteger(env.PI_AGENT_MAX_TOOL_CALLS, 12),
-    maxRunSeconds: positiveInteger(env.PI_AGENT_MAX_RUN_SECONDS, 1200),
-    turnReserveSeconds: positiveInteger(env.PI_AGENT_TURN_RESERVE_SECONDS, 60),
+    maxRunSeconds: requiredPositiveInteger(
+      env.PI_AGENT_MAX_RUN_SECONDS,
+      1200,
+      "PI_AGENT_MAX_RUN_SECONDS",
+    ),
+    turnReserveSeconds: requiredPositiveInteger(
+      env.PI_AGENT_TURN_RESERVE_SECONDS,
+      60,
+      "PI_AGENT_TURN_RESERVE_SECONDS",
+    ),
     maxLoadedSessions: positiveInteger(env.PI_AGENT_MAX_LOADED_SESSIONS, 50),
     maxRequestBytes: positiveInteger(env.PI_AGENT_MAX_REQUEST_BYTES, 1_048_576),
   };
@@ -260,22 +280,47 @@ export function validateDeadlineHierarchy(
 ): void {
   const maxRunMs = agent.maxRunSeconds * 1_000;
   const reserveMs = agent.turnReserveSeconds * 1_000;
-  const toolTimeoutMs = Math.max(adapter.deepToolTimeoutMs, adapter.pptToolTimeoutMs);
-  if (toolTimeoutMs + reserveMs >= maxRunMs) {
+  if (reserveMs >= maxRunMs) {
     throw new Error(
-      "Invalid timeout hierarchy: tool timeout + " +
-        "PI_AGENT_TURN_RESERVE_SECONDS must be less than PI_AGENT_MAX_RUN_SECONDS",
+      "Invalid timeout hierarchy: PI_AGENT_TURN_RESERVE_SECONDS must be less " +
+        "than PI_AGENT_MAX_RUN_SECONDS so final-answer synthesis has a bounded reserve",
     );
   }
-  const automaticRecallMs = adapter.conversationMemoryRoutingTimeoutMs
-    + adapter.conversationMemoryRecallTimeoutMs;
+  const routingMs = adapter.conversationMemoryRoutingModelEnabled
+    ? adapter.conversationMemoryRoutingTimeoutMs
+    : 0;
+  const automaticRecallMs = adapter.conversationMemoryAutoRecallEnabled
+    ? routingMs + adapter.conversationMemoryRecallTimeoutMs
+    : 0;
   if (
-    adapter.conversationMemoryAutoRecallEnabled &&
     automaticRecallMs + reserveMs >= maxRunMs
   ) {
     throw new Error(
       "Invalid timeout hierarchy: conversation routing + recall + " +
         "PI_AGENT_TURN_RESERVE_SECONDS must be less than PI_AGENT_MAX_RUN_SECONDS",
+    );
+  }
+  const searchPathMs = automaticRecallMs
+    + adapter.deepToolTimeoutMs
+    + adapter.defaultToolTimeoutMs
+    + reserveMs;
+  if (searchPathMs >= maxRunMs) {
+    throw new Error(
+      "Invalid timeout hierarchy: automatic memory routing/recall + deep tool timeout " +
+        "+ one fast fallback timeout + PI_AGENT_TURN_RESERVE_SECONDS must be less " +
+        "than PI_AGENT_MAX_RUN_SECONDS; lower TKB_DEEP_TOOL_TIMEOUT_MS or " +
+        "TKB_TOOL_TIMEOUT_MS, or raise PI_AGENT_MAX_RUN_SECONDS",
+    );
+  }
+  // PPT is an explicit exclusive long-running exception: it does not reserve a
+  // deep-search fallback, but automatic recall and final synthesis still run.
+  const pptPathMs = automaticRecallMs + adapter.pptToolTimeoutMs + reserveMs;
+  if (pptPathMs >= maxRunMs) {
+    throw new Error(
+      "Invalid timeout hierarchy: PPT exception policy requires automatic memory " +
+        "routing/recall + TKB_PPT_TOOL_TIMEOUT_MS + PI_AGENT_TURN_RESERVE_SECONDS " +
+        "to be less than PI_AGENT_MAX_RUN_SECONDS; lower the PPT timeout or raise " +
+        "the outer turn deadline",
     );
   }
 }
