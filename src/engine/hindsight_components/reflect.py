@@ -434,6 +434,7 @@ class ReflectEngine:
                 "question": query,
                 "remaining_tokens": remaining_tokens,
                 "tool_results": trace,
+                "retrieved_memory_ids": list(memories),
                 "retrieved_memories": [
                     {
                         "id": item.id,
