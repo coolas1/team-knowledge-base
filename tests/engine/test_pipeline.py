@@ -9,6 +9,7 @@ import asyncio
 import inspect
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from src.engine.components.analyzer import Analyzer, ChunkAnalysisResult
@@ -25,6 +26,21 @@ def test_pipeline_constructor_accepts_analyzer():
 def test_pipeline_methods_exist():
     assert hasattr(Pipeline, "process_file")
     assert hasattr(Pipeline, "reindex_document")
+
+
+async def test_vector_only_summary_rate_limit_falls_back(monkeypatch):
+    pipe = Pipeline(None, vector_only=True)
+
+    async def exhausted(*_args, **_kwargs):
+        raise httpx.ReadTimeout("model unavailable")
+
+    monkeypatch.setattr(pipe, "_with_retry", exhausted)
+
+    result = await pipe._summary_overview_resilient(
+        "first line\nsecond line", "title", uuid4()
+    )
+
+    assert result.overview == "[Extractive fallback] first line second line"
 
 
 @pytest.mark.asyncio
