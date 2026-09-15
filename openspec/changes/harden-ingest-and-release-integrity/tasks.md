@@ -58,13 +58,13 @@
 
 ## 4. Honest failure classification
 
-- [ ] 4.1 Catch `UnicodeEncodeError` ahead of the existing `except ValueError`
+- [x] 4.1 Catch `UnicodeEncodeError` ahead of the existing `except ValueError`
   in `src/frontend/webapp/server/routes_documents.py:173` and return a
   service-side envelope instead of `invalid_file`.
   Verify: a BFF test simulating an encoding failure asserts the response
   `code` is not `invalid_file` and the suggestion does not claim the file is
   corrupt.
-- [ ] 4.2 Apply the same treatment at `routes_documents.py:273` for edited
+- [x] 4.2 Apply the same treatment at `routes_documents.py:273` for edited
   content.
   Verify: a test `PUT`s `{"content": "\udbc3"}` to an existing markdown
   document and gets neither 404 nor an "unsupported format" message.

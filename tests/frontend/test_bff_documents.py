@@ -109,7 +109,9 @@ def test_upload_rejects_empty_file_with_guidance(client):
 def test_upload_service_failure_is_retryable(client, monkeypatch):
     c, _ = client
 
-    async def fail_ingest(_name, _data):
+    async def fail_ingest(_source):
+        # kb.ingest 收到的是单个 IngestSource：签名写错会变成 TypeError，
+        # 测试就只覆盖到兜底的 except Exception，而不是这里要模拟的故障。
         raise RuntimeError("database unavailable")
 
     engine = app_mod.app.dependency_overrides[deps.get_kb]()
@@ -364,3 +366,76 @@ def test_spa_fallback_excludes_mcp_and_serves_client_routes(client, monkeypatch,
     spa = c.get("/no-such-client-route")
     assert spa.status_code == 200
     assert "spa-shell" in spa.text
+
+
+def _encoding_failure() -> UnicodeEncodeError:
+    """构造一个真实的编码失败（服务端处理文本时才会出现）。"""
+    return UnicodeEncodeError("utf-8", "\udbc3", 0, 1, "surrogates not allowed")
+
+
+def test_upload_encoding_failure_is_not_blamed_on_the_file(client, monkeypatch):
+    """编码失败是内部错误，不能回报成"文件可能已损坏"。"""
+    c, _ = client
+
+    async def fail_ingest(_source):
+        raise _encoding_failure()
+
+    engine = app_mod.app.dependency_overrides[deps.get_kb]()
+    monkeypatch.setattr(engine, "ingest", fail_ingest)
+
+    res = c.post(
+        "/api/documents/upload",
+        files={"file": ("ok.md", b"content", "text/markdown")},
+    )
+
+    detail = res.json()["detail"]
+    assert res.status_code == 503
+    assert detail["code"] != "invalid_file"
+    assert detail["retryable"] is True
+    assert "损坏" not in detail["suggestion"]
+
+
+def test_upload_genuine_bad_file_still_blames_the_file(client, monkeypatch):
+    """诚实分类的另一半：真的解不开的文件仍要指认文件本身。"""
+    c, _ = client
+
+    async def fail_ingest(_source):
+        raise ValueError("不支持的格式")
+
+    engine = app_mod.app.dependency_overrides[deps.get_kb]()
+    monkeypatch.setattr(engine, "ingest", fail_ingest)
+
+    res = c.post(
+        "/api/documents/upload",
+        files={"file": ("ok.md", b"content", "text/markdown")},
+    )
+
+    assert res.status_code == 400
+    assert res.json()["detail"]["code"] == "invalid_file"
+    assert "损坏" in res.json()["detail"]["suggestion"]
+
+
+def test_edit_content_with_surrogate_is_not_reported_missing(client):
+    """编辑内容里的孤立代理项不得变成"文档不存在"。
+
+    请求体用原始的 ``\\udbc3`` 转义而不是 httpx 的 json=：httpx 以
+    ensure_ascii=False 序列化，会先在客户端自己炸掉，也就到不了服务端。
+    """
+    c, _ = client
+    doc_id = c.post(
+        "/api/documents/upload",
+        files={"file": ("r.md", b"old", "text/markdown")},
+    ).json()["id"]
+
+    res = c.put(
+        f"/api/documents/{doc_id}/content",
+        content=b'{"content": "\\udbc3"}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert res.status_code != 404
+    body = str(res.json())
+    assert "不支持" not in body
+    assert "文档不存在" not in body
+    assert res.json()["detail"]["code"] == "edit_encoding_failed"
+    assert res.json()["detail"]["retryable"] is True
