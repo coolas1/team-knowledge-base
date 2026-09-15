@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "queries": 200,
+  "candidate_bound": 300,
+  "candidate_max": 31,
+  "peak_memory_mb": 5.605,
+  "fixture": {
+    "fixture_digest": "75c9617f8bf4908699a357a6bc70c079139bd808f19d83df8a71c9f5bd59c142",
+    "indexed_candidate_bound": 300,
+    "length_buckets": {"long": 2995, "medium": 10596, "short": 16409},
+    "records": 30000,
+    "schema_version": 1,
+    "seed": 9457,
+    "source_counts": {"conversation": 21617, "upload": 8383}
+  },
+  "database_plan": {
+    "integration_test": "tests/integration/test_lexical_keyword_index.py",
+    "required_access": "Bitmap Index Scan or equivalent GIN plan",
+    "required_index": "idx_memory_units_lexical_tokens"
+  },
+  "phase_latency_ms": {
+    "route": {"p50": 0.0006, "p95": 0.0008, "p99": 0.0011},
+    "indexed_lookup": {"p50": 0.0016, "p95": 0.0021, "p99": 0.0076},
+    "fusion": {"p50": 0.0058, "p95": 0.0066, "p99": 0.0117},
+    "payload": {"p50": 0.0317, "p95": 0.0359, "p99": 0.0632}
+  },
+  "deep_outcomes": {"degraded": 6, "early_return": 153, "escalated_success": 38, "timeout": 3},
+  "response_budget": {"limit_bytes": 65536, "max_bytes": 179}
+}

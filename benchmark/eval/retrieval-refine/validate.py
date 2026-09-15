@@ -106,6 +106,12 @@ def main() -> None:
         "safety_lane",
     }
     assert ablation["selected_configuration"] == "safety_lane"
+    scale = json.loads((ROOT / "scale_report.json").read_text(encoding="utf-8"))
+    assert scale["fixture"]["records"] >= 30_000
+    assert scale["candidate_max"] <= scale["candidate_bound"]
+    assert (
+        scale["response_budget"]["max_bytes"] <= scale["response_budget"]["limit_bytes"]
+    )
     print(
         json.dumps(
             {
@@ -116,6 +122,7 @@ def main() -> None:
                 "retention_events": len(retention["events"]),
                 "honesty_cases": len(honesty_cases),
                 "ablation_variants": len(ablation["variants"]),
+                "scale_records": scale["fixture"]["records"],
                 "digest": first,
             }
         )

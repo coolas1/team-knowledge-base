@@ -40,3 +40,8 @@ metadata-only queries.
 hierarchical, and safety-lane rankings over one frozen candidate set. It reports
 MRR, nDCG@5, Recall@5, unique-document coverage, measured p50/p95 runner latency,
 and the selected configuration.
+
+`run_scale.py` materializes the deterministic 30,000-record source/length
+distribution and records bounded indexed candidates, the required live SQL-plan
+assertion, peak memory, per-phase p50/p95/p99, deep outcome counts, and maximum
+response bytes.
