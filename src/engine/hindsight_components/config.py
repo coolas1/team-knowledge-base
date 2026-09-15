@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class HindsightOptions:
     file_summary_enabled: bool = False
     adaptive_reflect_enabled: bool = False
+    adaptive_deep_search_enabled: bool = False
     consolidation_enabled: bool = False
     entity_resolution_enabled: bool = False
     entity_candidate_limit: int = 10
@@ -38,6 +39,8 @@ class HindsightOptions:
     semantic_link_threshold: float = 0.78
     semantic_neighbor_limit: int = 3
     mmr_redundancy_penalty: float = 0.2
+    max_passages_per_document: int = 3
+    max_memories_per_turn: int = 1
     # Relevance gates: queries without KB coverage must not surface unrelated
     # memories. semantic gate applies to every mode; score gate applies to the
     # neural-rerank path (deep mode).
@@ -51,7 +54,7 @@ class HindsightOptions:
     # Conversation-memory recall applies its own, lower semantic floor instead
     # of the public-corpus floor, so memory recall is not governed by the
     # public gate.
-    conversation_recall_min_semantic: float = 0.25
+    conversation_recall_min_semantic: float = 0.3
     # Cap neural reranker scores with vector similarity to stop the LLM from
     # "hallucinating" high scores for semantically unrelated chunks.
     rerank_semantic_margin: float = 0.25
@@ -89,6 +92,8 @@ class HindsightOptions:
             "recall_max_results": self.recall_max_results,
             "recall_max_candidates": self.recall_max_candidates,
             "recall_max_tokens": self.recall_max_tokens,
+            "max_passages_per_document": self.max_passages_per_document,
+            "max_memories_per_turn": self.max_memories_per_turn,
             "reflect_max_iterations": self.reflect_max_iterations,
             "reflect_max_tokens": self.reflect_max_tokens,
             "reflect_total_timeout_seconds": self.reflect_total_timeout_seconds,

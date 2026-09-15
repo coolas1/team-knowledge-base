@@ -80,6 +80,12 @@ async def init_db() -> None:
         )
         await conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS idx_document_retrieval_embedding "
+                "ON document_retrieval USING hnsw (embedding vector_cosine_ops)"
+            )
+        )
+        await conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS idx_memory_units_embedding "
                 "ON memory_units USING hnsw (embedding vector_cosine_ops)"
             )

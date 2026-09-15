@@ -89,11 +89,12 @@ async def test_vector_pipeline_embeds_all_chunks_without_entity_calls(monkeypatc
     embed = AsyncMock(side_effect=lambda texts: [[0.1] for _ in texts])
     monkeypatch.setattr(pipeline, "embedder", SimpleNamespace(embed_batch=embed))
     pipe = pipeline.Pipeline(object(), analyzer=analyzer, vector_only=True)
-    overview, chunks, analyses, embeddings = await pipe._analyze_document(
+    overview, chunks, analyses, parent_embedding, embeddings = await pipe._analyze_document(
         "\n\n".join("正文内容。" * 300 for _ in range(10)), "title", uuid4()
     )
     assert overview.overview == "summary"
     assert len(chunks) == len(embeddings) > 1
+    assert parent_embedding
     assert not analyses
     analyzer.analyze_chunk.assert_not_called()
     analyzer.analyze_overview.assert_not_called()

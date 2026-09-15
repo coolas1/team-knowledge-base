@@ -10,8 +10,14 @@ from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert
 
-from src.engine.components.store.models import Chunk, Document, DocumentChange
+from src.engine.components.store.models import (
+    Chunk,
+    Document,
+    DocumentChange,
+    DocumentRetrieval,
+)
 from src.engine.components.store.neo4j import (
     Neo4jClient,
     EntityData,
@@ -29,9 +35,9 @@ from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
 from src.engine.components.retry import retry_transient
 from src.engine.graphrag.progress import clear_progress, set_progress
-from src.engine.retrieval_view import retrieval_view_prefix
 from src.engine.interface import DocumentIndexHook
 from src.engine.scope import MemoryScope, TagFilter
+from src.engine.hindsight_components.utils import lexical_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -106,14 +112,19 @@ class Pipeline:
         title: str,
         doc_id: UUID,
         filename: str | None = None,
-    ) -> tuple[AnalysisResult, list, list[ChunkAnalysisResult], list[list[float]]]:
+    ) -> tuple[
+        AnalysisResult,
+        list,
+        list[ChunkAnalysisResult],
+        list[float],
+        list[list[float]],
+    ]:
         """分块后并行执行：overview ∥ 逐 chunk 分析（信号量限流）∥ embedding。
 
         返回 (doc_analysis, chunks, chunk_analyses, embeddings)；
         chunk_analyses 按 chunk 顺序排列，写入顺序确定。
-        embedding 输入是检索视图（标题/文件名/overview 前缀 + 原文），
-        正文抽取质量差的文档（扫描件 OCR 噪声）仍可经干净元数据被检索；
-        存储的 chunk_text 始终是原始抽取文本。
+        chunk embedding 输入只使用原始文本；标题、文件名和 overview 由
+        独立的文档级/字段级检索承担，避免把同一 metadata 重复进每个向量。
         """
         chunks = await asyncio.to_thread(chunk_text, raw_text)
         total = len(chunks)
@@ -141,13 +152,20 @@ class Pipeline:
         async def _no_embeddings() -> list[list[float]]:
             return []
 
-        async def _embed_chunks() -> list[list[float]]:
-            if not chunks:
-                return []
-            overview = (await overview_task).overview
-            prefix = retrieval_view_prefix(title, filename, overview)
+        async def _embed_document_and_chunks() -> list[list[float]]:
+            analysis = await overview_task
+            parent_text = "\n".join(
+                part
+                for part in (
+                    title,
+                    filename or "",
+                    analysis.overview,
+                    " ".join(entity.name for entity in analysis.entities),
+                )
+                if part
+            )
             return await self._with_retry(
-                lambda: embedder.embed_batch([prefix + c.text for c in chunks]),
+                lambda: embedder.embed_batch([parent_text, *[c.text for c in chunks]]),
                 description="embedding 批量生成",
             )
 
@@ -160,15 +178,17 @@ class Pipeline:
                     description="document overview",
                 )
             )
-            embed_task = tg.create_task(_embed_chunks())
+            embed_task = tg.create_task(_embed_document_and_chunks())
             for i, chunk in enumerate(chunks if not self._vector_only else []):
                 tg.create_task(analyze_one(i, chunk.text))
 
+        vectors = embed_task.result()
         return (
             overview_task.result(),
             chunks,
             [ca for ca in results if ca is not None],
-            embed_task.result(),
+            vectors[0],
+            vectors[1:],
         )
 
     async def _summary_overview(self, raw_text, title, doc_id):
@@ -218,6 +238,7 @@ class Pipeline:
                     doc_analysis,
                     chunks,
                     chunk_analyses,
+                    document_embedding,
                     embeddings,
                 ) = await self._analyze_document(
                     raw_text, title, doc_id, filename=file_path.name
@@ -236,6 +257,9 @@ class Pipeline:
                     raw_text=raw_text,
                     content_hash=content_hash,
                     overview=doc_analysis.overview,
+                    filename=file_path.name,
+                    entities=[entity.name for entity in doc_analysis.entities],
+                    document_embedding=document_embedding,
                     chunks=chunks,
                     embeddings=embeddings,
                 )
@@ -292,6 +316,9 @@ class Pipeline:
         raw_text: str,
         content_hash: str,
         overview: str,
+        filename: str,
+        entities: list[str],
+        document_embedding: list[float],
         chunks: list,
         embeddings: list[list[float]],
     ) -> None:
@@ -302,6 +329,50 @@ class Pipeline:
             raise ValueError(f"文档不存在: {doc_id}")
         await session.execute(
             Chunk.__table__.delete().where(Chunk.doc_id == doc_id)  # type: ignore[union-attr]
+        )
+        parent_text = "\n".join(
+            part
+            for part in (
+                title,
+                filename,
+                overview,
+                " ".join(owner.tags or []),
+                " ".join(entities),
+            )
+            if part
+        )
+        await session.execute(
+            insert(DocumentRetrieval)
+            .values(
+                doc_id=doc_id,
+                bank_id=owner.bank_id,
+                revision=getattr(owner, "version_number", 1),
+                title=title,
+                filename=filename,
+                overview=overview,
+                tags=list(owner.tags or []),
+                entities=list(dict.fromkeys(entities)),
+                field_tokens=lexical_tokens(parent_text),
+                embedding=document_embedding,
+                embedding_model=getattr(embedder, "_model", ""),
+                generation_state="ready",
+            )
+            .on_conflict_do_update(
+                index_elements=[DocumentRetrieval.doc_id],
+                set_={
+                    "bank_id": owner.bank_id,
+                    "revision": getattr(owner, "version_number", 1),
+                    "title": title,
+                    "filename": filename,
+                    "overview": overview,
+                    "tags": list(owner.tags or []),
+                    "entities": list(dict.fromkeys(entities)),
+                    "field_tokens": lexical_tokens(parent_text),
+                    "embedding": document_embedding,
+                    "embedding_model": getattr(embedder, "_model", ""),
+                    "generation_state": "ready",
+                },
+            )
         )
 
         doc_uri = f"{doc_id}:{title}"
@@ -384,6 +455,7 @@ class Pipeline:
                     doc_analysis,
                     chunks,
                     chunk_analyses,
+                    document_embedding,
                     embeddings,
                 ) = await self._analyze_document(
                     new_text,
@@ -400,6 +472,9 @@ class Pipeline:
                     raw_text=new_text,
                     content_hash=content_hash,
                     overview=doc_analysis.overview,
+                    filename=_filename_of(getattr(doc, "file_path", None)) or "",
+                    entities=[entity.name for entity in doc_analysis.entities],
+                    document_embedding=document_embedding,
                     chunks=chunks,
                     embeddings=embeddings,
                 )

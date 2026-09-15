@@ -579,9 +579,11 @@ class RetainEngine:
                         causal_indexes.append((flat_index, chunk_offset + target))
                 flat_index += 1
 
-        embeddings = await self._providers.embed(
-            [view_prefix + text for text in texts]
-        )
+        # Dense chunk vectors represent only the original passage/fact. Clean
+        # document metadata remains in retrieval_text/lexical_tokens and is
+        # ranked as independent fields, rather than being repeated into every
+        # chunk vector.
+        embeddings = await self._providers.embed(texts)
         if len(embeddings) != len(specs):
             raise ValueError("embedding provider returned an unexpected row count")
 

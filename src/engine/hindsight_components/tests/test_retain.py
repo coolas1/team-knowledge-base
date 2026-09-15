@@ -96,18 +96,18 @@ async def test_retain_builds_atomic_memories_observation_and_links() -> None:
     )
 
 
-async def test_document_retain_embeds_metadata_prefixed_retrieval_view() -> None:
-    """A document with clean metadata and an OCR-noisy body: embeddings and
-    lexical tokens see title|filename|overview + text; the stored text stays
-    the original extraction."""
+async def test_document_retain_separates_dense_text_from_lexical_metadata() -> None:
+    """Dense vectors use source text while lexical retrieval keeps metadata."""
 
     class RecordingProviders(FakeProviders):
         def __init__(self) -> None:
             super().__init__()
             self.embedded: list[str] = []
+            self.batches: list[list[str]] = []
 
         async def embed(self, texts, *, timeout=None):
             self.embedded.extend(texts)
+            self.batches.append(list(texts))
             return await super().embed(texts, timeout=timeout)
 
     providers = RecordingProviders()
@@ -129,7 +129,8 @@ async def test_document_retain_embeds_metadata_prefixed_retrieval_view() -> None
     assert repository.plan is not None
     prefix = "自动驾驶论文二 | autopaper2.pdf | 关于自动驾驶控制理论的综述论文\n"
     assert providers.embedded
-    assert all(text.startswith(prefix) for text in providers.embedded)
+    assert all(not text.startswith(prefix) for text in providers.batches[0])
+    assert noisy in providers.batches[0]
     source_chunks = [
         memory for memory in repository.plan.memories if memory.is_source_chunk
     ]

@@ -111,6 +111,42 @@ async def test_rerank_timeout_uses_deterministic_rrf() -> None:
     assert result.trace["phase_outcomes"]["neural_rerank_llm"]["outcome"] == "timed_out"
 
 
+async def test_adaptive_simple_query_skips_analysis_graph_temporal_and_rerank() -> None:
+    repository = FakeRepository()
+    providers = FakeProviders()
+    result = await RecallEngine(
+        repository,
+        providers,
+        HindsightOptions(adaptive_deep_search_enabled=True),
+    ).recall("autonomous driving algorithm")
+
+    phases = result.trace["phase_outcomes"]
+    assert phases["query_analysis_llm"]["category"] == "adaptive_simple_query"
+    assert phases["graph_expansion"]["category"] == "not_required"
+    assert phases["temporal_search"]["category"] == "not_required"
+    assert phases["neural_rerank_llm"]["outcome"] in {"skipped", "succeeded"}
+    assert repository.calls["graph"] == 0
+    assert repository.calls["temporal"] == 0
+
+
+async def test_adaptive_temporal_and_comparison_queries_start_needed_phases() -> None:
+    temporal_repo = FakeRepository()
+    await RecallEngine(
+        temporal_repo,
+        FakeProviders(),
+        HindsightOptions(adaptive_deep_search_enabled=True),
+    ).recall("What changed after 2024?")
+    assert temporal_repo.calls["temporal"] == 1
+
+    comparison_repo = FakeRepository()
+    await RecallEngine(
+        comparison_repo,
+        FakeProviders(),
+        HindsightOptions(adaptive_deep_search_enabled=True),
+    ).recall("Compare project A versus project B")
+    assert comparison_repo.calls["graph"] == 1
+
+
 async def test_all_failed_arms_raise_typed_unavailable() -> None:
     class Repository(FakeRepository):
         async def semantic_search(self, *args, **kwargs):
@@ -131,6 +167,38 @@ async def test_all_failed_arms_raise_typed_unavailable() -> None:
         )
     assert caught.value.code == "deep_search_unavailable"
     assert caught.value.as_payload()["error"]["search_id"]
+
+
+async def test_deep_failure_attempts_document_fallback_once() -> None:
+    class Repository(FakeRepository):
+        def __init__(self):
+            super().__init__()
+            self.keyword_attempts = 0
+
+        async def semantic_search(self, *args, **kwargs):
+            raise RuntimeError("semantic down")
+
+        async def keyword_search(self, *args, **kwargs):
+            self.keyword_attempts += 1
+            if self.keyword_attempts == 1:
+                raise RuntimeError("keyword transient")
+            return [candidate("fallback", "document evidence", keyword=1.0)]
+
+        async def graph_search(self, *args, **kwargs):
+            raise RuntimeError("graph down")
+
+        async def temporal_search(self, *args, **kwargs):
+            raise RuntimeError("temporal down")
+
+    repository = Repository()
+    result = await RecallEngine(
+        repository, FakeProviders(), HindsightOptions()
+    ).recall("document evidence")
+
+    assert repository.keyword_attempts == 2
+    assert result.trace["fallback"] == "document_index"
+    assert result.trace["ranking_method"] == "rrf"
+    assert result.trace["phase_outcomes"]["document_index_fallback"]["outcome"] == "succeeded"
 
 
 async def test_cancellation_stops_every_active_retrieval_arm() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from collections import defaultdict
@@ -85,6 +86,7 @@ class RecallEngine:
         terminal = "failed"
         candidate_count = 0
         selected_count = 0
+        fallback: str | None = None
         try:
             analysis, embedding = await self._prepare_query(
                 query, mode, identifier, budget, phase_outcomes, phase_ms, filters
@@ -114,16 +116,48 @@ class RecallEngine:
                 in {PhaseStatus.SUCCEEDED.value, PhaseStatus.EMPTY.value}
             ]
             if not available_arms:
+                fallback_result = None
+                if mode == "deep" and filters.source_types != ("conversation",):
+                    fallback_filter = replace(filters, source_types=("upload",))
+                    fallback_phase = await self._run_phase(
+                        "document_index_fallback",
+                        lambda _timeout: self._repository.keyword_search(
+                            query,
+                            limit,
+                            source_type="upload",
+                            filters=fallback_filter,
+                        ),
+                        self._options.retrieval_arm_timeout_seconds,
+                        identifier,
+                        budget,
+                        phase_outcomes,
+                        phase_ms,
+                    )
+                    fallback_result = fallback_phase.value or []
+                    if fallback_result:
+                        arms[1] = fallback_result
+                        available_arms = ["document_index_fallback"]
+                        fallback = "document_index"
                 trace = self._failure_trace(
                     identifier, mode, budget, phase_outcomes, phase_ms
                 )
-                timed_out = any(
-                    item["outcome"] == PhaseStatus.TIMED_OUT.value
-                    for item in phase_outcomes.values()
+                if not fallback_result:
+                    timed_out = any(
+                        item["outcome"] == PhaseStatus.TIMED_OUT.value
+                        for item in phase_outcomes.values()
+                    )
+                    if timed_out:
+                        raise DeepSearchTimeoutError(identifier, trace)
+                    raise DeepSearchUnavailableError(identifier, trace)
+            elif mode == "deep":
+                self._record_local_phase(
+                    "document_index_fallback",
+                    PhaseStatus.SKIPPED,
+                    0.0,
+                    phase_outcomes,
+                    "primary_evidence_available",
                 )
-                if timed_out:
-                    raise DeepSearchTimeoutError(identifier, trace)
-                raise DeepSearchUnavailableError(identifier, trace)
+                phase_ms["document_index_fallback"] = 0.0
 
             names = ("semantic", "keyword", "graph", "temporal")
             candidates: dict[str, RecallCandidate] = {}
@@ -169,6 +203,9 @@ class RecallEngine:
                         raise DeepSearchTimeoutError(identifier, trace)
                     raise DeepSearchUnavailableError(identifier, trace)
 
+            candidates, duplicate_collapsed = self._collapse_candidates(
+                candidates, rrf
+            )
             ordered = sorted(
                 candidates.values(), key=lambda item: (-rrf[item.id], item.id)
             )[: self._options.rerank_limit]
@@ -181,7 +218,7 @@ class RecallEngine:
                 query,
                 ordered,
                 rrf,
-                mode,
+                "fast" if fallback else mode,
                 identifier,
                 budget,
                 phase_outcomes,
@@ -230,6 +267,20 @@ class RecallEngine:
                         item.metadata["source_facts"] = list(
                             detail.get("source_facts", [])
                         )
+
+            conversation_quality_filtered = 0
+            if filters.source_types == ("conversation",):
+                before_quality = len(selected)
+                selected = [
+                    item
+                    for item in selected
+                    if self._conversation_quality_ok(
+                        item, include_stale=filters.include_stale
+                    )
+                ]
+                conversation_quality_filtered = before_quality - len(selected)
+                selected_count = len(selected)
+                token_count = sum(estimate_tokens(item.source_text) for item in selected)
 
             if self._fact_cache is not None:
                 scope = getattr(self._repository, "scope", id(self._repository))
@@ -315,8 +366,10 @@ class RecallEngine:
                 "analysis": analysis,
                 "arm_counts": dict(zip(names, map(len, arms), strict=True)),
                 "candidate_count": len(candidates),
+                "duplicate_collapsed": duplicate_collapsed,
                 "selected_count": len(selected),
                 "filtered_count": filtered_count,
+                "conversation_quality_filtered": conversation_quality_filtered,
                 "token_count": token_count,
                 "duration_ms": budget.elapsed_ms(),
                 "phase_ms": phase_ms,
@@ -330,7 +383,7 @@ class RecallEngine:
                 "degraded": degraded,
                 "degraded_phases": degraded_phases,
                 "phase_outcomes": phase_outcomes,
-                "fallback": None,
+                "fallback": fallback,
                 "ranking_method": ranking_method,
                 "rerank_truncated": rerank_truncated,
                 "rerank_original_count": len(ordered),
@@ -363,6 +416,7 @@ class RecallEngine:
                     "phase_outcomes": {
                         name: value["outcome"] for name, value in phase_outcomes.items()
                     },
+                    "fallback": fallback,
                 },
             )
 
@@ -376,7 +430,14 @@ class RecallEngine:
         phase_ms: dict[str, float],
         filters: RecallFilter,
     ) -> tuple[dict[str, Any], list[float] | None]:
-        if mode == "deep":
+        features = self._query_features(query)
+        run_analysis = mode == "deep" and (
+            not self._options.adaptive_deep_search_enabled
+            or features["graph"]
+            or features["temporal"]
+            or features["comparison"]
+        )
+        if run_analysis:
             async with asyncio.TaskGroup() as group:
                 analysis_task = group.create_task(
                     self._run_phase(
@@ -406,11 +467,21 @@ class RecallEngine:
             embedding_phase = embedding_task.result()
         else:
             analysis_phase = _PhaseResult(
-                {"entities": [], "start": None, "end": None, "subqueries": []},
+                {
+                    "entities": [],
+                    "start": None,
+                    "end": None,
+                    "subqueries": [],
+                    "query_features": features,
+                },
                 PhaseStatus.SKIPPED,
             )
             self._record_local_phase(
-                "query_analysis_llm", PhaseStatus.SKIPPED, 0.0, phase_outcomes
+                "query_analysis_llm",
+                PhaseStatus.SKIPPED,
+                0.0,
+                phase_outcomes,
+                "fast_mode" if mode == "fast" else "adaptive_simple_query",
             )
             phase_ms["query_analysis_llm"] = 0.0
             embedding_phase = await self._run_phase(
@@ -429,6 +500,7 @@ class RecallEngine:
             "end": None,
             "subqueries": [],
         }
+        analysis.setdefault("query_features", features)
         embeddings = embedding_phase.value or []
         return analysis, embeddings[0] if embeddings else None
 
@@ -475,8 +547,20 @@ class RecallEngine:
         analysis_ok = phase_outcomes["query_analysis_llm"]["outcome"] in {
             PhaseStatus.SUCCEEDED.value,
             PhaseStatus.EMPTY.value,
-        }
-        if mode == "deep" and analysis_ok:
+        } or phase_outcomes["query_analysis_llm"].get("category") == (
+            "adaptive_simple_query"
+        )
+        features = analysis.get("query_features", {})
+        graph_needed = not self._options.adaptive_deep_search_enabled or bool(
+            analysis.get("entities")
+            or analysis.get("subqueries")
+            or features.get("graph")
+            or features.get("comparison")
+        )
+        temporal_needed = not self._options.adaptive_deep_search_enabled or bool(
+            analysis.get("start") or analysis.get("end") or features.get("temporal")
+        )
+        if mode == "deep" and analysis_ok and graph_needed:
             factories["graph_expansion"] = lambda _timeout: (
                 self._repository.graph_search(
                     [str(item) for item in analysis.get("entities", [])],
@@ -485,6 +569,15 @@ class RecallEngine:
                     filters=filters,
                 )
             )
+        else:
+            reason = "fast_mode" if mode == "fast" else (
+                "analysis_unavailable" if not analysis_ok else "not_required"
+            )
+            self._record_local_phase(
+                "graph_expansion", PhaseStatus.SKIPPED, 0.0, phase_outcomes, reason
+            )
+            phase_ms["graph_expansion"] = 0.0
+        if mode == "deep" and analysis_ok and temporal_needed:
             factories["temporal_search"] = lambda _timeout: (
                 self._repository.temporal_search(
                     parse_datetime(analysis.get("start")),
@@ -495,12 +588,13 @@ class RecallEngine:
                 )
             )
         else:
-            reason = "fast_mode" if mode == "fast" else "analysis_unavailable"
-            for name in ("graph_expansion", "temporal_search"):
-                self._record_local_phase(
-                    name, PhaseStatus.SKIPPED, 0.0, phase_outcomes, reason
-                )
-                phase_ms[name] = 0.0
+            reason = "fast_mode" if mode == "fast" else (
+                "analysis_unavailable" if not analysis_ok else "not_required"
+            )
+            self._record_local_phase(
+                "temporal_search", PhaseStatus.SKIPPED, 0.0, phase_outcomes, reason
+            )
+            phase_ms["temporal_search"] = 0.0
 
         tasks: dict[str, asyncio.Task[_PhaseResult]] = {}
         async with asyncio.TaskGroup() as group:
@@ -630,13 +724,27 @@ class RecallEngine:
             )
             phase_ms["neural_rerank_llm"] = 0.0
             return False, "rrf", 0
-        if mode == "fast":
+        deterministic_margin = (
+            rrf[ordered[0].id] - rrf[ordered[1].id]
+            if len(ordered) > 1
+            else 1.0
+        )
+        if mode == "fast" or (
+            self._options.adaptive_deep_search_enabled
+            and (
+                len(ordered) <= 1
+                or (
+                    deterministic_margin >= 0.01
+                    and not self._query_features(query)["comparison"]
+                )
+            )
+        ):
             self._record_local_phase(
                 "neural_rerank_llm",
                 PhaseStatus.SKIPPED,
                 0.0,
                 phase_outcomes,
-                "fast_mode",
+                "fast_mode" if mode == "fast" else "deterministic_evidence_sufficient",
             )
             phase_ms["neural_rerank_llm"] = 0.0
             return False, "rrf", 0
@@ -691,6 +799,29 @@ class RecallEngine:
             "neural+rrf" if len(scores) < len(ordered) else "neural",
             len(supplied_ids),
         )
+
+    @staticmethod
+    def _query_features(query: str) -> dict[str, bool]:
+        text = query.casefold()
+        temporal = bool(
+            re.search(
+                r"(?:\b(?:when|before|after|during|timeline|latest|current|20\d{2})\b|何时|什么时候|之前|之后|期间|时间线|最新|当前|いつ|前|後|タイムライン)",
+                text,
+            )
+        )
+        comparison = bool(
+            re.search(
+                r"(?:\b(?:compare|contrast|versus|vs\.?|across|synthesize|why)\b|比较|对比|跨文档|综合|为什么|比較|対比|なぜ)",
+                text,
+            )
+        )
+        graph = comparison or bool(
+            re.search(
+                r"(?:\b(?:relationship|related to|depends on|caused by|multi-hop)\b|关系|关联|依赖|导致|多跳|関係|依存)",
+                text,
+            )
+        )
+        return {"temporal": temporal, "comparison": comparison, "graph": graph}
 
     def _bounded_rerank_lines(
         self, ordered: list[RecallCandidate]
@@ -786,6 +917,22 @@ class RecallEngine:
             return False
         return matched / len(query_terms) >= self._options.recall_min_term_coverage
 
+    @staticmethod
+    def _conversation_quality_ok(
+        item: RecallCandidate, *, include_stale: bool = False
+    ) -> bool:
+        metadata = item.metadata
+        if not include_stale and item.freshness not in {"active", "current"}:
+            return False
+        if metadata.get("lifecycle_state") in {"superseded", "expired", "retired"}:
+            return False
+        if (
+            metadata.get("origin") == "assistant"
+            and metadata.get("authority") != "user_confirmed"
+        ):
+            return False
+        return True
+
     def _select(
         self, ordered: list[RecallCandidate], limit: int, token_limit: int | None = None
     ) -> tuple[list[RecallCandidate], int, float]:
@@ -793,6 +940,8 @@ class RecallEngine:
         remaining = list(ordered)
         selected: list[RecallCandidate] = []
         token_count = 0
+        document_counts: defaultdict[str, int] = defaultdict(int)
+        turn_counts: defaultdict[str, int] = defaultdict(int)
         while remaining and len(selected) < limit:
             best = max(
                 remaining,
@@ -810,12 +959,50 @@ class RecallEngine:
                 ),
             )
             remaining.remove(best)
+            if best.source_type == "conversation" and best.turn_id:
+                key = f"{best.session_id or ''}:{best.turn_id}"
+                if turn_counts[key] >= self._options.max_memories_per_turn:
+                    continue
+            elif (
+                document_counts[best.document_id]
+                >= self._options.max_passages_per_document
+            ):
+                continue
             size = estimate_tokens(best.source_text)
             if token_count + size > (token_limit or self._options.recall_max_tokens):
                 continue
             selected.append(best)
             token_count += size
+            if best.source_type == "conversation" and best.turn_id:
+                turn_counts[f"{best.session_id or ''}:{best.turn_id}"] += 1
+            else:
+                document_counts[best.document_id] += 1
         return selected, token_count, round((time.perf_counter() - started) * 1000, 2)
+
+    @staticmethod
+    def _collapse_candidates(candidates, rrf):
+        representatives: dict[tuple[str, ...], RecallCandidate] = {}
+        collapsed = 0
+        for item in candidates.values():
+            normalized = " ".join(lexical_tokens(item.text))
+            identity = (
+                ("turn", item.session_id or "", item.turn_id or "", normalized)
+                if item.source_type == "conversation" and item.turn_id
+                else (
+                    "document",
+                    item.document_id,
+                    str(item.chunk_index),
+                    normalized,
+                )
+            )
+            current = representatives.get(identity)
+            if current is None or rrf[item.id] > rrf[current.id]:
+                if current is not None:
+                    collapsed += 1
+                representatives[identity] = item
+            else:
+                collapsed += 1
+        return {item.id: item for item in representatives.values()}, collapsed
 
     @staticmethod
     def _is_empty(value: Any) -> bool:

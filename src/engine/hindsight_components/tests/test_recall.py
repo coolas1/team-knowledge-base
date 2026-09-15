@@ -422,6 +422,24 @@ async def test_conversation_memory_passes_the_same_coverage_gate() -> None:
     assert result.trace["filtered_count"] == 1
 
 
+@pytest.mark.parametrize(
+    ("freshness", "metadata", "allowed"),
+    [
+        ("active", {"origin": "user", "authority": "user_confirmed"}, True),
+        ("active", {"origin": "assistant", "authority": "unclassified"}, False),
+        ("active", {"lifecycle_state": "superseded"}, False),
+        ("expired", {"origin": "user"}, False),
+    ],
+)
+def test_conversation_quality_gate_rejects_stale_or_untrusted_memory(
+    freshness, metadata, allowed
+):
+    item = candidate("memory-quality", "I prefer concise answers", semantic=0.9)
+    item.freshness = freshness
+    item.metadata.update(metadata)
+    assert RecallEngine._conversation_quality_ok(item) is allowed
+
+
 async def test_single_term_query_keyword_hit_falls_back_to_semantic_floor() -> None:
     # A single salient term carries no coverage signal; the semantic floor
     # decides, and 0.1 is below it.
