@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
-from src.engine.components.store.models import Document
+from src.engine.components.store.models import (
+    Chunk,
+    Document,
+    DocumentRetrieval,
+    INTERNAL_DOCUMENT_FILE_TYPES,
+)
 from src.engine.components.store.scope import scope_predicate
 from src.engine.hindsight_components.models import (
     RetrievalMigrationDocument,
     RetrievalMigrationRun,
+    MemoryUnit,
 )
 from src.engine.scope import MemoryScope
 
@@ -35,6 +43,191 @@ class RetrievalMigrationStore:
     def __init__(self, sessions, *, scope: MemoryScope):
         self.sessions = sessions
         self.scope = scope
+
+    async def dry_run_manifest(
+        self,
+        document_ids: list[str] | None = None,
+        *,
+        target_embedding_model: str,
+    ) -> dict:
+        """Describe required work and protected rows without mutating storage."""
+        if not target_embedding_model.strip():
+            raise ValueError("target_embedding_model is required")
+        requested = (
+            {uuid.UUID(value) for value in document_ids}
+            if document_ids is not None
+            else None
+        )
+        async with self.sessions() as session:
+            visible = list(
+                await session.scalars(
+                    select(Document)
+                    .where(
+                        Document.is_current.is_(True),
+                        scope_predicate(Document.bank_id, Document.tags, self.scope),
+                    )
+                    .order_by(Document.id)
+                )
+            )
+            by_id = {document.id: document for document in visible}
+            if requested is not None and requested - set(by_id):
+                raise ValueError("migration documents are missing or outside scope")
+            selected = [
+                document
+                for document in visible
+                if document.file_type not in INTERNAL_DOCUMENT_FILE_TYPES
+                and (requested is None or document.id in requested)
+            ]
+            selected_ids = {document.id for document in selected}
+            parents = {
+                row.doc_id: row
+                for row in await session.scalars(
+                    select(DocumentRetrieval).where(
+                        DocumentRetrieval.doc_id.in_(selected_ids)
+                    )
+                )
+            }
+            chunks = list(
+                await session.scalars(
+                    select(Chunk).where(Chunk.doc_id.in_(selected_ids))
+                )
+            )
+            memories = list(
+                await session.scalars(
+                    select(MemoryUnit).where(
+                        MemoryUnit.document_id.in_(selected_ids),
+                        MemoryUnit.state == "active",
+                    )
+                )
+            )
+            total_chunks = int(
+                await session.scalar(select(func.count()).select_from(Chunk)) or 0
+            )
+            total_active_memories = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(MemoryUnit)
+                    .where(MemoryUnit.state == "active")
+                )
+                or 0
+            )
+
+        chunks_by_document: dict[uuid.UUID, list] = {}
+        memories_by_document: dict[uuid.UUID, list] = {}
+        for row in chunks:
+            chunks_by_document.setdefault(row.doc_id, []).append(row)
+        for row in memories:
+            memories_by_document.setdefault(row.document_id, []).append(row)
+
+        documents = []
+        for document in selected:
+            parent = parents.get(document.id)
+            document_chunks = chunks_by_document.get(document.id, [])
+            document_memories = memories_by_document.get(document.id, [])
+            parent_ready = bool(
+                parent
+                and parent.revision == document.version_number
+                and parent.generation_state == "ready"
+                and parent.embedding is not None
+                and parent.embedding_model == target_embedding_model
+            )
+            vector_dimensions = sorted(
+                {
+                    len(row.embedding)
+                    for row in document_chunks
+                    if row.embedding is not None
+                }
+            )
+            lexical_complete = sum(
+                row.lexical_tokens is not None for row in document_memories
+            )
+            # Legacy chunks do not carry model identity, so they are
+            # conservatively included in estimated re-embedding work.
+            documents.append(
+                {
+                    "document_id": str(document.id),
+                    "revision": document.version_number,
+                    "processing_generation": (
+                        str(document.processing_generation)
+                        if document.processing_generation
+                        else None
+                    ),
+                    "parent": {
+                        "present": parent is not None,
+                        "ready": parent_ready,
+                        "revision": parent.revision if parent else None,
+                        "embedding_model": parent.embedding_model if parent else None,
+                    },
+                    "chunks": {
+                        "total": len(document_chunks),
+                        "with_vector": sum(
+                            row.embedding is not None for row in document_chunks
+                        ),
+                        "vector_dimensions": vector_dimensions,
+                        "model_state": "untracked",
+                    },
+                    "lexical": {
+                        "eligible": len(document_memories),
+                        "complete": lexical_complete,
+                        "missing": len(document_memories) - lexical_complete,
+                    },
+                    "estimated_embedding_work": {
+                        "parents": int(not parent_ready),
+                        "chunks": len(document_chunks),
+                        "estimated_tokens": sum(
+                            row.token_count
+                            if row.token_count is not None
+                            else max(1, len(row.chunk_text) // 4)
+                            for row in document_chunks
+                        ),
+                    },
+                }
+            )
+
+        selected_chunk_count = len(chunks)
+        selected_memory_count = len(memories)
+        manifest = {
+            "version": 1,
+            "dry_run": True,
+            "bank_id": self.scope.bank_id,
+            "target_embedding_model": target_embedding_model,
+            "documents": documents,
+            "summary": {
+                "documents": len(documents),
+                "missing_or_stale_parents": sum(
+                    not item["parent"]["ready"] for item in documents
+                ),
+                "chunks": selected_chunk_count,
+                "chunk_vectors": sum(
+                    item["chunks"]["with_vector"] for item in documents
+                ),
+                "lexical_eligible": selected_memory_count,
+                "lexical_missing": sum(
+                    item["lexical"]["missing"] for item in documents
+                ),
+                "estimated_parent_embeddings": sum(
+                    item["estimated_embedding_work"]["parents"] for item in documents
+                ),
+                "estimated_chunk_embeddings": selected_chunk_count,
+                "estimated_tokens": sum(
+                    item["estimated_embedding_work"]["estimated_tokens"]
+                    for item in documents
+                ),
+            },
+            "protected": {
+                "current_documents": len(visible) - len(documents),
+                "conversation_documents": sum(
+                    document.file_type in INTERNAL_DOCUMENT_FILE_TYPES
+                    for document in visible
+                ),
+                "chunks": total_chunks - selected_chunk_count,
+                "active_memories": total_active_memories - selected_memory_count,
+            },
+        }
+        manifest["checksum"] = hashlib.sha256(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return manifest
 
     async def prepare(
         self,
