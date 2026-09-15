@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,9 +10,13 @@ from config.settings import InfraSettings
 from src.engine.hindsight_components.config import HindsightOptions
 from src.engine.hindsight_components.deadlines import DeadlineBudget
 from src.engine.hindsight_components.errors import (
+    DeepSearchTimeoutError,
     DeepSearchUnavailableError,
 )
+from src.engine.hindsight_components.query import HindsightQueryService
 from src.engine.hindsight_components.recall import RecallEngine
+from src.engine.hindsight_components.types import RecallResult
+from src.engine.interface import KnowledgeQueryRequest
 
 from .fakes import FakeProviders, FakeRepository, candidate
 
@@ -71,6 +76,94 @@ async def test_analysis_timeout_degrades_to_semantic_and_keyword() -> None:
     assert (
         result.trace["phase_outcomes"]["query_analysis_llm"]["outcome"] == "timed_out"
     )
+
+
+async def test_cleanup_and_all_started_phases_use_remaining_total_budget() -> None:
+    class Repository(FakeRepository):
+        async def expire_due_memories(self):
+            await asyncio.sleep(1)
+
+    result = await RecallEngine(
+        Repository(),
+        FakeProviders(),
+        HindsightOptions(
+            deep_total_timeout_seconds=1,
+            retrieval_arm_timeout_seconds=0.01,
+        ),
+    ).recall("Alice project", mode="fast")
+
+    cleanup = result.trace["phase_outcomes"]["expiration_cleanup"]
+    assert cleanup["outcome"] == "timed_out"
+    assert cleanup["effective_timeout_seconds"] <= cleanup["configured_timeout_seconds"]
+    for phase in result.trace["phase_outcomes"].values():
+        if "effective_timeout_seconds" in phase:
+            assert phase["effective_timeout_seconds"] <= phase["configured_timeout_seconds"]
+
+
+async def test_query_routing_shares_one_budget_across_source_pools() -> None:
+    class Core:
+        options = SimpleNamespace(deep_total_timeout_seconds=1.0)
+
+        def __init__(self):
+            self.budgets = []
+
+        async def recall(self, query, *, mode, top_k, filters, budget):
+            self.budgets.append(budget)
+            return RecallResult([], {}, {}, {})
+
+    core = Core()
+    service = HindsightQueryService(
+        core,
+        knowledge_memory_context_enabled=True,
+        knowledge_memory_context_limit=2,
+    )
+    await service.query(
+        KnowledgeQueryRequest(
+            query="project status",
+            strategy="recall",
+            needs_answer=False,
+            route="knowledge",
+        )
+    )
+
+    assert len(core.budgets) == 2
+    assert core.budgets[0] is core.budgets[1]
+
+
+async def test_outer_query_deadline_cancels_all_routed_descendants() -> None:
+    class Core:
+        options = SimpleNamespace(deep_total_timeout_seconds=0.03)
+
+        def __init__(self):
+            self.started = 0
+            self.cancelled = 0
+
+        async def recall(self, query, *, mode, top_k, filters, budget):
+            self.started += 1
+            try:
+                await asyncio.Event().wait()
+            finally:
+                self.cancelled += 1
+
+    core = Core()
+    service = HindsightQueryService(
+        core,
+        knowledge_memory_context_enabled=True,
+        knowledge_memory_context_limit=2,
+    )
+    with pytest.raises(DeepSearchTimeoutError) as caught:
+        await service.query(
+            KnowledgeQueryRequest(
+                query="project status",
+                strategy="recall",
+                needs_answer=False,
+                route="knowledge",
+            )
+        )
+
+    assert caught.value.trace["category"] == "outer_query_deadline"
+    assert core.started == 2
+    assert core.cancelled == 2
 
 
 async def test_embedding_failure_keeps_non_vector_arms() -> None:

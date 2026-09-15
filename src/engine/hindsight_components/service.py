@@ -296,6 +296,7 @@ class HindsightService:
         source_type: str | None = None,
         search_id: str | None = None,
         filters: RecallFilter | None = None,
+        budget=None,
     ) -> RecallResult:
         return await self._recall.recall(
             query,
@@ -304,6 +305,7 @@ class HindsightService:
             source_type=source_type,
             search_id=search_id,
             filters=filters,
+            budget=budget,
         )
 
     async def reflect(

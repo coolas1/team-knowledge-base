@@ -54,6 +54,7 @@ class RecallEngine:
         source_type: str | None = None,
         search_id: str | None = None,
         filters: RecallFilter | None = None,
+        budget: DeadlineBudget | None = None,
     ) -> RecallResult:
         if mode not in {"fast", "deep"}:
             raise ValueError(f"unsupported retrieval mode: {mode}")
@@ -72,10 +73,7 @@ class RecallEngine:
             filters = replace(
                 filters, source_types=(*filters.source_types, source_type)
             )
-        expire_due = getattr(self._repository, "expire_due_memories", None)
-        if expire_due is not None:
-            await expire_due()
-        budget = DeadlineBudget(
+        budget = budget or DeadlineBudget(
             min(
                 self._options.deep_total_timeout_seconds,
                 filters.timeout_seconds or self._options.deep_total_timeout_seconds,
@@ -92,6 +90,26 @@ class RecallEngine:
         selected_count = 0
         fallback: str | None = None
         try:
+            expire_due = getattr(self._repository, "expire_due_memories", None)
+            if expire_due is not None:
+                await self._run_phase(
+                    "expiration_cleanup",
+                    lambda _timeout: expire_due(),
+                    self._options.retrieval_arm_timeout_seconds,
+                    identifier,
+                    budget,
+                    phase_outcomes,
+                    phase_ms,
+                )
+            else:
+                self._record_local_phase(
+                    "expiration_cleanup",
+                    PhaseStatus.SKIPPED,
+                    0.0,
+                    phase_outcomes,
+                    "not_supported",
+                )
+                phase_ms["expiration_cleanup"] = 0.0
             analysis, embedding = await self._prepare_query(
                 query, mode, identifier, budget, phase_outcomes, phase_ms, filters
             )
@@ -828,6 +846,8 @@ class RecallEngine:
             phase_outcomes[name] = {
                 "outcome": status.value,
                 "elapsed_ms": elapsed,
+                "effective_timeout_seconds": round(timeout, 6),
+                "configured_timeout_seconds": configured_timeout,
                 **({"category": category} if category else {}),
             }
             logger.info(

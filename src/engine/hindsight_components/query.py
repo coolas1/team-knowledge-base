@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import logging
 import re
+import uuid
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import replace
@@ -26,6 +27,8 @@ from src.engine.hindsight_components.directives import DirectiveDefinition
 from src.engine.hindsight_components.mental_models import MentalModelDefinition
 
 from src.engine.hindsight_components.config import HindsightOptions
+from src.engine.hindsight_components.deadlines import DeadlineBudget
+from src.engine.hindsight_components.errors import DeepSearchTimeoutError
 from src.engine.hindsight_components.providers import ProjectHindsightProviders
 from src.engine.hindsight_components.protocols import MemoryRepository
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
@@ -212,6 +215,34 @@ class HindsightQueryService:
         )
 
     async def query(self, request: KnowledgeQueryRequest) -> KnowledgeQueryResult:
+        configured_total = float(
+            getattr(
+                getattr(self._core, "options", None),
+                "deep_total_timeout_seconds",
+                45.0,
+            )
+        )
+        total = min(configured_total, request.timeout_seconds or configured_total)
+        budget = DeadlineBudget(total)
+        try:
+            async with asyncio.timeout(budget.remaining()):
+                return await self._query_with_budget(request, budget)
+        except TimeoutError as error:
+            search_id = request.correlation_id or str(uuid.uuid4())
+            raise DeepSearchTimeoutError(
+                search_id,
+                {
+                    "search_id": search_id,
+                    "outcome": "deep_search_timeout",
+                    "elapsed_ms": budget.elapsed_ms(),
+                    "total_timeout_seconds": total,
+                    "category": "outer_query_deadline",
+                },
+            ) from error
+
+    async def _query_with_budget(
+        self, request: KnowledgeQueryRequest, budget: DeadlineBudget
+    ) -> KnowledgeQueryResult:
         self._validate(request)
         requested_route = request.route
         route_fallback = None
@@ -220,7 +251,7 @@ class HindsightQueryService:
             route_fallback = "mixed_source_search_disabled"
         strategy = self._resolve_strategy(request)
         if strategy == "recall":
-            recalled = await self._recall_for_route(request)
+            recalled = await self._recall_for_route(request, budget)
             recalled = self._enforce_route_candidates(recalled, request.route)
             recalled = self._collapse_and_cap(recalled)
             kept, texts, evidence_trace = self._bound_evidence(recalled)
@@ -324,15 +355,17 @@ class HindsightQueryService:
             conversation_context=conversation_context,
         )
 
-    async def _recall_for_route(self, request: KnowledgeQueryRequest) -> RecallResult:
+    async def _recall_for_route(
+        self, request: KnowledgeQueryRequest, budget: DeadlineBudget
+    ) -> RecallResult:
         if request.route == "conversation":
             return await self._recall_source_pool(
-                request, source_type="conversation", limit=request.top_k
+                request, source_type="conversation", limit=request.top_k, budget=budget
             )
 
         if request.route == "knowledge":
             document_call = self._recall_source_pool(
-                request, source_type="upload", limit=request.top_k
+                request, source_type="upload", limit=request.top_k, budget=budget
             )
             # Explicit source filters are authoritative. Auxiliary memories are
             # only added for the ordinary/default knowledge contract.
@@ -350,6 +383,7 @@ class HindsightQueryService:
                     request,
                     source_type="conversation",
                     limit=conversation_limit,
+                    budget=budget,
                 ),
             )
             return self._merge_source_pools(
@@ -369,7 +403,7 @@ class HindsightQueryService:
         document_limit = min(document_limit, request.top_k)
         conversation_limit = request.top_k - document_limit
         document_call = self._recall_source_pool(
-            request, source_type="upload", limit=document_limit
+            request, source_type="upload", limit=document_limit, budget=budget
         )
         if conversation_limit:
             document_result, conversation_result = await asyncio.gather(
@@ -378,6 +412,7 @@ class HindsightQueryService:
                     request,
                     source_type="conversation",
                     limit=conversation_limit,
+                    budget=budget,
                 ),
             )
         else:
@@ -400,6 +435,7 @@ class HindsightQueryService:
         *,
         source_type: str,
         limit: int,
+        budget: DeadlineBudget,
     ) -> RecallResult:
         pool_route = "conversation" if source_type == "conversation" else "knowledge"
         pool_request = replace(
@@ -411,6 +447,8 @@ class HindsightQueryService:
         kwargs = {"mode": request.mode, "top_k": limit}
         if "filters" in inspect.signature(self._core.recall).parameters:
             kwargs["filters"] = self._filters(pool_request)
+        if "budget" in inspect.signature(self._core.recall).parameters:
+            kwargs["budget"] = budget
         recalled = await self._core.recall(request.query, **kwargs)
         kept = [
             item
