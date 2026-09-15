@@ -20,7 +20,7 @@
 
 - [x] 3.1 Invoke automatic conversation recall only for accepted continuity/mixed routes and omit it for knowledge/uncertain routes; verify `before_agent_start` tests assert the MCP recall call count by route.
 - [x] 3.2 Add separate result-count and character budgets for conversation context with safe closing delimiters and explicit session/turn/source-time labels; verify zero, oversized, malformed, and exact-boundary formatting cases.
-- [ ] 3.3 Apply configurable semantic, salient-term, freshness, confirmation/origin-quality, and current-state gates to conversation recall; verify irrelevant, expired, superseded, and low-quality assistant memories are filtered while a relevant user preference survives.
+- [x] 3.3 Apply configurable semantic, salient-term, freshness, confirmation/origin-quality, and current-state gates to conversation recall; verify irrelevant, expired, superseded, and low-quality assistant memories are filtered while a relevant user preference survives.
 - [x] 3.4 Prevent automatic memory blocks from entering visible transcripts, retention input, document evidence, citations, and tool payload duplication; verify end-to-end transcript and next-turn retention tests.
 - [x] 3.5 Keep conversation recall fail-open but diagnostically distinct from an empty result; verify timeout/unavailable cases continue the turn and emit sanitized failure metrics.
 
@@ -47,21 +47,21 @@
 
 ## 6. Hierarchical document retrieval
 
-- [ ] 6.1 Add a revision-aware document retrieval record containing independent title, filename, overview, tags, entities, field tokens, embedding, model identity, and generation state; verify schema creation, uniqueness, current-version fencing, and scope predicates.
+- [x] 6.1 Add a revision-aware document retrieval record containing independent title, filename, overview, tags, entities, field tokens, embedding, model identity, and generation state; verify schema creation, uniqueness, current-version fencing, and scope predicates.
 - [ ] 6.2 Dual-write the document record on upload, edit, reingest, retry, and summary/metadata changes; verify every successful current-document path produces one matching retrieval record and failed/stale revisions cannot publish.
-- [ ] 6.3 Change new chunk embeddings to use original chunk text while retaining the existing user-visible text; verify embedding inputs no longer repeat document metadata and reading/citation behavior is unchanged.
-- [ ] 6.4 Implement bounded document lexical/dense retrieval and field-aware fusion; verify metadata-only, noisy-OCR, filename, tag/entity, and ordinary body-topic cases select the expected parent documents.
-- [ ] 6.5 Search and rerank original chunks only inside selected parents, enforce the configured per-document passage cap, and expose parent and passage scores; verify implicit-topic chunks are returned under the correct document.
+- [x] 6.3 Change new chunk embeddings to use original chunk text while retaining the existing user-visible text; verify embedding inputs no longer repeat document metadata and reading/citation behavior is unchanged.
+- [x] 6.4 Implement bounded document lexical/dense retrieval and field-aware fusion; verify metadata-only, noisy-OCR, filename, tag/entity, and ordinary body-topic cases select the expected parent documents.
+- [x] 6.5 Search and rerank original chunks only inside selected parents, enforce the configured per-document passage cap, and expose parent and passage scores; verify implicit-topic chunks are returned under the correct document.
 - [ ] 6.6 Handle metadata-relevant documents with no reliable passage by returning an explicit metadata-only or low-passage-confidence result without fabricating text; verify answer generation discloses the limitation.
 - [ ] 6.7 Add hierarchical trace fields for parent candidates, passage candidates, field contributions, safety-lane use, document coverage, caps, and collapse; verify trace is bounded and content-safe.
 
 ## 7. Adaptive deep search and deadlines
 
 - [ ] 7.1 Implement a deterministic evidence-sufficiency gate using query features, score margin, term coverage, passage confidence, and document coverage; verify simple queries stop early and complex/ambiguous fixtures escalate.
-- [ ] 7.2 Start temporal expansion only for temporal cues and graph/query-analysis expansion only for entity, relation, multi-hop, or cross-document needs; verify skipped/started phase traces for each query class.
-- [ ] 7.3 Run neural reranking only when multiple plausible candidates remain or comparison/synthesis requires it; verify timeout retains calibrated deterministic evidence and marks degradation.
+- [x] 7.2 Start temporal expansion only for temporal cues and graph/query-analysis expansion only for entity, relation, multi-hop, or cross-document needs; verify skipped/started phase traces for each query class.
+- [x] 7.3 Run neural reranking only when multiple plausible candidates remain or comparison/synthesis requires it; verify timeout retains calibrated deterministic evidence and marks degradation.
 - [ ] 7.4 Preserve one monotonic total budget across routing, optional phases, evidence loading, and cleanup; verify every phase receives the lesser of configured and remaining time and cancellation closes descendant tasks.
-- [ ] 7.5 Implement a document-only indexed lexical/dense fallback with no query-analysis or rerank LLM, reserve its budget inside the turn, and allow at most one attempt; verify timeout, unavailable, degraded-without-evidence, fallback-failure, and cancellation cases.
+- [x] 7.5 Implement a document-only indexed lexical/dense fallback with no query-analysis or rerank LLM, reserve its budget inside the turn, and allow at most one attempt; verify timeout, unavailable, degraded-without-evidence, fallback-failure, and cancellation cases.
 - [ ] 7.6 Extend startup validation to include routing, automatic memory recall, deep tool, fallback, PPT exception policy, final-answer reserve, and outer turn deadline; verify invalid compositions fail with actionable messages.
 - [ ] 7.7 Enable indexed keyword reads only after completeness validation and remove full-corpus Python BM25 from the enabled path; verify SQL plans/candidate counts remain bounded at projected scale and the feature-off rollback path still works.
 
@@ -77,7 +77,7 @@
 
 ## 9. Retrieval quality and regression suite
 
-- [ ] 9.1 Add adversarial benchmark cases where short conversations share one or more terms with long relevant documents; verify knowledge-route conversation leakage into document evidence is exactly zero, auxiliary context is capped, and document recall is scored.
+- [x] 9.1 Add adversarial benchmark cases where short conversations share one or more terms with long relevant documents; verify knowledge-route conversation leakage into document evidence is exactly zero, auxiliary context is capped, and document recall is scored.
 - [ ] 9.2 Add continuity and mixed-query cases with relevant/irrelevant, fresh/stale, confirmed/unconfirmed, and superseded memories; verify route accuracy and conversation precision@3.
 - [ ] 9.3 Add metadata-only and implicit-topic document cases across title, filename, overview, tags, entities, noisy OCR, and multilingual content; verify document Recall@5 and passage usefulness separately.
 - [ ] 9.4 Add retention-contamination replays covering repeated document answers, tool payloads, assistant hallucinations, changed preferences, duplicate turns, confirmed plans, and expiry; verify authoritative active-memory counts and provenance.
@@ -91,7 +91,7 @@
 - [ ] 10.1 Run `uv run ruff check`, `uv run pytest`, explicit `uv run pytest src/engine/hindsight_components/tests`, and Pi `npm test`; verify all applicable unit, contract, and component suites pass without modifying unrelated user files.
 - [ ] 10.2 Run isolated PostgreSQL/pgvector and Neo4j integration tests for source filters, indexes, hierarchy, revision fencing, cleanup invalidation, cancellation, and rollback; verify resources are cleaned up and reports persist.
 - [ ] 10.3 Replay the prior automatic-driving incident and representative knowledge/continuity/mixed/no-answer conversations through MCP and Pi/SSE; verify both target documents surface, irrelevant history does not, citations are correct, and turns settle within budgets.
-- [ ] 10.4 Validate every search payload remains within configured whole-response bounds after adding grouping and trace fields; verify trimming removes lowest-ranked optional content first and remains self-describing.
+- [x] 10.4 Validate every search payload remains within configured whole-response bounds after adding grouping and trace fields; verify trimming removes lowest-ranked optional content first and remains self-describing.
 - [ ] 10.5 Rehearse schema preparation, dual write, dry-run, backfill, validation, read switch, cleanup, dependency rebuild, rollback, and resume on an isolated production-shaped copy; verify stage counts and protected checksums at every transition.
 - [ ] 10.6 Publish a release acceptance report containing build/SHA, configuration and policy versions, corpus hashes, quality metrics, source leakage, provenance checks, latency percentiles, phase/fallback outcomes, migration counts, exceptions, and rollback evidence; verify all mandatory gates pass before enabling production reads.
 - [ ] 10.7 Roll out through the pipeline in bounded scopes, monitor search quality and resource metrics after each batch, and stop promotion on any gate failure; verify final production state has complete indexed/hierarchical reads, zero conversation leakage into document evidence, bounded auxiliary memory, no disallowed active memories, and recoverable audit artifacts.
