@@ -1,6 +1,7 @@
 """Scoped memory diagnostics and management routes."""
 
 from dataclasses import asdict
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,6 +12,7 @@ from src.engine.scope_policy import ScopePolicy
 from src.frontend.webapp.server import deps
 
 router = APIRouter(prefix="/memory", tags=["memory"])
+logger = logging.getLogger(__name__)
 
 
 def query_service(service=Depends(deps.get_query)):
@@ -72,7 +74,28 @@ async def get_operation(operation_id: str, service=Depends(query_service)):
 
 
 @router.post("/operations/{operation_id}/retry")
-async def retry_operation(operation_id: str, service=Depends(query_service)):
+async def retry_operation(
+    operation_id: str,
+    service=Depends(query_service),
+    kb=Depends(deps.get_kb),
+):
+    operation = await service.get_memory_operation(operation_id)
+    if operation is None:
+        raise HTTPException(404, "operation not found")
+    if operation.kind == "document" and operation.document_id:
+        try:
+            await kb.reingest(operation.document_id)
+        except ValueError as error:
+            raise HTTPException(400, "document is not retryable") from error
+        except Exception as error:
+            logger.exception(
+                "Document memory retry scheduling failed for %s",
+                operation.document_id,
+            )
+            raise HTTPException(
+                503, "document retry is temporarily unavailable"
+            ) from error
+        return {"changed": 1}
     try:
         return {"changed": await service.retry_memory_operation(operation_id)}
     except KeyError as error:

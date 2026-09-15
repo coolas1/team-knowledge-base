@@ -590,7 +590,7 @@ class PostgresMemoryRepository:
                         if plan.extraction_status == "degraded"
                         else "indexed",
                         bank_id=self.scope.bank_id,
-                        error_msg=None,
+                        error_msg=plan.error_code,
                         memory_count=len(plan.memories),
                         link_count=len(plan.links),
                     )
@@ -605,7 +605,7 @@ class PostgresMemoryRepository:
                             "status": "degraded"
                             if plan.extraction_status == "degraded"
                             else "indexed",
-                            "error_msg": None,
+                            "error_msg": plan.error_code,
                             "memory_count": len(plan.memories),
                             "link_count": len(plan.links),
                             "updated_at": func.now(),
