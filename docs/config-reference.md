@@ -350,3 +350,34 @@ PostgreSQL 始终是权威存储;当前部署同时维护一次性的 Neo4j 记�
 | 键 | 默认值 | 说明 |
 |---|---|---|
 | `plugin.impl` | `tkb` | 插件实现名 |
+
+### `archive`(自动归档流水线)
+
+归档流水线默认关闭。`enabled: false` 是提交进镜像的默认值,是否开启由**单个部署**用
+环境变量决定,不需要改仓库里的配置,也不需要重建镜像。
+
+| 键 | 默认值 | 说明 |
+|---|---|---|
+| `enabled` | `false` | 流水线总开关,`ARCHIVE_ENABLED` 覆盖。开启的部署才启动归档扫描与 worker |
+| `threshold` | `0.75` | 自动执行置信度下界:达到即自动归档,否则转为待确认。`ARCHIVE_THRESHOLD` 覆盖 |
+| `delta` | `0.10` | V1 兼容字段,V2 二态分流不再使用。`ARCHIVE_DELTA` 覆盖 |
+| `review_all` | `false` | 全部转待确认,不自动执行。`ARCHIVE_REVIEW_ALL` 覆盖 |
+| `poll_seconds` | `5` | 扫描轮询间隔(秒)。`ARCHIVE_POLL_SECONDS` 覆盖 |
+| `stability_checks` | `2` | 判定文件已稳定的连续检查次数。`ARCHIVE_STABILITY_CHECKS` 覆盖 |
+| `max_attempts` | `5` | 单文件最大尝试次数。`ARCHIVE_MAX_ATTEMPTS` 覆盖 |
+| `top_k` | `5` | 归档目标检索条数。`ARCHIVE_TOP_K` 覆盖 |
+| `collision_policy` | `suffix` | 目标已有同名文件时:`suffix` 确定性加后缀 / `block` 拒绝。`ARCHIVE_COLLISION_POLICY` 覆盖 |
+
+`ARCHIVE_ENABLED` 是**三态**的:未设置时回落 app.yaml 的值,显式 `true`/`false` 才覆盖它。
+因此开工即关的部署不受影响,而 app.yaml 打开时仍可用 `ARCHIVE_ENABLED=false` 单独关掉某个部署。
+
+`ARCHIVE_WORKSPACE_DIR`(默认 `workspace`,compose 部署为 `/app/workspace`)是唯一
+只来自环境、app.yaml 中不存在的项:inbox 与归档树都建在它下面。
+
+Compose 部署的透传清单:`docker-compose.yml` 的 webapp 服务显式列出
+`ARCHIVE_WORKSPACE_DIR`、`ARCHIVE_ENABLED`、`ARCHIVE_THRESHOLD`、`ARCHIVE_DELTA`、
+`ARCHIVE_REVIEW_ALL`、`ARCHIVE_POLL_SECONDS`。只有列进该映射的变量才会进入容器进程环境
+(pipeline 的 `deploy.env` 经 `--env-file` 提供值),其余几个旋钮在 compose 部署中需要改 app.yaml。
+
+开启是每个部署自己的动作:LAN 上预发在 `.deploy/develop/deploy.env` 里加一行
+`ARCHIVE_ENABLED=true` 即可,生产不写就保持关闭。回滚 = 改回 `false`(或删掉该行)后重启该 stack。
