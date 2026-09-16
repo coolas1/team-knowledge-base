@@ -1977,7 +1977,7 @@ async def test_memory_lifecycle_migration_round_trip_and_scope_isolation(
     from src.engine.components.store.memory_lifecycle_migration import (
         migrate_memory_lifecycle,
     )
-    from src.engine.components.store.models import EMBEDDING_DIM
+    from src.engine.components.store.models import EMBEDDING_DIM, MemoryBank
 
     engine, schema = scope_database
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -1985,6 +1985,8 @@ async def test_memory_lifecycle_migration_round_trip_and_scope_isolation(
     memory_id = uuid.uuid4()
     superseded_by = uuid.uuid4()
     async with sessions() as session, session.begin():
+        session.add(MemoryBank(id="bank-a", name="bank-a"))
+        await session.flush()
         session.add(
             Document(
                 id=document_id,
@@ -2457,6 +2459,7 @@ async def test_hybrid_safety_lane_ablation_recovers_global_chunk_with_caps(
         Chunk,
         DocumentRetrieval,
         EMBEDDING_DIM,
+        MemoryBank,
     )
     from src.engine.hindsight_components.file_chunk_recall import search_file_chunks
 
@@ -2466,6 +2469,14 @@ async def test_hybrid_safety_lane_ablation_recovers_global_chunk_with_caps(
     parent_vector = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
     other_vector = [0.0, 1.0] + [0.0] * (EMBEDDING_DIM - 2)
     async with sessions() as session, session.begin():
+        session.add(
+            MemoryBank(
+                id="bank-a",
+                name="bank-a",
+                config={"hierarchical_retrieval_enabled": True},
+            )
+        )
+        await session.flush()
         for index, document_id in enumerate(document_ids):
             document = Document(
                 id=document_id,
@@ -2538,6 +2549,106 @@ async def test_hybrid_safety_lane_ablation_recovers_global_chunk_with_caps(
     assert recovered[0].metadata["safety_lane"] is True
     assert recovered[0].metadata["retrieval_level"] == "global_safety_lane"
     assert all(item.source_type == "upload" for item in enabled)
+
+
+async def test_hierarchical_reads_are_enabled_per_bank_after_complete_backfill(
+    scope_database, monkeypatch
+):
+    from config.settings import settings
+    from src.engine.components.store.models import (
+        Chunk,
+        DocumentRetrieval,
+        EMBEDDING_DIM,
+        MemoryBank,
+    )
+    from src.engine.hindsight_components.file_chunk_recall import search_file_chunks
+
+    engine, _ = scope_database
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    query_vector = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
+    bank_a_doc = uuid.uuid4()
+    bank_b_docs = [uuid.uuid4(), uuid.uuid4()]
+    async with sessions() as session, session.begin():
+        session.add_all(
+            [
+                MemoryBank(
+                    id="rollout-a",
+                    name="rollout-a",
+                    config={"hierarchical_retrieval_enabled": True},
+                ),
+                MemoryBank(
+                    id="rollout-b",
+                    name="rollout-b",
+                    config={"hierarchical_retrieval_enabled": False},
+                ),
+            ]
+        )
+        await session.flush()
+        for bank_id, document_id, title in [
+            ("rollout-a", bank_a_doc, "complete parent"),
+            ("rollout-b", bank_b_docs[0], "partial parent"),
+            ("rollout-b", bank_b_docs[1], "flat-only document"),
+        ]:
+            session.add(
+                Document(
+                    id=document_id,
+                    bank_id=bank_id,
+                    title=title,
+                    file_type="text",
+                    status="indexed",
+                )
+            )
+            session.add(
+                Chunk(
+                    doc_id=document_id,
+                    bank_id=bank_id,
+                    chunk_index=0,
+                    chunk_text=title,
+                    doc_uri=f"{document_id}:{title}",
+                    embedding=query_vector,
+                )
+            )
+        for bank_id, document_id, title in [
+            ("rollout-a", bank_a_doc, "complete parent"),
+            ("rollout-b", bank_b_docs[0], "partial parent"),
+        ]:
+            session.add(
+                DocumentRetrieval(
+                    doc_id=document_id,
+                    bank_id=bank_id,
+                    revision=1,
+                    title=title,
+                    embedding=query_vector,
+                    embedding_model="test",
+                    generation_state="ready",
+                )
+            )
+
+    monkeypatch.setattr(settings, "hindsight_hierarchical_retrieval_enabled", True)
+    monkeypatch.setattr(settings, "hindsight_hybrid_safety_lane_enabled", False)
+    bank_a = await search_file_chunks(
+        sessions,
+        MemoryScope(bank_id="rollout-a"),
+        query_vector,
+        2,
+        "upload",
+        RecallFilter(),
+    )
+    bank_b = await search_file_chunks(
+        sessions,
+        MemoryScope(bank_id="rollout-b"),
+        query_vector,
+        2,
+        "upload",
+        RecallFilter(),
+    )
+
+    assert bank_a[0].metadata["retrieval_level"] == "parent_then_passage"
+    assert {item.document_id for item in bank_b} == {
+        str(bank_b_docs[0]),
+        str(bank_b_docs[1]),
+    }
+    assert all("retrieval_level" not in item.metadata for item in bank_b)
 
 
 async def test_backfill_resume_constraints_and_count_preservation(scope_database):
