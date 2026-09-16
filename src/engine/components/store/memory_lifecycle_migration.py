@@ -59,6 +59,25 @@ async def migrate_memory_lifecycle(
                 "THEN metadata_json->>'lifecycle_state' ELSE lifecycle_state END"
             )
         )
+        # Older selective-retention writers labelled every user statement as
+        # confirmed. Downgrade unverifiable rows before enforcing the invariant.
+        await connection.execute(
+            text(
+                f"UPDATE {table} SET authority = 'user_stated', "
+                "metadata_json = jsonb_set(metadata_json, '{authority}', "
+                "'\"user_stated\"'::jsonb, true) "
+                "WHERE authority = 'user_confirmed' "
+                "AND confirmed_by_turn_id IS NULL"
+            )
+        )
+        await connection.execute(
+            text(
+                f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS "
+                "ck_memory_units_confirmed_authority, "
+                "ADD CONSTRAINT ck_memory_units_confirmed_authority CHECK "
+                "(authority <> 'user_confirmed' OR confirmed_by_turn_id IS NOT NULL)"
+            )
+        )
         await connection.execute(
             text(
                 f"CREATE INDEX IF NOT EXISTS idx_memory_units_lifecycle "

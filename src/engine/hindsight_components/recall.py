@@ -1204,7 +1204,7 @@ class RecallEngine:
             authority = str(metadata.get("authority") or "unclassified")
             authority_factor = {
                 "user_confirmed": 1.0,
-                "user_asserted": 0.9,
+                "user_stated": 0.9,
                 "derived": 0.8,
                 "unclassified": 0.7,
             }.get(authority, 0.7)

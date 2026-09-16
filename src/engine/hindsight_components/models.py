@@ -131,6 +131,10 @@ class MemoryUnit(BankOwned, Base):
         ),
         Index("idx_memory_units_occurred_start", "occurred_start"),
         Index("idx_memory_units_occurred_end", "occurred_end"),
+        CheckConstraint(
+            "authority <> 'user_confirmed' OR confirmed_by_turn_id IS NOT NULL",
+            name="ck_memory_units_confirmed_authority",
+        ),
     )
 
 

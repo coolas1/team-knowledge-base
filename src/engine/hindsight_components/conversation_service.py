@@ -244,7 +244,11 @@ class ConversationMemoryService:
                         "retention_policy_version": self._retention_policy.version,
                         "retained_types": retained_types,
                         "origin": "user",
-                        "authority": "user_confirmed",
+                        "authority": (
+                            "user_confirmed"
+                            if turn.confirmed_by_turn_id is not None
+                            else "user_stated"
+                        ),
                         "confirmed_by_turn_id": turn.confirmed_by_turn_id,
                         "derived_from_evidence_ids": evidence_ids,
                     }

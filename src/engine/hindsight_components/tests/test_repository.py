@@ -149,6 +149,19 @@ def test_lifecycle_values_validate_and_normalize_metadata() -> None:
     assert values["lifecycle_key"] == "user:response-style"
 
 
+def test_user_confirmed_authority_requires_confirming_turn() -> None:
+    draft = SimpleNamespace(
+        metadata={
+            "source_type": "conversation",
+            "origin": "user",
+            "authority": "user_confirmed",
+        }
+    )
+
+    with pytest.raises(ValueError, match="requires confirmed_by_turn_id"):
+        PostgresMemoryRepository._lifecycle_values(draft)
+
+
 @pytest.mark.parametrize(
     "metadata",
     [
@@ -226,6 +239,9 @@ async def test_indexed_keyword_search_limits_materialized_candidates() -> None:
         async def __aexit__(self, *_args):
             return None
 
+        async def get(self, _model, _bank_id):
+            return SimpleNamespace(config={"keyword_index_enabled": True})
+
         async def execute(self, statement, params):
             self.statement = statement
             self.params = params
@@ -302,9 +318,10 @@ def test_document_state_mapping_preserves_counts_and_error() -> None:
             status="failed",
             error_msg="LLM unavailable",
             memory_count=12,
-            link_count=21,
-            updated_at=updated_at,
-        )
+                link_count=21,
+                updated_at=updated_at,
+                stage_results={},
+            )
     )
 
     assert state.document_id == str(document_id)

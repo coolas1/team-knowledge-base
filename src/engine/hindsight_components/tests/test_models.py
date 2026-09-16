@@ -74,6 +74,7 @@ def test_memory_schema_compiles_for_postgresql_with_expected_vector_dimension() 
 
     assert f"vector({EMBEDDING_DIM})" in ddl
     assert "on delete cascade" in ddl
+    assert "ck_memory_units_confirmed_authority" in ddl
     assert MemoryUnit.__table__.c.embedding.type.dim == EMBEDDING_DIM
     assert "lexical_tokens" in MemoryUnit.__table__.c
     assert {

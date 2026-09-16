@@ -206,7 +206,7 @@ async def test_selective_retention_skips_generic_turn_and_never_queues_assistant
     assert queue.enqueued is None
 
 
-async def test_selective_retention_publishes_only_explicit_user_preference():
+async def test_selective_retention_marks_unconfirmed_preference_as_user_stated():
     queue = FakeQueue()
     service = ConversationMemoryService(
         queue,
@@ -221,7 +221,6 @@ async def test_selective_retention_publishes_only_explicit_user_preference():
             turn_id="turn-2",
             user_text="我偏好简洁的回答",
             assistant_text="我会记住；文档内容也说明了这一点",
-            confirmed_by_turn_id="turn-2",
             derived_from_evidence_ids=("doc:2", "doc:1", "doc:2"),
         )
     )
@@ -230,8 +229,8 @@ async def test_selective_retention_publishes_only_explicit_user_preference():
     assert queue.enqueued["content"] == "[user]\n我偏好简洁的回答"
     assert queue.enqueued["source_context"]["retained_types"] == ("preference",)
     assert queue.enqueued["source_context"]["origin"] == "user"
-    assert queue.enqueued["source_context"]["authority"] == "user_confirmed"
-    assert queue.enqueued["source_context"]["confirmed_by_turn_id"] == "turn-2"
+    assert queue.enqueued["source_context"]["authority"] == "user_stated"
+    assert queue.enqueued["source_context"]["confirmed_by_turn_id"] is None
     assert queue.enqueued["source_context"]["derived_from_evidence_ids"] == (
         "doc:1",
         "doc:2",

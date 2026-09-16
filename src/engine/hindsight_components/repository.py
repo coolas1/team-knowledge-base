@@ -1353,6 +1353,10 @@ class PostgresMemoryRepository:
             confirmed_by_turn_id = str(confirmed_by_turn_id).strip()
             if not confirmed_by_turn_id:
                 raise ValueError("confirmed_by_turn_id must not be empty")
+        if authority == "user_confirmed" and confirmed_by_turn_id is None:
+            raise ValueError("user_confirmed authority requires confirmed_by_turn_id")
+        if confirmed_by_turn_id is not None and authority != "user_confirmed":
+            raise ValueError("confirmed_by_turn_id requires user_confirmed authority")
         evidence_ids = metadata.get("derived_from_evidence_ids", [])
         if not isinstance(evidence_ids, (list, tuple)) or any(
             not isinstance(item, str) or not item.strip() for item in evidence_ids
