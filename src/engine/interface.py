@@ -114,6 +114,8 @@ class RecallChunk:
 @dataclass
 class RecallResult:
     chunks: list[RecallChunk] = field(default_factory=list)
+    document_evidence: list[RecallChunk] = field(default_factory=list)
+    conversation_context: list[RecallChunk] = field(default_factory=list)
     related_entities: list[dict] = field(default_factory=list)
     related_docs: list[dict] = field(default_factory=list)
     answer: str | None = None
