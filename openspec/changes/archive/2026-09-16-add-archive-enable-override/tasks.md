@@ -43,16 +43,19 @@
 
 ## 5. Staging enablement and trial (operator)
 
-- [ ] 5.1 After the PR merges and the staging pipeline redeploys, add
+- [x] 5.1 After the PR merges and the staging pipeline redeploys, add
   `ARCHIVE_ENABLED=true` to the staging stack's `.deploy/develop/deploy.env`.
   Verify: the file keeps mode 600 and the key appears exactly once.
-- [ ] 5.2 Redeploy staging and confirm the pipeline starts.
+- [x] 5.2 Redeploy staging and confirm the pipeline starts.
   Verify: `podman exec team-kb-dev-webapp env | grep ARCHIVE_ENABLED` reports
   `true`, and `curl -s -o /dev/null -w '%{http_code}'
   http://localhost:8001/api/archive/operations` returns something other than
   the `archive_disabled` 503.
-- [ ] 5.3 Confirm production is untouched by the whole change.
-  Verify: `curl -s -o /dev/null -w '%{http_code}'
-  http://localhost:8000/api/archive/operations` still returns the
-  `archive_disabled` 503 envelope, and production's `/version` commit is
-  unchanged from before this change.
+- [x] 5.3 Confirm production is untouched by the whole change.
+  Verify: production's `/version` commit still equals `origin/main`'s head
+  (2a9b16d, last deployed 2026-09-14, before this change), and production's
+  `.deploy/main/deploy.env` is unmodified.
+  Note: the archive feature exists only on `develop` (staging), so production
+  has no `/api/archive/*` route at all — it answers 404, not the
+  `archive_disabled` 503. That is expected, not a regression: this change
+  leaves production with nothing to enable.
