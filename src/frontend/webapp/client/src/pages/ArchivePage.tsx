@@ -259,27 +259,6 @@ export function ArchivePage() {
 
   return (
     <div className="archive-page">
-      <header className="archive-hero">
-        <div className="archive-hero-copy">
-          <span className="archive-eyebrow">KNOWLEDGE WORKSPACE</span>
-          <h1>自动归档</h1>
-          <p>让每份资料都有清晰的归属，也让团队更快找到需要的内容。</p>
-        </div>
-        <div className="archive-hero-stats" aria-label="归档概览">
-          <div className="archive-stat">
-            <strong>{reviews.length}</strong>
-            <span>待确认</span>
-          </div>
-          <div className="archive-stat">
-            <strong>{tree.length}</strong>
-            <span>个目录</span>
-          </div>
-          <div className="archive-stat">
-            <strong>{operations.length}</strong>
-            <span>已归档</span>
-          </div>
-        </div>
-      </header>
       <div className="archive-toolbar">
         <div className="archive-tabs" role="tablist" aria-label="归档视图">
           {TABS.map(({ key, label }) => (
