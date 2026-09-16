@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, func, or_, select
 
@@ -11,6 +12,7 @@ from src.engine.components.store.models import Document
 from src.engine.components.store.scope import scope_predicate
 from src.engine.scope import MemoryScope
 
+from .document_diagnostics import document_state_diagnostic
 from .models import (
     ConsolidationJob,
     ConversationMemorySource,
@@ -40,6 +42,24 @@ class OperationView:
     duration_ms: int | None = None
     tokens: int = 0
     cost_microusd: int = 0
+
+
+def _consolidation_diagnostic(
+    status: str,
+    error: str | None,
+    lease_expires_at: datetime | None,
+    *,
+    now: datetime | None = None,
+) -> tuple[str, str | None]:
+    """Expose abandoned processing leases as retryable failures."""
+    if error == "cancelled_by_admin":
+        return "cancelled", error
+    if status != "processing":
+        return status, error
+    current = now or datetime.now(timezone.utc)
+    if lease_expires_at is None or lease_expires_at <= current:
+        return "failed", error or "processing_lease_expired"
+    return status, error
 
 
 class PostgresMemoryAdminRepository:
@@ -159,23 +179,30 @@ class PostgresMemoryAdminRepository:
             # They are document history, not actionable diagnostic tasks.
             if state.status == "indexed" and not state.stage_results:
                 continue
+            diagnostic_status, diagnostic_error = document_state_diagnostic(
+                state.status,
+                state.error_msg,
+                state.stage_results,
+            )
             item = output.setdefault(
                 str(state.operation_id),
                 OperationView(
                     id=str(state.operation_id),
-                    status=state.status,
-                    stages={"retain": state.status},
+                    status=diagnostic_status,
+                    stages={"retain": diagnostic_status},
                     kind="document",
                     subject=document.title,
                     document_id=str(state.document_id),
                 ),
             )
             item.stages.update(dict(state.stage_results or {}))
-            item.status = self._merge_status(item.status, state.status)
-            item.error = item.error or state.error_msg
+            item.status = self._merge_status(item.status, diagnostic_status)
+            item.error = item.error or diagnostic_error
         for job in consolidation:
-            diagnostic_status = (
-                "cancelled" if job.error_msg == "cancelled_by_admin" else job.status
+            diagnostic_status, diagnostic_error = _consolidation_diagnostic(
+                job.status,
+                job.error_msg,
+                job.lease_expires_at,
             )
             subject = (
                 "默认归纳范围"
@@ -194,7 +221,7 @@ class PostgresMemoryAdminRepository:
             item.stages["consolidation"] = diagnostic_status
             item.status = self._merge_status(item.status, diagnostic_status)
             item.attempts = max(item.attempts, job.attempts)
-            item.error = item.error or job.error_msg
+            item.error = item.error or diagnostic_error
             item.tokens += job.tokens_used
             item.cost_microusd += job.cost_microusd
             item.duration_ms = self._duration(job.created_at, job.updated_at)
@@ -273,16 +300,30 @@ class PostgresMemoryAdminRepository:
                 .where(
                     HindsightDocumentState.operation_id == identity,
                     self._document_scope(),
-                    HindsightDocumentState.status.in_(
-                        ("failed", "degraded", "pending", "processing")
-                    ),
                 )
                 .with_for_update()
             )
             if state is not None:
-                state.status = "pending" if retry else "failed"
-                state.error_msg = None if retry else "cancelled_by_admin"
-                changed += 1
+                state_changed = False
+                if state.status in ("failed", "degraded", "pending", "processing"):
+                    state.status = "pending" if retry else "failed"
+                    state.error_msg = None if retry else "cancelled_by_admin"
+                    state_changed = True
+                stages = dict(state.stage_results or {})
+                if stages.get("consolidate") in {
+                    "queued",
+                    "pending",
+                    "processing",
+                    "failed",
+                    "cancelled",
+                }:
+                    state.stage_results = {
+                        **stages,
+                        "consolidate": "queued" if retry else "cancelled",
+                    }
+                    state_changed = True
+                if state_changed:
+                    changed += 1
             consolidation_status = (
                 or_(
                     ConsolidationJob.status.in_(
@@ -382,6 +423,16 @@ class PostgresMemoryAdminRepository:
                 "type": row.memory_type,
                 "text": row.text,
                 "freshness": row.state,
+                "lifecycle_state": row.lifecycle_state,
+                "origin": row.origin,
+                "authority": row.authority,
+                "confirmed_by_turn_id": row.confirmed_by_turn_id,
+                "derived_from_evidence_ids": list(row.derived_from_evidence_ids or []),
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                "superseded_by": (
+                    str(row.superseded_by) if row.superseded_by else None
+                ),
+                "duplicate_of": str(row.duplicate_of) if row.duplicate_of else None,
                 "document_id": str(row.document_id),
                 "document_title": document.title,
                 "source_memory_ids": [str(item) for item in row.source_memory_ids],

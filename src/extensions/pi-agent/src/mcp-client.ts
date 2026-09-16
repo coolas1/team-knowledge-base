@@ -222,9 +222,18 @@ export class TkbMcpClient {
       requireDurableAcceptance?: boolean;
       sourceTimestamp?: string;
       referenceTimezone?: string;
+      confirmedByTurnId?: string;
+      derivedFromEvidenceIds?: string[];
+      confirmedProposal?: {
+        proposalType: "decision" | "preference" | "commitment";
+        normalizedContent: string;
+        assistantTurnId: string;
+        trustedEvidenceIds: string[];
+        expiresAt: string;
+      };
     },
     options: { signal?: AbortSignal; timeoutMs?: number } = {},
-  ): Promise<{ document_id: string; status: string; durable_acceptance?: boolean; content_hash?: string; operation_id?: string }> {
+  ): Promise<{ document_id: string; status: string; durable_acceptance?: boolean; content_hash?: string; provenance_hash?: string; operation_id?: string }> {
     return this.callJsonTool(
       "enqueue_conversation_turn",
       {
@@ -235,6 +244,21 @@ export class TkbMcpClient {
         ...(input.requireDurableAcceptance ? { require_durable_acceptance: true } : {}),
         ...(input.sourceTimestamp ? { source_timestamp: input.sourceTimestamp } : {}),
         ...(input.referenceTimezone ? { reference_timezone: input.referenceTimezone } : {}),
+        ...(input.confirmedByTurnId ? { confirmed_by_turn_id: input.confirmedByTurnId } : {}),
+        ...(input.derivedFromEvidenceIds?.length
+          ? { derived_from_evidence_ids: input.derivedFromEvidenceIds }
+          : {}),
+        ...(input.confirmedProposal
+          ? {
+              confirmed_proposal: {
+                proposal_type: input.confirmedProposal.proposalType,
+                normalized_content: input.confirmedProposal.normalizedContent,
+                assistant_turn_id: input.confirmedProposal.assistantTurnId,
+                trusted_evidence_ids: input.confirmedProposal.trustedEvidenceIds,
+                expires_at: input.confirmedProposal.expiresAt,
+              },
+            }
+          : {}),
       },
       options,
     );

@@ -124,3 +124,87 @@ async def test_adapter_validates_original_recall_request(recall_request):
     service = FakeQueryService(KnowledgeQueryResult(strategy_used="recall"))
     with pytest.raises(ValueError):
         await HindsightRecallAdapter(service).recall(recall_request)
+
+
+@pytest.mark.parametrize(
+    ("route", "expected_chunk_ids"),
+    [
+        ("knowledge", ["document-memory"]),
+        ("conversation", ["conversation-memory"]),
+        ("mixed", ["document-memory", "conversation-memory"]),
+    ],
+)
+async def test_adapter_preserves_source_groups_and_routes_compat_chunks(
+    route, expected_chunk_ids
+):
+    document = KnowledgeSource(
+        memory_id="document-memory",
+        memory_type="world",
+        doc_id="document-1",
+        title="spec.md",
+        chunk_text="document evidence",
+        authority="document",
+        source_group="document_evidence",
+    )
+    conversation = KnowledgeSource(
+        memory_id="conversation-memory",
+        memory_type="experience",
+        doc_id="conversation-1",
+        title="session",
+        chunk_text="conversation context",
+        authority="conversation",
+        source_group="conversation_context",
+    )
+    service = FakeQueryService(
+        KnowledgeQueryResult(
+            strategy_used="recall",
+            # Compatibility must not depend on this legacy, document-only field.
+            sources=[document],
+            document_evidence=[document],
+            conversation_context=[conversation],
+            route_used=route,
+        )
+    )
+
+    result = await HindsightRecallAdapter(service).recall(
+        RecallRequest(query="search", route=route)
+    )
+
+    assert [item.memory_id for item in result.chunks] == expected_chunk_ids
+    assert [item.memory_id for item in result.document_evidence] == [
+        "document-memory"
+    ]
+    assert [item.memory_id for item in result.conversation_context] == [
+        "conversation-memory"
+    ]
+    assert result.document_evidence[0].metadata["source_group"] == "document_evidence"
+    assert (
+        result.conversation_context[0].metadata["source_group"]
+        == "conversation_context"
+    )
+
+
+async def test_adapter_returns_conversation_only_without_document_sources():
+    conversation = KnowledgeSource(
+        memory_id="conversation-memory",
+        memory_type="experience",
+        doc_id="conversation-1",
+        title="session",
+        chunk_text="conversation context",
+        authority="conversation",
+        source_group="conversation_context",
+    )
+    service = FakeQueryService(
+        KnowledgeQueryResult(
+            strategy_used="recall",
+            conversation_context=[conversation],
+            route_used="conversation",
+        )
+    )
+
+    result = await HindsightRecallAdapter(service).recall(
+        RecallRequest(query="search", route="conversation")
+    )
+
+    assert result.document_evidence == []
+    assert [item.memory_id for item in result.chunks] == ["conversation-memory"]

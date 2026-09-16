@@ -156,6 +156,7 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--bank", default=None)
     s.add_argument("--document-id", default=None)
     s.add_argument("--batch-size", type=int, default=32)
+    s.add_argument("--dry-run", action="store_true")
     return p
 
 
@@ -173,6 +174,7 @@ async def _backfill_retrieval_views(args: argparse.Namespace) -> int:
             bank_id=args.bank,
             document_id=args.document_id,
             batch_size=args.batch_size,
+            dry_run=args.dry_run,
         )
         _print(stats)
         return 0

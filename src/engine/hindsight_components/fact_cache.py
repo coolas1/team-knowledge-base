@@ -35,8 +35,11 @@ def cache_key(scope, filters=None):
 
 
 def same_fact(cached, current):
+    current_lifecycle = current.get("metadata", {}).get("lifecycle_state", "current")
     return (
-        cached.get("text") == current.get("text")
+        current_lifecycle == "current"
+        and cached.get("metadata", {}).get("lifecycle_state", "current") == "current"
+        and cached.get("text") == current.get("text")
         and cached.get("updated_at", cached.get("mentioned_at"))
         == current.get("updated_at")
         and cached.get("metadata", {}).get("memory_version")
@@ -82,6 +85,8 @@ class FactCache:
             if fact.get("type") not in {"world", "experience"} or fact.get(
                 "metadata", {}
             ).get("is_source_chunk"):
+                continue
+            if fact.get("metadata", {}).get("lifecycle_state", "current") != "current":
                 continue
             if estimate_tokens(str(fact.get("text", ""))) > 1200:
                 continue

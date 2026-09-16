@@ -1,0 +1,45 @@
+{
+  "version": "retrieval-replay-v1",
+  "cases": [
+    {
+      "id": "automatic-driving-incident",
+      "prompt": "有哪些和自动驾驶相关的论文？",
+      "route": "knowledge",
+      "document_ids": ["doc-autonomy-clean", "doc-autonomy-ocr"],
+      "conversation_ids": ["turn-autonomy-noise"],
+      "citations": ["doc-autonomy-clean", "doc-autonomy-ocr"],
+      "answer": "找到两篇相关论文：自动驾驶论文一与自动驾驶论文二。",
+      "budget_ms": 1000
+    },
+    {
+      "id": "continuity-preference",
+      "prompt": "你还记得我偏好的回答格式吗？",
+      "route": "conversation",
+      "document_ids": [],
+      "conversation_ids": ["turn-preference-current"],
+      "citations": [],
+      "answer": "记得，你偏好简洁的要点格式。",
+      "budget_ms": 1000
+    },
+    {
+      "id": "mixed-policy-preference",
+      "prompt": "结合我之前的偏好总结知识库政策文档",
+      "route": "mixed",
+      "document_ids": ["doc-policy-current"],
+      "conversation_ids": ["turn-preference-current"],
+      "citations": ["doc-policy-current"],
+      "answer": "政策要求保留可恢复审计记录，并按你的偏好简洁列出。",
+      "budget_ms": 1000
+    },
+    {
+      "id": "no-answer",
+      "prompt": "Project Zephyr 的合同金额是多少？",
+      "route": "knowledge",
+      "document_ids": [],
+      "conversation_ids": [],
+      "citations": [],
+      "answer": "知识库中未找到充分依据。",
+      "budget_ms": 1000
+    }
+  ]
+}

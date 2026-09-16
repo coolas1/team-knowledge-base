@@ -1,0 +1,22 @@
+{
+  "version": "retrieval-rollout-rehearsal-v1",
+  "protected_checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3",
+  "stages": [
+    {"name": "schema_preparation", "documents": 2, "parents": 0, "chunks": 2, "protected": 1, "checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3", "read_enabled": false},
+    {"name": "dual_write", "documents": 2, "parents": 1, "chunks": 2, "protected": 1, "checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3", "read_enabled": false},
+    {"name": "dry_run", "documents": 2, "parents": 1, "chunks": 2, "protected": 1, "checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3", "read_enabled": false},
+    {"name": "backfill_interrupted", "documents": 2, "parents": 1, "chunks": 2, "protected": 1, "checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3", "read_enabled": false},
+    {"name": "resume", "documents": 2, "parents": 2, "chunks": 2, "protected": 1, "checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3", "read_enabled": false},
+    {"name": "validation", "documents": 2, "parents": 2, "chunks": 2, "protected": 1, "checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3", "read_enabled": false},
+    {"name": "read_switch", "documents": 2, "parents": 2, "chunks": 2, "protected": 1, "checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3", "read_enabled": true},
+    {"name": "cleanup", "documents": 2, "parents": 2, "chunks": 2, "protected": 1, "checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3", "retired": 1, "read_enabled": true},
+    {"name": "dependency_rebuild", "documents": 2, "parents": 2, "chunks": 2, "protected": 1, "checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3", "pending_dependencies": 0, "read_enabled": true},
+    {"name": "rollback", "documents": 2, "parents": 2, "chunks": 2, "protected": 1, "checksum": "b31a92d8e89f42d0478816a413a52d08be6a7ecec64a9af18472b65c10ac32f3", "read_enabled": false}
+  ],
+  "integration_evidence": {
+    "tests": 6,
+    "failures": 0,
+    "container": "tkb-memory-refine-rehearsal",
+    "database": "memory_refine_rehearsal"
+  }
+}

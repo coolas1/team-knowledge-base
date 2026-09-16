@@ -34,8 +34,43 @@ export async function deleteConversationWithMemory(
   return { forgotten, deleted }
 }
 
+const RETRYABLE_TERMINAL = new Set<UiMessageStatus>([
+  'unsaved',
+  'failed',
+  'cancelled',
+  'interrupted',
+])
+
+function visibleTranscriptMessages(messages: ChatMessage[]): ChatMessage[] {
+  const laterUserTexts = new Set<string>()
+  const visible: ChatMessage[] = []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    let text = message.text.trim()
+    if (message.role === 'assistant') {
+      if (message.status && message.status !== 'completed') continue
+      text = text
+        .split('\n')
+        .filter((line) => !/^_call(?:\s|$)/i.test(line.trim()))
+        .join('\n')
+        .trim()
+      // v0.2.1 could persist the first streamed character after cancellation
+      // as a completed legacy answer. The original journal remains untouched.
+      if (!text || /^(?:我|I)$/u.test(text)) continue
+    } else {
+      const retryKey = text.replace(/\s+/g, ' ')
+      if (RETRYABLE_TERMINAL.has(message.status || 'completed') && laterUserTexts.has(retryKey)) {
+        continue
+      }
+      laterUserTexts.add(retryKey)
+    }
+    visible.push(text === message.text ? message : { ...message, text })
+  }
+  return visible.reverse()
+}
+
 export function messagesFromDetail(detail: AgentSessionDetail): ChatMessage[] {
-  return (detail.messages || []).map((message, index) => ({
+  return visibleTranscriptMessages((detail.messages || []).map((message, index) => ({
     id: message.id || `legacy-${index}-${message.role}`,
     role: message.role,
     text: message.text,
@@ -43,7 +78,7 @@ export function messagesFromDetail(detail: AgentSessionDetail): ChatMessage[] {
     clientMessageId: message.clientMessageId,
     timestamp: message.timestamp,
     status: message.status,
-  }))
+  })))
 }
 
 export function optimisticMessages(text: string, clientMessageId: string): ChatMessage[] {

@@ -6,10 +6,10 @@ import math
 import uuid
 from collections import defaultdict
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Text, bindparam, case, delete, func, or_, select, text
+from sqlalchemy import Text, bindparam, case, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +35,7 @@ from .models import (
     ObservationHistory,
     ObservationRecord,
 )
+from .memory_identity import memory_content_fingerprint
 from .types import (
     DocumentMemoryState,
     MemoryProfile,
@@ -188,7 +189,9 @@ class PostgresMemoryRepository:
         overview = (getattr(document, "overview", None) or "").strip() or None
         return {"filename": filename, "overview": overview}
 
-    async def document_retrieval_context(self, document_id: str) -> dict[str, str | None]:
+    async def document_retrieval_context(
+        self, document_id: str
+    ) -> dict[str, str | None]:
         """Best-effort retrieval-view metadata for a retained document."""
         async with self._session_factory() as session:
             document = await session.scalar(
@@ -587,7 +590,7 @@ class PostgresMemoryRepository:
                         if plan.extraction_status == "degraded"
                         else "indexed",
                         bank_id=self.scope.bank_id,
-                        error_msg=None,
+                        error_msg=plan.error_code,
                         memory_count=len(plan.memories),
                         link_count=len(plan.links),
                     )
@@ -602,7 +605,7 @@ class PostgresMemoryRepository:
                             "status": "degraded"
                             if plan.extraction_status == "degraded"
                             else "indexed",
-                            "error_msg": None,
+                            "error_msg": plan.error_code,
                             "memory_count": len(plan.memories),
                             "link_count": len(plan.links),
                             "updated_at": func.now(),
@@ -914,6 +917,11 @@ class PostgresMemoryRepository:
                         MemoryUnit.document_id == uid,
                         self._memory_scope(),
                         MemoryUnit.state == "active",
+                        MemoryUnit.lifecycle_state == "current",
+                        or_(
+                            MemoryUnit.expires_at.is_(None),
+                            MemoryUnit.expires_at > func.clock_timestamp(),
+                        ),
                     )
                     .order_by(
                         MemoryUnit.chunk_index,
@@ -944,7 +952,13 @@ class PostgresMemoryRepository:
                             MemoryLink.source_memory_id.in_(memory_ids),
                             MemoryLink.target_memory_id.in_(
                                 select(MemoryUnit.id).where(
-                                    self._memory_scope(), MemoryUnit.state == "active"
+                                    self._memory_scope(),
+                                    MemoryUnit.state == "active",
+                                    MemoryUnit.lifecycle_state == "current",
+                                    or_(
+                                        MemoryUnit.expires_at.is_(None),
+                                        MemoryUnit.expires_at > func.clock_timestamp(),
+                                    ),
                                 )
                             ),
                         )
@@ -956,6 +970,10 @@ class PostgresMemoryRepository:
         self, session: AsyncSession, plan: RetainPlan, *, scope_tags=(), retained_ids=()
     ) -> None:
         for draft in plan.memories:
+            lifecycle = self._lifecycle_values(draft)
+            content_fingerprint = memory_content_fingerprint(
+                draft.text, draft.memory_type, lifecycle["origin"]
+            )
             row = MemoryUnit(
                 bank_id=self.scope.bank_id,
                 id=uuid.UUID(draft.id),
@@ -977,15 +995,32 @@ class PostgresMemoryRepository:
                 source_memory_ids=[uuid.UUID(item) for item in draft.source_memory_ids],
                 tags=list(draft.tags),
                 scope_tags=list(scope_tags),
+                **lifecycle,
+                content_fingerprint=content_fingerprint,
                 memory_version=max(1, plan.revision),
                 metadata_json={
                     **draft.metadata,
                     "entity_mentions": list(draft.entities),
                 },
             )
+            if row.id not in retained_ids and self._deduplicates(row):
+                await self._lock_memory_lifecycle(session)
+                duplicate_of = await self._find_conversation_duplicate(session, row)
+                if duplicate_of is not None:
+                    row.lifecycle_state = "retired"
+                    row.duplicate_of = duplicate_of
+                else:
+                    await self._supersede_mutable_memory(session, row)
             if row.id in retained_ids:
                 existing = await session.get(MemoryUnit, row.id)
                 preserved = dict(existing.metadata_json or {})
+                if (
+                    existing.lifecycle_state != "current"
+                    and "lifecycle_state" not in draft.metadata
+                ):
+                    row.lifecycle_state = existing.lifecycle_state
+                    row.superseded_by = existing.superseded_by
+                    row.duplicate_of = existing.duplicate_of
                 # A stable fact keeps its manually corrected ownership and source
                 # timestamp. Updating its position must not cascade external links.
                 corrected = "entity_correction_id" in preserved
@@ -1005,6 +1040,17 @@ class PostgresMemoryRepository:
                     "confidence",
                     "tags",
                     "scope_tags",
+                    "origin",
+                    "authority",
+                    "policy_version",
+                    "confirmed_by_turn_id",
+                    "derived_from_evidence_ids",
+                    "expires_at",
+                    "lifecycle_state",
+                    "superseded_by",
+                    "lifecycle_key",
+                    "content_fingerprint",
+                    "duplicate_of",
                     "metadata_json",
                 ):
                     setattr(existing, attribute, getattr(row, attribute))
@@ -1106,6 +1152,245 @@ class PostgresMemoryRepository:
                     .on_conflict_do_nothing()
                 )
         await session.flush()
+
+    @staticmethod
+    def _deduplicates(row: MemoryUnit) -> bool:
+        metadata = row.metadata_json or {}
+        return bool(
+            metadata.get("source_type") == "conversation"
+            and not row.is_source_chunk
+            and row.memory_type != "observation"
+            and row.lifecycle_state == "current"
+        )
+
+    async def _find_conversation_duplicate(
+        self, session: AsyncSession, row: MemoryUnit
+    ) -> uuid.UUID | None:
+        conditions = (
+            self._memory_scope(),
+            MemoryUnit.id != row.id,
+            MemoryUnit.state == "active",
+            MemoryUnit.lifecycle_state == "current",
+            MemoryUnit.is_source_chunk.is_(False),
+            MemoryUnit.memory_type == row.memory_type,
+            MemoryUnit.origin == row.origin,
+            MemoryUnit.metadata_json["source_type"].astext == "conversation",
+        )
+        exact = await session.scalar(
+            select(MemoryUnit.id)
+            .where(
+                *conditions,
+                MemoryUnit.content_fingerprint == row.content_fingerprint,
+            )
+            .order_by(MemoryUnit.mentioned_at, MemoryUnit.id)
+            .limit(1)
+        )
+        if exact is not None or row.embedding is None:
+            return exact
+        distance = MemoryUnit.embedding.cosine_distance(row.embedding).label("distance")
+        neighbors = list(
+            (
+                await session.execute(
+                    select(MemoryUnit.id, distance)
+                    .where(*conditions, MemoryUnit.embedding.is_not(None))
+                    .order_by(distance, MemoryUnit.id)
+                    .limit(20)
+                )
+            ).all()
+        )
+        for memory_id, value in neighbors:
+            if value is not None and 1.0 - float(value) >= 0.94:
+                return memory_id
+        return None
+
+    async def _lock_memory_lifecycle(self, session: AsyncSession) -> None:
+        # One bank-level lock closes races between semantic paraphrases and
+        # changed mutable values that have different canonical fingerprints.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"tkb-conversation-dedup:{self.scope.bank_id}"},
+        )
+
+    async def _supersede_mutable_memory(
+        self, session: AsyncSession, row: MemoryUnit
+    ) -> None:
+        metadata = row.metadata_json or {}
+        retained_types = set(metadata.get("retained_types") or ())
+        if not row.lifecycle_key or not retained_types.intersection(
+            {"preference", "state"}
+        ):
+            return
+        changed = list(
+            (
+                await session.execute(
+                    update(MemoryUnit)
+                    .where(
+                        self._memory_scope(),
+                        MemoryUnit.id != row.id,
+                        MemoryUnit.state == "active",
+                        MemoryUnit.lifecycle_state == "current",
+                        MemoryUnit.is_source_chunk.is_(False),
+                        MemoryUnit.memory_type == row.memory_type,
+                        MemoryUnit.origin == row.origin,
+                        MemoryUnit.lifecycle_key == row.lifecycle_key,
+                        MemoryUnit.metadata_json["source_type"].astext
+                        == "conversation",
+                    )
+                    .values(lifecycle_state="superseded", superseded_by=row.id)
+                    .returning(MemoryUnit.id, MemoryUnit.document_id)
+                )
+            ).all()
+        )
+        await self._invalidate_lifecycle_dependents(
+            session, changed, reason="memory_superseded"
+        )
+
+    async def expire_due_memories(self, *, at: datetime | None = None) -> int:
+        boundary = at or datetime.now(timezone.utc)
+        if boundary.tzinfo is None:
+            raise ValueError("memory expiry boundary must include a timezone")
+        async with self._session_factory() as session, session.begin():
+            rows = list(
+                (
+                    await session.execute(
+                        select(MemoryUnit.id, MemoryUnit.document_id)
+                        .where(
+                            self._memory_scope(),
+                            MemoryUnit.lifecycle_state == "current",
+                            MemoryUnit.expires_at.is_not(None),
+                            MemoryUnit.expires_at <= boundary,
+                        )
+                        .with_for_update(skip_locked=True)
+                    )
+                ).all()
+            )
+            if not rows:
+                return 0
+            ids = [memory_id for memory_id, _ in rows]
+            await session.execute(
+                update(MemoryUnit)
+                .where(MemoryUnit.id.in_(ids), self._memory_scope())
+                .values(lifecycle_state="expired")
+            )
+            await self._invalidate_lifecycle_dependents(
+                session, rows, reason="memory_expired"
+            )
+            return len(rows)
+
+    async def retire_memories(
+        self, memory_ids: list[str], *, reason: str = "memory_retired"
+    ) -> int:
+        if not memory_ids:
+            return 0
+        identities = [uuid.UUID(value) for value in dict.fromkeys(memory_ids)]
+        async with self._session_factory() as session, session.begin():
+            rows = list(
+                (
+                    await session.execute(
+                        select(MemoryUnit.id, MemoryUnit.document_id)
+                        .where(
+                            self._memory_scope(),
+                            MemoryUnit.id.in_(identities),
+                            MemoryUnit.lifecycle_state == "current",
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            if not rows:
+                return 0
+            ids = [memory_id for memory_id, _ in rows]
+            await session.execute(
+                update(MemoryUnit)
+                .where(MemoryUnit.id.in_(ids), self._memory_scope())
+                .values(lifecycle_state="retired")
+            )
+            await self._invalidate_lifecycle_dependents(session, rows, reason=reason)
+            return len(rows)
+
+    async def _invalidate_lifecycle_dependents(
+        self,
+        session: AsyncSession,
+        rows: list[tuple[uuid.UUID, uuid.UUID]],
+        *,
+        reason: str,
+    ) -> None:
+        if not rows:
+            return
+        memory_ids = [memory_id for memory_id, _ in rows]
+        document_ids = {document_id for _, document_id in rows}
+        impacted = set(document_ids)
+        for document_id in document_ids:
+            impacted.update(
+                await self._dependent_graph_documents(
+                    session, memory_ids, exclude_document_id=document_id
+                )
+            )
+        await self._invalidate_observation_evidence(session, memory_ids, reason=reason)
+        await self._invalidate_mental_model_sources(session, memory_ids, reason=reason)
+        for document_id in sorted(impacted, key=str):
+            self._enqueue_graph_event(session, document_id, "replace")
+
+    @staticmethod
+    def _lifecycle_values(draft) -> dict[str, Any]:
+        metadata = draft.metadata
+        source_type = str(metadata.get("source_type") or "upload")
+        origin = str(
+            metadata.get("origin")
+            or ("document" if source_type != "conversation" else "unknown")
+        )
+        authority = str(
+            metadata.get("authority")
+            or ("document" if source_type != "conversation" else "unclassified")
+        )
+        policy_version = metadata.get(
+            "retention_policy_version", metadata.get("policy_version", 1)
+        )
+        if type(policy_version) is not int or policy_version < 1:
+            raise ValueError("memory lifecycle policy_version must be positive")
+        confirmed_by_turn_id = metadata.get("confirmed_by_turn_id")
+        if confirmed_by_turn_id is not None:
+            confirmed_by_turn_id = str(confirmed_by_turn_id).strip()
+            if not confirmed_by_turn_id:
+                raise ValueError("confirmed_by_turn_id must not be empty")
+        if authority == "user_confirmed" and confirmed_by_turn_id is None:
+            raise ValueError("user_confirmed authority requires confirmed_by_turn_id")
+        if confirmed_by_turn_id is not None and authority != "user_confirmed":
+            raise ValueError("confirmed_by_turn_id requires user_confirmed authority")
+        evidence_ids = metadata.get("derived_from_evidence_ids", [])
+        if not isinstance(evidence_ids, (list, tuple)) or any(
+            not isinstance(item, str) or not item.strip() for item in evidence_ids
+        ):
+            raise ValueError("derived_from_evidence_ids must contain strings")
+        expires_at = metadata.get("expires_at")
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if expires_at is not None and (
+            not isinstance(expires_at, datetime) or expires_at.tzinfo is None
+        ):
+            raise ValueError("expires_at must include a timezone")
+        lifecycle_state = str(metadata.get("lifecycle_state") or "current")
+        if lifecycle_state not in {"current", "superseded", "expired", "retired"}:
+            raise ValueError("invalid memory lifecycle_state")
+        superseded_by = metadata.get("superseded_by")
+        if superseded_by is not None:
+            superseded_by = uuid.UUID(str(superseded_by))
+        lifecycle_key = metadata.get("lifecycle_key")
+        if lifecycle_key is not None:
+            lifecycle_key = str(lifecycle_key).strip().casefold()
+            if not lifecycle_key or len(lifecycle_key) > 200:
+                raise ValueError("invalid memory lifecycle_key")
+        return {
+            "origin": origin,
+            "authority": authority,
+            "policy_version": policy_version,
+            "confirmed_by_turn_id": confirmed_by_turn_id,
+            "derived_from_evidence_ids": sorted(set(evidence_ids)),
+            "expires_at": expires_at,
+            "lifecycle_state": lifecycle_state,
+            "superseded_by": superseded_by,
+            "lifecycle_key": lifecycle_key,
+        }
 
     async def _enqueue_consolidation_changes(
         self,
@@ -1256,7 +1541,11 @@ class PostgresMemoryRepository:
             )
 
     async def _invalidate_mental_model_sources(
-        self, session: AsyncSession, fact_ids: list[uuid.UUID]
+        self,
+        session: AsyncSession,
+        fact_ids: list[uuid.UUID],
+        *,
+        reason: str = "source_deleted",
     ) -> None:
         models = list(
             await session.scalars(
@@ -1268,13 +1557,14 @@ class PostgresMemoryRepository:
         )
         for model in models:
             model.freshness = "stale"
-            model.error_msg = "source_deleted"
+            model.error_msg = reason
             requested = model.evidence_watermark + 1
             statement = insert(MentalModelRefreshJob).values(
                 bank_id=model.bank_id,
                 model_id=model.id,
                 requested_watermark=requested,
                 status="pending",
+                error_msg=reason,
             )
             await session.execute(
                 statement.on_conflict_do_update(
@@ -1287,7 +1577,7 @@ class PostgresMemoryRepository:
                         "available_at": func.now(),
                         "lease_token": None,
                         "lease_expires_at": None,
-                        "error_msg": "source_deleted",
+                        "error_msg": reason,
                         "updated_at": func.now(),
                     },
                 )
@@ -1335,15 +1625,17 @@ class PostgresMemoryRepository:
     ) -> None:
         """Keep cross-source observations available for safe recomputation."""
         candidates = list(
-            await session.scalars(
-                select(MemoryUnit.id).where(
-                    MemoryUnit.document_id == deleted_document_id,
-                    MemoryUnit.memory_type == "observation",
-                    MemoryUnit.id.in_(select(ObservationRecord.memory_id)),
+            (
+                await session.execute(
+                    select(MemoryUnit.id, MemoryUnit.chunk_index).where(
+                        MemoryUnit.document_id == deleted_document_id,
+                        MemoryUnit.memory_type == "observation",
+                        MemoryUnit.id.in_(select(ObservationRecord.memory_id)),
+                    )
                 )
-            )
+            ).all()
         )
-        for observation_id in candidates:
+        for observation_id, chunk_index in candidates:
             replacement = await session.scalar(
                 select(MemoryUnit.document_id)
                 .join(ObservationEvidence, ObservationEvidence.fact_id == MemoryUnit.id)
@@ -1357,10 +1649,25 @@ class PostgresMemoryRepository:
                 .limit(1)
             )
             if replacement is not None:
+                # Observation positions are unique inside a document. Keeping
+                # the old memory_index while moving between documents can
+                # collide with an existing observation and abort deletion at
+                # commit because uq_memory_source_index is deferred.
+                await session.execute(
+                    select(func.pg_advisory_xact_lock(document_lock_key(replacement)))
+                )
+                next_index = await session.scalar(
+                    select(
+                        func.coalesce(func.max(MemoryUnit.memory_index), -1) + 1
+                    ).where(
+                        MemoryUnit.document_id == replacement,
+                        MemoryUnit.chunk_index == chunk_index,
+                    )
+                )
                 await session.execute(
                     MemoryUnit.__table__.update()
                     .where(MemoryUnit.id == observation_id)
-                    .values(document_id=replacement)
+                    .values(document_id=replacement, memory_index=next_index)
                 )
 
     async def _dependent_graph_documents(
@@ -1403,10 +1710,17 @@ class PostgresMemoryRepository:
 
     @staticmethod
     def _state_from_row(row: HindsightDocumentState) -> DocumentMemoryState:
+        from .document_diagnostics import document_state_diagnostic
+
+        status, error_msg = document_state_diagnostic(
+            row.status,
+            row.error_msg,
+            row.stage_results,
+        )
         return DocumentMemoryState(
             document_id=str(row.document_id),
-            status=row.status,
-            error_msg=row.error_msg,
+            status=status,
+            error_msg=error_msg,
             memory_count=row.memory_count,
             link_count=row.link_count,
             updated_at=row.updated_at.isoformat() if row.updated_at else None,
@@ -1568,6 +1882,7 @@ class PostgresMemoryRepository:
                     MemoryUnit.document_id != uuid.UUID(exclude_document_id),
                     self._memory_scope(),
                     MemoryUnit.state == "active",
+                    MemoryUnit.lifecycle_state == "current",
                     MemoryUnit.embedding.is_not(None),
                 )
                 .order_by(score.desc())
@@ -1630,6 +1945,14 @@ class PostgresMemoryRepository:
         if not query_tokens:
             return []
         from .file_chunk_recall import search_file_keywords
+        from .retrieval_flags import bank_read_enabled
+
+        keyword_index_enabled = await bank_read_enabled(
+            self._session_factory,
+            self.scope,
+            "keyword_index_enabled",
+            process_enabled=self._keyword_index_enabled,
+        )
 
         file_candidates = await search_file_keywords(
             self._session_factory,
@@ -1653,7 +1976,7 @@ class PostgresMemoryRepository:
                 .where(*conditions)
             )
             params: dict[str, Any] = {}
-            if self._keyword_index_enabled:
+            if keyword_index_enabled:
                 token = func.unnest(MemoryUnit.lexical_tokens).column_valued("token")
                 overlap_score = (
                     select(func.count(func.distinct(token)))
@@ -1683,27 +2006,31 @@ class PostgresMemoryRepository:
                 else await session.execute(base)
             )
             raw_rows = list(result.all())
-            if self._keyword_index_enabled:
-                # Score the stored retrieval view: lexical_tokens are built
-                # from title|filename|overview + text, so a document whose
-                # body is OCR noise still ranks when its metadata matches.
-                # " ".join round-trips lexical_tokens losslessly.
-                scoring_texts = [
-                    " ".join(row[3] or []) for row in raw_rows
-                ]
+            if keyword_index_enabled:
+                # The enabled path is SQL-indexed end to end: candidate
+                # generation and deterministic overlap ranking are already
+                # complete in the bounded query above. Never rebuild a Python
+                # BM25 corpus from these rows (or from the full table).
+                ranked_ids = [
+                    (memory_id, float(overlap))
+                    for memory_id, _text, overlap, _tokens in raw_rows
+                    if float(overlap or 0) > 0
+                ][:limit]
             else:
+                # Rollback-only compatibility path. It intentionally preserves
+                # the former behavior while the indexed read switch is off.
                 scoring_texts = [str(row[1]) for row in raw_rows]
-            scores = self._bm25(query, scoring_texts)
-            ranked_ids = sorted(
-                (
-                    (memory_id, score)
-                    for (memory_id, _text, *_), score in zip(
-                        raw_rows, scores, strict=True
-                    )
-                    if score > 0
-                ),
-                key=lambda item: (-item[1], str(item[0])),
-            )[:limit]
+                scores = self._bm25(query, scoring_texts)
+                ranked_ids = sorted(
+                    (
+                        (memory_id, score)
+                        for (memory_id, _text, *_), score in zip(
+                            raw_rows, scores, strict=True
+                        )
+                        if score > 0
+                    ),
+                    key=lambda item: (-item[1], str(item[0])),
+                )[:limit]
             if not ranked_ids:
                 return file_candidates
             score_by_id = dict(ranked_ids)
@@ -1725,6 +2052,14 @@ class PostgresMemoryRepository:
             unit.id: self._candidate(unit, document, keyword_score=score_by_id[unit.id])
             for unit, document in rows
         }
+        for candidate in candidates.values():
+            candidate.metadata.update(
+                keyword_index_mode=(
+                    "indexed_sql" if keyword_index_enabled else "legacy_python"
+                ),
+                keyword_candidate_count=len(raw_rows),
+                keyword_candidate_limit=self._keyword_candidate_limit,
+            )
         return sorted(
             [*candidates.values(), *file_candidates],
             key=lambda candidate: candidate.keyword_score or 0,
@@ -1868,7 +2203,15 @@ class PostgresMemoryRepository:
                 select(MemoryEntity, MemoryUnit)
                 .join(MemoryUnitEntity, MemoryUnitEntity.entity_id == MemoryEntity.id)
                 .join(MemoryUnit, MemoryUnit.id == MemoryUnitEntity.memory_id)
-                .where(MemoryUnit.id.in_(ids), self._memory_scope())
+                .where(
+                    MemoryUnit.id.in_(ids),
+                    self._memory_scope(),
+                    MemoryUnit.lifecycle_state == "current",
+                    or_(
+                        MemoryUnit.expires_at.is_(None),
+                        MemoryUnit.expires_at > func.clock_timestamp(),
+                    ),
+                )
             )
         states: dict[str, Any] = {}
         for entity, unit in rows:
@@ -1918,6 +2261,11 @@ class PostgresMemoryRepository:
                         ObservationEvidence.observation_id.in_(observation_ids),
                         ObservationEvidence.active.is_(True),
                         MemoryUnit.state == "active",
+                        MemoryUnit.lifecycle_state == "current",
+                        or_(
+                            MemoryUnit.expires_at.is_(None),
+                            MemoryUnit.expires_at > func.clock_timestamp(),
+                        ),
                         self._memory_scope(),
                     )
                     .order_by(ObservationEvidence.observation_id, MemoryUnit.id)
@@ -1991,7 +2339,9 @@ class PostgresMemoryRepository:
                         MemoryUnit.state.in_(("active", "stale")),
                         Document.status == "indexed",
                         *self._recall_source_conditions(
-                            None, RecallFilter(include_stale=True)
+                            None,
+                            RecallFilter(include_stale=True),
+                            current_lifecycle=False,
                         ),
                     )
                 )
@@ -2082,6 +2432,35 @@ class PostgresMemoryRepository:
         metadata = dict(unit.metadata_json or {})
         metadata["memory_version"] = getattr(unit, "memory_version", 1)
         metadata["is_source_chunk"] = bool(getattr(unit, "is_source_chunk", False))
+        metadata.update(
+            {
+                "origin": getattr(unit, "origin", "unknown"),
+                "authority": getattr(unit, "authority", "unclassified"),
+                "policy_version": getattr(unit, "policy_version", 1),
+                "confirmed_by_turn_id": getattr(unit, "confirmed_by_turn_id", None),
+                "derived_from_evidence_ids": list(
+                    getattr(unit, "derived_from_evidence_ids", None) or []
+                ),
+                "expires_at": (
+                    unit.expires_at.isoformat()
+                    if getattr(unit, "expires_at", None)
+                    else None
+                ),
+                "lifecycle_state": getattr(unit, "lifecycle_state", "current"),
+                "superseded_by": (
+                    str(unit.superseded_by)
+                    if getattr(unit, "superseded_by", None)
+                    else None
+                ),
+                "lifecycle_key": getattr(unit, "lifecycle_key", None),
+                "content_fingerprint": getattr(unit, "content_fingerprint", None),
+                "duplicate_of": (
+                    str(unit.duplicate_of)
+                    if getattr(unit, "duplicate_of", None)
+                    else None
+                ),
+            }
+        )
         mentioned_at = getattr(unit, "mentioned_at", None)
         return RecallCandidate(
             id=str(unit.id),
@@ -2114,7 +2493,10 @@ class PostgresMemoryRepository:
 
     @staticmethod
     def _recall_source_conditions(
-        source_type: str | None, filters: RecallFilter | None = None
+        source_type: str | None,
+        filters: RecallFilter | None = None,
+        *,
+        current_lifecycle: bool = True,
     ) -> list[Any]:
         filters = filters or RecallFilter()
         completed_conversation = (
@@ -2134,6 +2516,15 @@ class PostgresMemoryRepository:
             if filters.include_stale
             else MemoryUnit.state == "active"
         )
+        if current_lifecycle:
+            conditions.append(MemoryUnit.lifecycle_state == "current")
+            reference_time = filters.reference_time or func.clock_timestamp()
+            conditions.append(
+                or_(
+                    MemoryUnit.expires_at.is_(None),
+                    MemoryUnit.expires_at > reference_time,
+                )
+            )
         if source_type is not None:
             conditions.append(
                 or_(

@@ -64,6 +64,19 @@ describe("Pi runtime result handling", () => {
     ]);
   });
 
+  it("never promotes conversation context to a document citation", () => {
+    expect(extractCitations({
+      document_evidence: [{
+        doc_id: "doc-1", title: "Policy", authority: "document",
+        source_group: "document_evidence",
+      }],
+      conversation_context: [{
+        doc_id: "turn-1", title: "Conversation turn", authority: "conversation",
+        source_group: "conversation_context",
+      }],
+    })).toEqual([{ docId: "doc-1", title: "Policy" }]);
+  });
+
   it("turns a terminal PPT tool failure into a completed user-visible answer", () => {
     expect(terminalPptFailureFrom({
       role: "toolResult",

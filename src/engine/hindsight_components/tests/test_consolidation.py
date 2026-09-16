@@ -136,6 +136,47 @@ def test_action_validation_rejects_unbounded_model_output():
         )
 
 
+def test_action_validation_ignores_only_read_only_observation_echoes():
+    fact_id = str(uuid.uuid4())
+    result = validate_actions(
+        {
+            "actions": [
+                {
+                    "action": "create",
+                    "text": "verified",
+                    "source_fact_ids": [fact_id],
+                    "version": 7,
+                    "state": "active",
+                }
+            ]
+        },
+        scope=MemoryScope(bank_id="a", observation_scopes=(("user:1",),)),
+        write_scope=("user:1",),
+        facts={fact_id: evidence(fact_id)},
+        observations={},
+    )
+
+    assert result[0].action.text == "verified"
+
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        validate_actions(
+            {
+                "actions": [
+                    {
+                        "action": "create",
+                        "text": "verified",
+                        "source_fact_ids": [fact_id],
+                        "unexpected": "still rejected",
+                    }
+                ]
+            },
+            scope=MemoryScope(bank_id="a", observation_scopes=(("user:1",),)),
+            write_scope=("user:1",),
+            facts={fact_id: evidence(fact_id)},
+            observations={},
+        )
+
+
 async def test_worker_reports_failure_and_does_not_publish_invalid_model_action():
     fact_id = str(uuid.uuid4())
     claim = ConsolidationClaim("a", "[]", (), str(uuid.uuid4()), 0, 1, 1, 0, 0, 0)

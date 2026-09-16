@@ -114,7 +114,7 @@ async def test_extraction_cache_reuses_only_matching_provider_policy():
         document_id="test", title="test", content="Alice ran a survey", file_type="text"
     )
     chunks = chunk_text(value.content)
-    _, _, cache = await engine._extract_facts(value, chunks)
+    _, _, cache, _ = await engine._extract_facts(value, chunks)
     await engine._extract_facts(value, chunks, cache)
     assert len(provider.json_calls) == 1
     provider.extraction_identity = "model:enabled"

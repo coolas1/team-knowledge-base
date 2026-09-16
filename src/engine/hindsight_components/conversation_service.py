@@ -27,6 +27,8 @@ from .types import (
     RecallResult,
     RecallFilter,
 )
+from .retention_policy import RetentionPolicy
+from .conversation_queue import conversation_document_id
 
 # 截断标记：保留内容以该标记结尾，提示内容不完整。
 TRUNCATION_MARKER = "\n\n[truncated]"
@@ -77,6 +79,8 @@ class ConversationMemoryService:
         *,
         max_recall_results: int = 20,
         max_turn_chars: int = 100_000,
+        selective_retention_enabled: bool = False,
+        retention_policy: RetentionPolicy | None = None,
     ) -> None:
         if max_recall_results < 1:
             raise ValueError("max_recall_results must be greater than zero")
@@ -87,6 +91,8 @@ class ConversationMemoryService:
         self._repository = repository
         self._max_recall_results = max_recall_results
         self._max_turn_chars = max_turn_chars
+        self._selective_retention_enabled = selective_retention_enabled
+        self._retention_policy = retention_policy or RetentionPolicy()
 
     def with_scope(self, scope, *, write_tags=()):
         return ConversationMemoryService(
@@ -94,6 +100,9 @@ class ConversationMemoryService:
             self._recall_service.with_scope(scope),
             self._repository.with_scope(scope),
             max_recall_results=self._max_recall_results,
+            max_turn_chars=self._max_turn_chars,
+            selective_retention_enabled=self._selective_retention_enabled,
+            retention_policy=self._retention_policy,
         )
 
     async def recall_conversation_memory(
@@ -166,6 +175,20 @@ class ConversationMemoryService:
             raise ValueError("session_id and turn_id must not be empty")
         if not user_text or not assistant_text:
             raise ValueError("user_text and assistant_text must not be empty")
+        if turn.confirmed_by_turn_id not in {None, turn_id}:
+            raise ValueError("confirmed_by_turn_id must match turn_id")
+        if len(turn.derived_from_evidence_ids) > 50 or any(
+            not value
+            or len(value) > 128
+            or any(
+                character
+                not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
+                for character in value
+            )
+            for value in turn.derived_from_evidence_ids
+        ):
+            raise ValueError("derived_from_evidence_ids contains an invalid identifier")
+        evidence_ids = tuple(sorted(set(turn.derived_from_evidence_ids)))
         from src.engine.scope import MemoryScope
         from .types import RetainInput
         from datetime import datetime
@@ -176,6 +199,30 @@ class ConversationMemoryService:
             if turn.source_timestamp
             else None
         )
+        proposal = turn.confirmed_proposal
+        if (proposal is None) != (turn.confirmed_by_turn_id is None):
+            raise ValueError("confirmation requires a structured pending proposal")
+        if proposal is not None:
+            normalized_content = proposal.normalized_content.strip()
+            if (
+                proposal.proposal_type
+                not in {"decision", "preference", "commitment"}
+                or not normalized_content
+                or len(normalized_content) > 2000
+                or not proposal.assistant_turn_id.strip()
+                or proposal.assistant_turn_id == turn_id
+            ):
+                raise ValueError("invalid confirmed proposal")
+            proposal_evidence = tuple(sorted(set(proposal.trusted_evidence_ids)))
+            if not proposal_evidence or proposal_evidence != evidence_ids:
+                raise ValueError("confirmed proposal evidence does not match provenance")
+            if proposal.expires_at is None:
+                raise ValueError("confirmed proposal expiry is required")
+            expires_at = datetime.fromisoformat(
+                proposal.expires_at.replace("Z", "+00:00")
+            )
+            if expires_at.tzinfo is None or expires_at <= datetime.now(expires_at.tzinfo):
+                raise ValueError("confirmed proposal has expired")
         if turn.source_timestamp is not None and timestamp is None:
             raise ValueError("invalid source timestamp")
         RetainInput(
@@ -186,9 +233,27 @@ class ConversationMemoryService:
             source_timestamp=timestamp,
             reference_timezone=turn.reference_timezone,
         )
+        retained_types: tuple[str, ...] = ()
+        if self._selective_retention_enabled:
+            retained_types = (
+                (proposal.proposal_type,)
+                if proposal is not None
+                else self._retention_policy.classify_user_text(user_text)
+            )
+            if not retained_types:
+                return ConversationEnqueueResult(
+                    document_id=str(
+                        conversation_document_id(session_id, turn_id, scope.bank_id)
+                    ),
+                    status="skipped_by_policy",
+                )
         # 内容上界：粘贴的巨文档不再整段落库（否则每轮触发 50+ 次
         # LLM 抽取），超出部分截断并附显式标记；恰好一次留存。
-        content = f"[user]\n{user_text}\n\n[assistant]\n{assistant_text}"
+        content = (
+            f"[user]\n{proposal.normalized_content if proposal else user_text}"
+            if self._selective_retention_enabled
+            else f"[user]\n{user_text}\n\n[assistant]\n{assistant_text}"
+        )
         if len(content) > self._max_turn_chars:
             content = content[: self._max_turn_chars] + TRUNCATION_MARKER
         job = await self._queue.enqueue(
@@ -202,10 +267,55 @@ class ConversationMemoryService:
                 "policy_version": scope.policy_version,
                 "agent_name": scope.agent_name,
                 "speakers": {"user": scope.subject_id, "assistant": scope.agent_name},
+                **(
+                    {
+                        "retention_policy_version": self._retention_policy.version,
+                        "retained_types": retained_types,
+                        "origin": "user",
+                        "authority": (
+                            "user_confirmed"
+                            if turn.confirmed_by_turn_id is not None
+                            else "user_stated"
+                        ),
+                        "confirmed_by_turn_id": turn.confirmed_by_turn_id,
+                        "derived_from_evidence_ids": evidence_ids,
+                        **(
+                            {
+                                "confirmed_proposal": {
+                                    "proposal_type": proposal.proposal_type,
+                                    "normalized_content": proposal.normalized_content,
+                                    "assistant_turn_id": proposal.assistant_turn_id,
+                                    "trusted_evidence_ids": proposal_evidence,
+                                    "expires_at": proposal.expires_at,
+                                }
+                            }
+                            if proposal is not None
+                            else {}
+                        ),
+                    }
+                    if self._selective_retention_enabled
+                    else {}
+                ),
             },
             request_fingerprint=sha256(
                 json.dumps(
-                    [turn.user_text, turn.assistant_text],
+                    [
+                        turn.user_text,
+                        turn.assistant_text,
+                        turn.confirmed_by_turn_id,
+                        evidence_ids,
+                        (
+                            {
+                                "proposal_type": proposal.proposal_type,
+                                "normalized_content": proposal.normalized_content,
+                                "assistant_turn_id": proposal.assistant_turn_id,
+                                "trusted_evidence_ids": proposal_evidence,
+                                "expires_at": proposal.expires_at,
+                            }
+                            if proposal is not None
+                            else None
+                        ),
+                    ],
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ).encode()
@@ -261,6 +371,8 @@ def build_conversation_memory_service(
     consolidation_enabled: bool = False,
     max_turn_chars: int = 100_000,
 ) -> ConversationMemoryService:
+    from config.settings import settings
+
     repository = PostgresMemoryRepository(consolidation_enabled=consolidation_enabled)
     return ConversationMemoryService(
         PostgresConversationMemoryQueue(),
@@ -268,4 +380,5 @@ def build_conversation_memory_service(
         repository,
         max_recall_results=max_recall_results,
         max_turn_chars=max_turn_chars,
+        selective_retention_enabled=settings.hindsight_selective_retention_enabled,
     )

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "build_sha": "47e79f5d46347d7bc1ce073c7e3fb80525f3eecb",
+  "clean_head_worktree": true,
+  "suites": {
+    "ruff": {"passed": true},
+    "pytest": {"passed": 530, "failed": 0, "skipped": 52},
+    "hindsight_components": {"passed": 260, "failed": 0},
+    "pi_vitest": {"passed": 129, "failed": 0},
+    "pi_typecheck": {"passed": true}
+  },
+  "integration_suites": "openspec/changes/separate-conversation-memory-from-knowledge-evidence/integration-acceptance.json",
+  "status": "passed"
+}

@@ -94,16 +94,41 @@ export class ConversationDeliveryWorker {
     let errorCode: string | undefined;
     let operationId: string | undefined;
     try {
-      const expected = completedTurnDelivery(this.scopeKey, sessionId, turn.id, turn.userText, turn.assistantText!);
+      const expected = completedTurnDelivery(
+        this.scopeKey,
+        sessionId,
+        turn.id,
+        turn.userText,
+        turn.assistantText!,
+        {
+          confirmedByTurnId: turn.delivery!.confirmedByTurnId,
+          derivedFromEvidenceIds: turn.delivery!.derivedFromEvidenceIds,
+          confirmedProposal: turn.delivery!.confirmedProposal,
+        },
+      );
+      // Delivery journals written before provenance binding carry neither
+      // field. Treat them as the canonical empty provenance rather than
+      // stranding an already accepted turn during an upgrade.
+      const storedProvenanceHash = turn.delivery!.provenanceHash ?? expected.provenanceHash;
       if (turn.delivery!.scopeKey !== this.scopeKey || expected.key !== turn.delivery!.key
-        || expected.contentHash !== turn.delivery!.contentHash) throw new Error("delivery_scope_or_content_conflict");
+        || expected.contentHash !== turn.delivery!.contentHash
+        || expected.provenanceHash !== storedProvenanceHash) {
+        throw new Error("delivery_scope_or_content_conflict");
+      }
       const result = await this.client.enqueueConversationTurn({
         sessionId, turnId: turn.id, userText: turn.userText, assistantText: turn.assistantText!,
         requireDurableAcceptance: true,
         sourceTimestamp: turn.timestamp,
         referenceTimezone: "UTC",
+        confirmedByTurnId: expected.confirmedByTurnId,
+        derivedFromEvidenceIds: expected.derivedFromEvidenceIds,
+        confirmedProposal: expected.confirmedProposal,
       }, { timeoutMs: this.options.timeoutMs });
-      if (result.durable_acceptance !== true || result.content_hash !== expected.contentHash) {
+      if (
+        result.durable_acceptance !== true ||
+        result.content_hash !== expected.contentHash ||
+        result.provenance_hash !== expected.provenanceHash
+      ) {
         throw new Error("delivery_acknowledgement_invalid");
       }
       status = "accepted";

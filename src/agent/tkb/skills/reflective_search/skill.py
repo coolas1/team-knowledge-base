@@ -7,7 +7,12 @@ from src.agent.interface import SkillContext, SkillResult
 
 def _format_sources(sources: list[dict]) -> str:
     return "\n".join(
-        f"[{index}] ({source.get('title', '')}) {source.get('chunk_text', '')}"
+        (
+            f"[{index}] ({source.get('title', '')}) "
+            "[仅元数据匹配：没有可靠正文段落，不可据此推断文档内容]"
+            if source.get("metadata", {}).get("metadata_only")
+            else f"[{index}] ({source.get('title', '')}) {source.get('chunk_text', '')}"
+        )
         for index, source in enumerate(sources, 1)
     )
 
@@ -48,6 +53,7 @@ async def run(ctx: SkillContext) -> SkillResult:
             "chunk_text": s.chunk_text,
             "doc_id": s.doc_id,
             "memory_id": s.memory_id,
+            "metadata": dict(s.metadata),
         }
         for s in result.sources
     ]
@@ -55,6 +61,11 @@ async def run(ctx: SkillContext) -> SkillResult:
     if not answer:
         if not sources:
             answer = NOT_FOUND_ANSWER
+        elif all(s.get("metadata", {}).get("metadata_only") for s in sources):
+            answer = (
+                "仅检索到可能相关的文档元数据，但没有可靠正文段落，"
+                "无法依据文档内容作答；请打开相关文档核实。"
+            )
         elif ctx.llm is not None and needs_answer:
             context = _format_sources(sources)
             answer = await ctx.llm.complete(_answer_prompt(query, context))

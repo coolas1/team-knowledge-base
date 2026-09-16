@@ -35,6 +35,7 @@ class HindsightService:
         if options is None:
             import os
             from config.schema import load_config
+            from config.settings import settings
 
             app_config = load_config(
                 os.getenv("APP_CONFIG", "config/app.yaml")
@@ -46,11 +47,18 @@ class HindsightService:
                 entity_resolution_enabled=features.entity_resolution,
                 consolidation_enabled=features.consolidation,
                 adaptive_reflect_enabled=features.adaptive_reflect,
+                adaptive_deep_search_enabled=(
+                    settings.hindsight_adaptive_deep_search_enabled
+                ),
                 fact_cache_capacity=memory_config.fact_cache_capacity,
                 fact_cache_ttl_seconds=memory_config.fact_cache_ttl_seconds,
                 fact_context_limit=memory_config.fact_context_limit,
                 fact_context_max_tokens=memory_config.fact_context_max_tokens,
                 retain_chunk_concurrency=memory_config.retain_chunk_concurrency,
+                max_passages_per_document=(
+                    settings.hindsight_max_passages_per_document
+                ),
+                max_memories_per_turn=settings.hindsight_max_memories_per_turn,
                 entity_resolution_timeout_seconds=(
                     memory_config.entity_resolution_timeout_seconds
                 ),
@@ -288,6 +296,7 @@ class HindsightService:
         source_type: str | None = None,
         search_id: str | None = None,
         filters: RecallFilter | None = None,
+        budget=None,
     ) -> RecallResult:
         return await self._recall.recall(
             query,
@@ -296,6 +305,7 @@ class HindsightService:
             source_type=source_type,
             search_id=search_id,
             filters=filters,
+            budget=budget,
         )
 
     async def reflect(

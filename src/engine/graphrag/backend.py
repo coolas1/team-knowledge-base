@@ -31,6 +31,7 @@ from src.engine.components.store.models import (
     Chunk,
     Document,
     DocumentChange,
+    DocumentRetrieval,
     is_public_document,
     public_document_filter,
 )
@@ -337,6 +338,11 @@ class GraphRAGBackend:
                     .where(Document.id == parent.id)
                     .values(is_current=False)
                 )
+                await session.execute(
+                    update(DocumentRetrieval)
+                    .where(DocumentRetrieval.doc_id == parent.id)
+                    .values(generation_state="failed")
+                )
                 doc = Document(
                     bank_id=self.scope.bank_id,
                     tags=list(self._write_tags),
@@ -464,6 +470,11 @@ class GraphRAGBackend:
             session.add(new_doc)
             await session.execute(
                 update(Document).where(Document.id == uid).values(is_current=False)
+            )
+            await session.execute(
+                update(DocumentRetrieval)
+                .where(DocumentRetrieval.doc_id == uid)
+                .values(generation_state="failed")
             )
             await session.commit()
 
@@ -753,6 +764,14 @@ class GraphRAGBackend:
             next_number += 1
 
             # 组内当前版全部退位
+            retiring_ids = select(Document.id).where(
+                Document.version_group == group, Document.is_current.is_(True)
+            )
+            await session.execute(
+                update(DocumentRetrieval)
+                .where(DocumentRetrieval.doc_id.in_(retiring_ids))
+                .values(generation_state="failed")
+            )
             await session.execute(
                 update(Document)
                 .where(Document.version_group == group, Document.is_current.is_(True))
@@ -780,6 +799,8 @@ class GraphRAGBackend:
             doc_title = doc.title
             doc_text = doc.raw_text or ""
 
+        if not await self._pipeline.refresh_document_retrieval(uid):
+            raise RuntimeError("version metadata changed before retrieval refresh")
         # 补记 LLM diff + 版本图谱投影（复用入库管线）
         await self._pipeline.record_version_change(
             doc_id=uid,

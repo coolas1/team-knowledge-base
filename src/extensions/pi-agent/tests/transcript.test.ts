@@ -32,10 +32,18 @@ describe("transcript journal", () => {
     await store.initialize("s1");
     const { turn } = await store.accept("s1", "question", "client");
     const delivery = completedTurnDelivery("scope-A", "s1", turn.id, "question", "answer");
+    const pendingProposal = {
+      proposalType: "decision" as const,
+      normalizedContent: "Use the indexed plan",
+      assistantTurnId: turn.id,
+      trustedEvidenceIds: ["doc:1"],
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    };
     await store.append({ type: "assistant.completed", sessionId: "s1", turnId: turn.id,
-      messageId: "answer", text: "answer", timestamp: new Date().toISOString(), delivery });
+      messageId: "answer", text: "answer", timestamp: new Date().toISOString(), delivery,
+      pendingProposal });
     const restored = await new TranscriptStore(directory).snapshot("s1");
-    expect(restored?.turns[0]).toMatchObject({ status: "completed", delivery });
+    expect(restored?.turns[0]).toMatchObject({ status: "completed", delivery, pendingProposal });
     expect(JSON.stringify(restored?.messages)).not.toContain("scope-A");
     expect(completedTurnDelivery("scope-B", "s1", turn.id, "question", "answer").key).not.toBe(delivery.key);
     const incomplete = await store.accept("s1", "unfinished", "next");
@@ -124,6 +132,8 @@ describe("transcript journal", () => {
       { type: "custom_message", id: "memory", customType: "conversation-memory", content: "private memory", display: false },
       { type: "message", id: "u1", timestamp: "2026-01-01T00:00:00Z", message: { role: "user", content: [{ type: "text", text: "first" }] } },
       { type: "message", id: "a-tool", timestamp: "2026-01-01T00:00:01Z", message: { role: "assistant", content: [{ type: "toolCall", name: "search" }] } },
+      { type: "message", id: "a-call", timestamp: "2026-01-01T00:00:01Z", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "text", text: "_call search" }] } },
+      { type: "message", id: "a-cancelled", timestamp: "2026-01-01T00:00:02Z", message: { role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "我" }] } },
       { type: "message", id: "a-reasoning", timestamp: "2026-01-01T00:00:01Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "private reasoning" }] } },
       { type: "message", id: "tool", timestamp: "2026-01-01T00:00:02Z", message: { role: "toolResult", content: [{ type: "text", text: "private" }] } },
       { type: "compaction", id: "compact", parentId: "tool", summary: "private summary" },

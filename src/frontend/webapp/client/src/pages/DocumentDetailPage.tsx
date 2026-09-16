@@ -4,6 +4,7 @@ import MDEditor from '@uiw/react-md-editor'
 import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react'
 import { ApiError, api, type Document, type DocumentVersion, type PipelineProgress } from '../api/client'
 import { StatusBadge } from '../components/StatusBadge'
+import { MarkdownContent } from '../components/MarkdownContent'
 import {
   clearedForRetry,
   detailView,
@@ -319,7 +320,7 @@ export function DocumentDetailPage() {
         /* 查看模式 */
         <div>
           {isMarkdown && doc.raw_text ? (
-            <MDEditor.Markdown source={doc.raw_text} />
+            <MarkdownContent source={doc.raw_text} />
           ) : doc.raw_text ? (
             <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', padding: 16, background: '#f9f9f9', borderRadius: 8 }}>
               {doc.raw_text}

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "build_sha": "cd00989bf7a1fb847f5d6cb421cf0960a53a022b",
+  "fixture": "benchmark/eval/retrieval-refine/replay_cases.json",
+  "cases": 4,
+  "mcp_handler": {
+    "passed": 1,
+    "failed": 0,
+    "assertions": [
+      "compatibility sources contain document evidence only",
+      "conversation context is independently bounded",
+      "automatic-driving search returns both target documents"
+    ]
+  },
+  "pi_http_sse": {
+    "passed": 4,
+    "failed": 0,
+    "suite_duration_ms": 42,
+    "per_turn_budget_ms": 1000,
+    "terminal_event": "message.completed"
+  },
+  "quality": {
+    "automatic_driving_document_recall": 1.0,
+    "conversation_to_document_leakage": 0.0,
+    "citation_precision": 1.0,
+    "unsupported_answer_rate": 0.0
+  },
+  "status": "passed"
+}

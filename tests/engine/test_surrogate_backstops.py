@@ -43,8 +43,8 @@ class _StubSession:
     async def __aexit__(self, *_args):
         return None
 
-    async def get(self, _model, _uid):
-        return self.doc
+    async def get(self, model, _uid, **_kwargs):
+        return self.doc if model is pipeline_mod.Document else None
 
     def add(self, obj):
         self.added.append(obj)

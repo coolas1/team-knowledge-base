@@ -97,27 +97,51 @@ class HindsightRecallAdapter:
                 timeout_seconds=request.timeout_seconds,
                 max_tokens=request.max_tokens,
                 max_candidates=request.max_candidates,
+                route=request.route,
             )
         )
 
-        related_docs: list[dict] = []
-        seen_docs: set[str] = set()
-        chunks: list[RecallChunk] = []
-        for source in result.sources:
+        document_sources = list(result.document_evidence)
+        conversation_sources = list(result.conversation_context)
+        if not document_sources and not conversation_sources:
+            for source in result.sources:
+                if (
+                    source.source_group == "conversation_context"
+                    or source.authority == "conversation"
+                ):
+                    conversation_sources.append(source)
+                else:
+                    document_sources.append(source)
+
+        def to_chunk(source) -> RecallChunk:
             scores = source.metadata.get("scores", {})
             scores = scores if isinstance(scores, dict) else {}
-            chunks.append(
-                RecallChunk(
-                    doc_id=source.doc_id,
-                    title=source.title,
-                    chunk_text=source.chunk_text,
-                    reranker_score=source.score,
-                    vector_score=float(scores.get("semantic") or 0.0),
-                    memory_id=source.memory_id,
-                    memory_type=source.memory_type,
-                    metadata=dict(source.metadata),
-                )
+            metadata = dict(source.metadata)
+            metadata.setdefault("authority", source.authority)
+            metadata.setdefault("source_group", source.source_group)
+            return RecallChunk(
+                doc_id=source.doc_id,
+                title=source.title,
+                chunk_text=source.chunk_text,
+                reranker_score=source.score,
+                vector_score=float(scores.get("semantic") or 0.0),
+                memory_id=source.memory_id,
+                memory_type=source.memory_type,
+                metadata=metadata,
             )
+
+        document_evidence = [to_chunk(source) for source in document_sources]
+        conversation_context = [to_chunk(source) for source in conversation_sources]
+        if request.route == "conversation":
+            chunks = conversation_context
+        elif request.route == "mixed":
+            chunks = [*document_evidence, *conversation_context][: request.top_k]
+        else:
+            chunks = document_evidence
+
+        related_docs: list[dict] = []
+        seen_docs: set[str] = set()
+        for source in document_sources:
             if source.doc_id and source.doc_id not in seen_docs:
                 seen_docs.add(source.doc_id)
                 # Hindsight 来源没有文档间关系类型；保持响应形状一致，
@@ -133,6 +157,8 @@ class HindsightRecallAdapter:
 
         return RecallResult(
             chunks=chunks,
+            document_evidence=document_evidence,
+            conversation_context=conversation_context,
             related_entities=list(result.related_entities),
             related_docs=related_docs,
             answer=result.answer,

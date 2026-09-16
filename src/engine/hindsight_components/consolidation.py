@@ -173,8 +173,11 @@ class PostgresConsolidationRepository:
                             ConsolidationJob.status.in_(("pending", "failed")),
                             and_(
                                 ConsolidationJob.status == "processing",
-                                ConsolidationJob.lease_expires_at
-                                < func.clock_timestamp(),
+                                or_(
+                                    ConsolidationJob.lease_expires_at.is_(None),
+                                    ConsolidationJob.lease_expires_at
+                                    < func.clock_timestamp(),
+                                ),
                             ),
                         ),
                     )
@@ -184,25 +187,100 @@ class PostgresConsolidationRepository:
                 )
                 if job is None:
                     return None
+                latest_events = (
+                    select(
+                        ConsolidationFactEvent.fact_id.label("fact_id"),
+                        func.max(ConsolidationFactEvent.id).label("event_id"),
+                    )
+                    .where(
+                        ConsolidationFactEvent.bank_id == job.bank_id,
+                        ConsolidationFactEvent.scope_key == job.scope_key,
+                        ConsolidationFactEvent.id > job.processed_through,
+                        ConsolidationFactEvent.id <= job.pending_through,
+                    )
+                    .group_by(ConsolidationFactEvent.fact_id)
+                    .subquery()
+                )
+                active_fact = (
+                    select(MemoryUnit.id)
+                    .where(
+                        MemoryUnit.id == ConsolidationFactEvent.fact_id,
+                        MemoryUnit.bank_id == job.bank_id,
+                        MemoryUnit.state == "active",
+                        MemoryUnit.scope_tags.contains(list(job.write_scope)),
+                        MemoryUnit.memory_type.in_(("world", "experience")),
+                        MemoryUnit.is_source_chunk.is_(False),
+                    )
+                    .exists()
+                )
+                active_evidence = (
+                    select(ObservationEvidence.fact_id)
+                    .where(
+                        ObservationEvidence.fact_id
+                        == ConsolidationFactEvent.fact_id,
+                        ObservationEvidence.bank_id == job.bank_id,
+                        ObservationEvidence.active.is_(True),
+                    )
+                    .exists()
+                )
+                effective_limit = retry_batch_size(
+                    options.batch_size, job.attempts
+                )
                 event_ids = list(
                     await session.scalars(
                         select(ConsolidationFactEvent.id)
+                        .join(
+                            latest_events,
+                            latest_events.c.event_id == ConsolidationFactEvent.id,
+                        )
                         .where(
                             ConsolidationFactEvent.bank_id == job.bank_id,
                             ConsolidationFactEvent.scope_key == job.scope_key,
-                            ConsolidationFactEvent.id > job.processed_through,
-                            ConsolidationFactEvent.id <= job.pending_through,
+                            or_(
+                                and_(
+                                    ConsolidationFactEvent.operation == "upsert",
+                                    active_fact,
+                                ),
+                                and_(
+                                    ConsolidationFactEvent.operation == "delete",
+                                    active_evidence,
+                                ),
+                            ),
                         )
                         .order_by(ConsolidationFactEvent.id)
-                        .limit(retry_batch_size(options.batch_size, job.attempts))
+                        # One extra row distinguishes a full effective batch
+                        # from a fully compacted tail.  In the latter case the
+                        # watermark may safely jump over obsolete event churn.
+                        .limit(effective_limit + 1)
                     )
                 )
                 if not event_ids:
+                    await self._mark_completed_source_stages(
+                        session,
+                        ConsolidationClaim(
+                            bank_id=job.bank_id,
+                            scope_key=job.scope_key,
+                            write_scope=tuple(job.write_scope),
+                            lease_token="",
+                            processed_through=job.processed_through,
+                            claimed_through=job.pending_through,
+                            pending_through=job.pending_through,
+                            iterations=job.iterations,
+                            tokens_used=job.tokens_used,
+                            cost_microusd=job.cost_microusd,
+                            operation_id=str(job.operation_id),
+                        ),
+                    )
                     job.status = "completed"
                     job.processed_through = job.pending_through
                     job.lease_token = None
                     job.lease_expires_at = None
                     return None
+                claimed_through = (
+                    event_ids[effective_limit - 1]
+                    if len(event_ids) > effective_limit
+                    else job.pending_through
+                )
                 token = uuid.uuid4()
                 job.status = "processing"
                 job.attempts += 1
@@ -215,7 +293,7 @@ class PostgresConsolidationRepository:
                     write_scope=tuple(job.write_scope),
                     lease_token=str(token),
                     processed_through=job.processed_through,
-                    claimed_through=max(event_ids),
+                    claimed_through=claimed_through,
                     pending_through=job.pending_through,
                     iterations=job.iterations,
                     tokens_used=job.tokens_used,
@@ -227,14 +305,65 @@ class PostgresConsolidationRepository:
         self, claim: ConsolidationClaim, options: ConsolidationOptions
     ) -> ConsolidationReadSet:
         async with self._session_factory() as session:
+            # Only the newest pending event for a fact matters.  This compacts
+            # repeated reingests and upsert/delete churn before it reaches the
+            # model while preserving the monotonic job watermark.
+            latest_events = (
+                select(
+                    ConsolidationFactEvent.fact_id.label("fact_id"),
+                    func.max(ConsolidationFactEvent.id).label("event_id"),
+                )
+                .where(
+                    ConsolidationFactEvent.bank_id == claim.bank_id,
+                    ConsolidationFactEvent.scope_key == claim.scope_key,
+                    ConsolidationFactEvent.id > claim.processed_through,
+                    ConsolidationFactEvent.id <= claim.pending_through,
+                )
+                .group_by(ConsolidationFactEvent.fact_id)
+                .subquery()
+            )
+            active_fact = (
+                select(MemoryUnit.id)
+                .where(
+                    MemoryUnit.id == ConsolidationFactEvent.fact_id,
+                    MemoryUnit.bank_id == claim.bank_id,
+                    MemoryUnit.state == "active",
+                    MemoryUnit.scope_tags.contains(list(claim.write_scope)),
+                    MemoryUnit.memory_type.in_(("world", "experience")),
+                    MemoryUnit.is_source_chunk.is_(False),
+                )
+                .exists()
+            )
+            active_evidence = (
+                select(ObservationEvidence.fact_id)
+                .where(
+                    ObservationEvidence.fact_id == ConsolidationFactEvent.fact_id,
+                    ObservationEvidence.bank_id == claim.bank_id,
+                    ObservationEvidence.active.is_(True),
+                )
+                .exists()
+            )
             events = list(
                 await session.scalars(
                     select(ConsolidationFactEvent)
+                    .join(
+                        latest_events,
+                        latest_events.c.event_id == ConsolidationFactEvent.id,
+                    )
                     .where(
                         ConsolidationFactEvent.bank_id == claim.bank_id,
                         ConsolidationFactEvent.scope_key == claim.scope_key,
-                        ConsolidationFactEvent.id > claim.processed_through,
                         ConsolidationFactEvent.id <= claim.claimed_through,
+                        or_(
+                            and_(
+                                ConsolidationFactEvent.operation == "upsert",
+                                active_fact,
+                            ),
+                            and_(
+                                ConsolidationFactEvent.operation == "delete",
+                                active_evidence,
+                            ),
+                        ),
                     )
                     .order_by(ConsolidationFactEvent.id)
                 )

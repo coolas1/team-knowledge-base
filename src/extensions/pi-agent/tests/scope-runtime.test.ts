@@ -60,7 +60,10 @@ it("isolates real SDK histories over HTTP, restarts and post-deletion forgetting
   const config = loadPiAgentConfig({ PI_AGENT_CWD: root, PI_AGENT_DATA_DIR: root,
     PI_AGENT_PROVIDER: "test", PI_AGENT_MODEL: "test", PI_AGENT_API_KEY: "test",
     PI_AGENT_TOOL_AUTHORING_ENABLED: "false", PI_AGENT_BASE_URL: modelUrl, PI_AGENT_REASONING: "false" });
-  const adapter = loadTkbAdapterConfig({ TKB_CONVERSATION_MEMORY_ENABLED: "true" });
+  const adapter = loadTkbAdapterConfig({
+    TKB_CONVERSATION_MEMORY_ENABLED: "true",
+    TKB_CONVERSATION_MEMORY_AUTO_RECALL_ENABLED: "true",
+  });
   const shared = new PiAgentRuntime(config, adapter);
   const bindings = JSON.stringify({ [digest("a")]: { bank_id: "A", subject_id: "u" },
     [digest("b")]: { bank_id: "A", subject_id: "v" },
@@ -96,7 +99,9 @@ it("isolates real SDK histories over HTTP, restarts and post-deletion forgetting
     expect(managed.get(aid).mcpClient).not.toBe(managed.get(second.id).mcpClient);
     expect(managed.get(aid).mcpClient.config.scopeToken).toBe("a");
     const answers = await Promise.all([[aid, "a"], [bid, "b"]].map(async ([id, token]) => {
-      const response = await request(`/${id}/messages`, token, "POST", { message: `question-${token}` });
+      const response = await request(`/${id}/messages`, token, "POST", {
+        message: `Do you remember question-${token}?`,
+      });
       expect(response.status).toBe(200);
       return response.text();
     }));
@@ -105,7 +110,9 @@ it("isolates real SDK histories over HTTP, restarts and post-deletion forgetting
       const prompt = prompts.find((prompt) => prompt.includes(`question-${token}`))!;
       expect(prompt).toContain(`PRIVATE_SCOPE_${token}_DATA`);
       expect(prompt).not.toContain(`PRIVATE_SCOPE_${token === "a" ? "b" : "a"}_DATA`);
-      const index = enqueue.mock.calls.findIndex(([turn]) => turn.userText === `question-${token}`);
+      const index = enqueue.mock.calls.findIndex(
+        ([turn]) => turn.userText === `Do you remember question-${token}?`,
+      );
       const client = enqueue.mock.instances[index] as any;
       expect(client.config.scopeToken).toBe(token);
       expect(recall.mock.instances).toContain(client);

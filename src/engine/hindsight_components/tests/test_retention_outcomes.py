@@ -128,6 +128,61 @@ async def test_empty_and_failed_extractions_preserve_source_without_fabricating_
     assert repository.plan.memories[0].metadata["extraction_status"] == status
 
 
+async def test_invalid_fact_degrades_chunk_but_preserves_valid_sibling(caplog):
+    provider = ExtractionProvider(
+        {
+            "facts": [
+                {"text": "The valid fact", "type": "world", "confidence": 0.9},
+                {
+                    "text": "sensitive malformed fact",
+                    "type": "not-a-type",
+                },
+            ]
+        }
+    )
+    repository = FakeRepository()
+
+    with caplog.at_level("WARNING"):
+        result = await RetainEngine(repository, provider, HindsightOptions()).retain(
+            RetainInput(
+                document_id="doc-safe-id",
+                title="source",
+                content="Original source text",
+                file_type="text",
+            )
+        )
+
+    assert result.status == "degraded"
+    assert result.facts == 1
+    assert result.error_code == "invalid_fact_type"
+    assert repository.plan.error_code == "invalid_fact_type"
+    assert any(memory.text == "The valid fact" for memory in repository.plan.memories)
+    assert "error_code=invalid_fact_type" in caplog.text
+    assert "sensitive malformed fact" not in caplog.text
+
+
+async def test_provider_failure_uses_sanitized_error_code(caplog):
+    repository = FakeRepository()
+
+    with caplog.at_level("WARNING"):
+        result = await RetainEngine(
+            repository,
+            ExtractionProvider(RuntimeError("secret provider response")),
+            HindsightOptions(),
+        ).retain(
+            RetainInput(
+                document_id="doc-safe-id",
+                title="source",
+                content="Original source text",
+                file_type="text",
+            )
+        )
+
+    assert result.error_code == "provider_runtimeerror"
+    assert "error_code=provider_runtimeerror" in caplog.text
+    assert "secret provider response" not in caplog.text
+
+
 def test_relative_dates_use_source_local_day_and_unknown_stays_unknown():
     source = RetainInput(
         document_id="doc",

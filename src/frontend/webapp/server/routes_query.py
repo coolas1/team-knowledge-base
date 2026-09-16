@@ -19,6 +19,7 @@ class KnowledgeQueryBody(BaseModel):
     mode: Literal["fast", "deep"] = "deep"
     top_k: int = Field(default=10, ge=1)
     needs_answer: bool = True
+    route: Literal["knowledge", "conversation", "mixed"] = "knowledge"
 
     @field_validator("query")
     @classmethod
@@ -43,6 +44,7 @@ async def query_knowledge(
                 mode=body.mode,
                 top_k=body.top_k,
                 needs_answer=body.needs_answer,
+                route=body.route,
             )
         )
         from dataclasses import asdict

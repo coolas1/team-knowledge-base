@@ -30,6 +30,15 @@ async def test_deep_recall_runs_four_arms_and_returns_trace() -> None:
     assert result.trace["algorithm"].endswith("RRF/neural-rerank/MMR")
     assert result.entities["Alice"]["canonical_name"] == "Alice"
     assert len(result.results) == 2
+    fusion = result.trace["source_local_fusion"]
+    assert fusion["method"] == "weighted_rrf"
+    assert fusion["route_weights"]["upload"] == {
+        "semantic": 1.0,
+        "keyword": 1.1,
+        "graph": 0.8,
+        "temporal": 0.7,
+    }
+    assert any("upload:graph" in item.source_ranks for item in result.results)
 
 
 async def test_fast_recall_skips_llm_graph_temporal_and_rerank() -> None:
@@ -45,6 +54,66 @@ async def test_fast_recall_skips_llm_graph_temporal_and_rerank() -> None:
     assert result.trace["phase_ms"]["query_analysis_llm"] == 0
     assert result.trace["phase_ms"]["neural_rerank_llm"] == 0
     assert result.trace["algorithm"] == "semantic+BM25/RRF/MMR"
+
+
+async def test_source_local_rrf_is_invariant_to_unrelated_other_pool_rows() -> None:
+    class MixedPoolRepository(FakeRepository):
+        def __init__(self, extra_count: int) -> None:
+            super().__init__()
+            self.target = candidate(
+                "upload-target",
+                "target evidence",
+                semantic=0.9,
+                keyword=0.9,
+            )
+            self.extras = [
+                candidate(
+                    f"conversation-noise-{index}",
+                    "target noise",
+                    semantic=0.8,
+                    keyword=0.8,
+                )
+                for index in range(extra_count)
+            ]
+            for item in self.extras:
+                item.source_type = "conversation"
+
+        async def semantic_search(
+            self, embedding, limit, *, source_type=None, filters=None
+        ):
+            return [*self.extras, self.target]
+
+        async def keyword_search(self, query, limit, *, source_type=None, filters=None):
+            return [*reversed(self.extras), self.target]
+
+    async def score(extra_count: int):
+        result = await RecallEngine(
+            MixedPoolRepository(extra_count),
+            FakeProviders(),
+            HindsightOptions(recall_max_results=20),
+        ).recall(
+            "target evidence",
+            mode="fast",
+            top_k=20,
+            filters=RecallFilter(source_types=("upload", "conversation")),
+        )
+        target = next(item for item in result.results if item.id == "upload-target")
+        return target, result.trace
+
+    baseline, baseline_trace = await score(0)
+    crowded, crowded_trace = await score(8)
+
+    assert crowded.final_score == pytest.approx(baseline.final_score)
+    assert crowded.source_ranks["upload:semantic"] == 1
+    assert crowded.source_ranks["upload:keyword"] == 1
+    assert baseline_trace["source_local_fusion"]["pool_arm_counts"] == {
+        "upload:keyword": 1,
+        "upload:semantic": 1,
+    }
+    assert (
+        crowded_trace["source_local_fusion"]["pool_arm_counts"]["conversation:semantic"]
+        == 8
+    )
 
 
 async def test_recall_validates_mode_and_top_k() -> None:
@@ -92,6 +161,79 @@ async def test_conversation_filter_is_applied_before_all_arm_rankings() -> None:
     assert result.trace["source_type"] == "conversation"
 
 
+async def test_conversation_quality_factors_beat_short_text_length_advantage() -> None:
+    class QualityRepository(FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.low = candidate(
+                "low-quality",
+                "concise answer",
+                semantic=0.8,
+                keyword=0.95,
+            )
+            self.confirmed = candidate(
+                "confirmed",
+                "User prefers concise answer format",
+                semantic=0.8,
+                keyword=0.6,
+            )
+            for item in (self.low, self.confirmed):
+                item.source_type = "conversation"
+                item.session_id = "session-1"
+            self.low.turn_id = "turn-low"
+            self.low.metadata.update({"origin": "user", "authority": "unclassified"})
+            self.confirmed.turn_id = "turn-confirmed"
+            self.confirmed.metadata.update(
+                {
+                    "origin": "user",
+                    "authority": "user_confirmed",
+                    "confirmed_by_turn_id": "turn-confirmed",
+                }
+            )
+
+        async def semantic_search(
+            self, embedding, limit, *, source_type=None, filters=None
+        ):
+            return [self.low, self.confirmed]
+
+        async def keyword_search(self, query, limit, *, source_type=None, filters=None):
+            return [self.low, self.confirmed]
+
+    result = await RecallEngine(
+        QualityRepository(), FakeProviders(), HindsightOptions()
+    ).recall("concise answer", mode="fast", source_type="conversation")
+
+    assert [item.id for item in result.results] == ["confirmed", "low-quality"]
+    confirmed, low = result.results
+    assert confirmed.metadata["conversation_quality"]["factor"] == 1.0
+    assert low.metadata["conversation_quality"]["factor"] < 1.0
+    assert confirmed.final_score > low.final_score
+
+
+def test_conversation_quality_factor_applies_freshness_after_relevance() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    options = HindsightOptions(conversation_freshness_half_life_days=10)
+    engine = RecallEngine(FakeRepository(), FakeProviders(), options)
+    recent = candidate("recent", "relevant preference", semantic=0.9)
+    old = candidate("old", "relevant preference", semantic=0.9)
+    now = datetime(2026, 9, 15, tzinfo=timezone.utc)
+    for item in (recent, old):
+        item.source_type = "conversation"
+        item.final_score = 1.0
+        item.metadata.update({"origin": "user", "authority": "user_confirmed"})
+    recent.mentioned_at = now.isoformat()
+    old.mentioned_at = (now - timedelta(days=100)).isoformat()
+
+    ordered, filtered = engine._apply_conversation_quality_factors(
+        [old, recent], reference_time=now
+    )
+
+    assert filtered == 0
+    assert [item.id for item in ordered] == ["recent", "old"]
+    assert old.metadata["conversation_quality"]["freshness"] == pytest.approx(0.65)
+
+
 async def test_deep_recall_drops_irrelevant_chunk_despite_high_reranker_score() -> None:
     repository = FakeRepository()
     repository.a = candidate("memory-noise", "unrelated noise", semantic=0.1)
@@ -127,10 +269,14 @@ class MemoryFloorRepository(FakeRepository):
 
     def __init__(self) -> None:
         super().__init__()
-        self.memory = candidate("conversation-mem", "remembered preference", semantic=0.3)
+        self.memory = candidate(
+            "conversation-mem", "remembered preference", semantic=0.3
+        )
         self.memory.source_type = "conversation"
 
-    async def semantic_search(self, embedding, limit, *, source_type=None, filters=None):
+    async def semantic_search(
+        self, embedding, limit, *, source_type=None, filters=None
+    ):
         self.calls["semantic"] += 1
         self.source_filters.append(source_type)
         if source_type == "conversation":
@@ -148,7 +294,9 @@ async def test_deep_mode_semantic_floor_applies_despite_passing_score_gate() -> 
     # clamp the final score to 0.45, above the 0.4 score gate — the floor
     # must still drop the candidate.
     repository = FakeRepository()
-    repository.a = candidate("memory-low", "noise with a high reranker score", semantic=0.2)
+    repository.a = candidate(
+        "memory-low", "noise with a high reranker score", semantic=0.2
+    )
     engine = RecallEngine(repository, FakeProviders(), HindsightOptions())
 
     result = await engine.recall("noise with a high reranker score")
@@ -186,7 +334,9 @@ async def test_deep_mode_keeps_candidate_above_both_gates() -> None:
 
 async def test_fast_mode_keeps_keyword_hit_below_semantic_floor() -> None:
     repository = FakeRepository()
-    repository.a = candidate("memory-hit", "exact term match", semantic=0.1, keyword=0.9)
+    repository.a = candidate(
+        "memory-hit", "exact term match", semantic=0.1, keyword=0.9
+    )
     engine = RecallEngine(repository, FakeProviders(), HindsightOptions())
 
     result = await engine.recall("exact term", mode="fast")
@@ -208,9 +358,9 @@ async def test_memory_recall_uses_lower_floor_than_public_recall() -> None:
 
 async def test_public_and_memory_floors_are_independently_configurable() -> None:
     raised = RecallEngine(
-        MemoryFloorRepository(), FakeProviders(), HindsightOptions(
-            recall_min_semantic=0.9
-        )
+        MemoryFloorRepository(),
+        FakeProviders(),
+        HindsightOptions(recall_min_semantic=0.9),
     )
     memory = await raised.recall(
         "remembered preference", mode="fast", source_type="conversation"
@@ -218,9 +368,9 @@ async def test_public_and_memory_floors_are_independently_configurable() -> None
     assert [item.id for item in memory.results] == ["conversation-mem"]
 
     lowered = RecallEngine(
-        MemoryFloorRepository(), FakeProviders(), HindsightOptions(
-            conversation_recall_min_semantic=0.05
-        )
+        MemoryFloorRepository(),
+        FakeProviders(),
+        HindsightOptions(conversation_recall_min_semantic=0.05),
     )
     public = await lowered.recall("remembered preference", mode="fast")
     assert "conversation-mem" not in [item.id for item in public.results]
@@ -333,6 +483,10 @@ def test_recall_filter_rejects_invalid_budget_score_and_time() -> None:
         RecallFilter(reference_time=datetime(2026, 9, 9))
     with pytest.raises(ValueError, match="max_tokens"):
         RecallFilter(max_tokens=0)
+    with pytest.raises(ValueError, match="knowledge_arm_weights"):
+        HindsightOptions(knowledge_arm_weights=(1.0, 1.0, 0.0, 1.0))
+    with pytest.raises(ValueError, match="conversation_unconfirmed_factor"):
+        HindsightOptions(conversation_unconfirmed_factor=0)
 
 
 class CoverageGateRepository(FakeRepository):
@@ -361,9 +515,14 @@ async def test_keyword_only_candidate_with_poor_term_coverage_is_filtered() -> N
     # must not ride a single shared token past the gate.
     query = "autonomous driving control theory trajectory planning prediction"
     noise = candidate(
-        "memory-noise", "fermentation recipe with planning notes", semantic=0.1, keyword=0.9
+        "memory-noise",
+        "fermentation recipe with planning notes",
+        semantic=0.1,
+        keyword=0.9,
     )
-    engine = RecallEngine(CoverageGateRepository(noise), FakeProviders(), HindsightOptions())
+    engine = RecallEngine(
+        CoverageGateRepository(noise), FakeProviders(), HindsightOptions()
+    )
 
     result = await engine.recall(query, mode="fast")
 
@@ -374,9 +533,14 @@ async def test_keyword_only_candidate_with_poor_term_coverage_is_filtered() -> N
 async def test_keyword_only_candidate_with_term_coverage_passes_gate() -> None:
     query = "autonomous driving control theory trajectory planning prediction"
     hit = candidate(
-        "memory-hit", "autonomous driving control theory survey", semantic=0.1, keyword=0.5
+        "memory-hit",
+        "autonomous driving control theory survey",
+        semantic=0.1,
+        keyword=0.5,
     )
-    engine = RecallEngine(CoverageGateRepository(hit), FakeProviders(), HindsightOptions())
+    engine = RecallEngine(
+        CoverageGateRepository(hit), FakeProviders(), HindsightOptions()
+    )
 
     result = await engine.recall(query, mode="fast")
 
@@ -409,7 +573,10 @@ async def test_conversation_memory_passes_the_same_coverage_gate() -> None:
     )
     relevant.source_type = "conversation"
     noise = candidate(
-        "conversation-noise", "fermentation recipe with planning notes", semantic=0.1, keyword=0.9
+        "conversation-noise",
+        "fermentation recipe with planning notes",
+        semantic=0.1,
+        keyword=0.9,
     )
     noise.source_type = "conversation"
     engine = RecallEngine(
@@ -422,11 +589,31 @@ async def test_conversation_memory_passes_the_same_coverage_gate() -> None:
     assert result.trace["filtered_count"] == 1
 
 
+@pytest.mark.parametrize(
+    ("freshness", "metadata", "allowed"),
+    [
+        ("active", {"origin": "user", "authority": "user_confirmed"}, True),
+        ("active", {"origin": "assistant", "authority": "unclassified"}, False),
+        ("active", {"lifecycle_state": "superseded"}, False),
+        ("expired", {"origin": "user"}, False),
+    ],
+)
+def test_conversation_quality_gate_rejects_stale_or_untrusted_memory(
+    freshness, metadata, allowed
+):
+    item = candidate("memory-quality", "I prefer concise answers", semantic=0.9)
+    item.freshness = freshness
+    item.metadata.update(metadata)
+    assert RecallEngine._conversation_quality_ok(item) is allowed
+
+
 async def test_single_term_query_keyword_hit_falls_back_to_semantic_floor() -> None:
     # A single salient term carries no coverage signal; the semantic floor
     # decides, and 0.1 is below it.
     hit = candidate("memory-single", "fermentation recipe", semantic=0.1, keyword=0.9)
-    engine = RecallEngine(CoverageGateRepository(hit), FakeProviders(), HindsightOptions())
+    engine = RecallEngine(
+        CoverageGateRepository(hit), FakeProviders(), HindsightOptions()
+    )
 
     result = await engine.recall("fermentation", mode="fast")
 

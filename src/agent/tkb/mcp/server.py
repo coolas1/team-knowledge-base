@@ -146,11 +146,25 @@ def _bound_search_payload(
     budget = settings.engine_tools_response_max_chars
     sources = payload.get(source_key)
     sources = sources if isinstance(sources, list) else []
+    document_evidence = payload.get("document_evidence")
+    document_evidence = document_evidence if isinstance(document_evidence, list) else []
+    conversation_context = payload.get("conversation_context")
+    conversation_context = (
+        conversation_context if isinstance(conversation_context, list) else []
+    )
     trace = payload.get("trace")
     trace = dict(trace) if isinstance(trace, dict) else {}
     dropped_sources = 0
+    while conversation_context and _payload_size(payload) > budget:
+        conversation_context.pop()
+        dropped_sources += 1
     while sources and _payload_size(payload) > budget:
-        sources.pop()
+        removed = sources.pop()
+        removed_id = removed.get("memory_id") if isinstance(removed, dict) else None
+        if document_evidence and (
+            removed_id is None or document_evidence[-1].get("memory_id") == removed_id
+        ):
+            document_evidence.pop()
         dropped_sources += 1
     trimmed = dropped_sources > 0
     if _payload_size(payload) > budget:
@@ -168,6 +182,17 @@ def _bound_search_payload(
         payload_chars=min(_payload_size(payload), budget),
     )
     payload["trace"] = trace
+    while sources and _payload_size(payload) > budget:
+        removed = sources.pop()
+        removed_id = removed.get("memory_id") if isinstance(removed, dict) else None
+        if document_evidence and (
+            removed_id is None or document_evidence[-1].get("memory_id") == removed_id
+        ):
+            document_evidence.pop()
+        dropped_sources += 1
+        trace["payload_kept"] = len(sources)
+        trace["payload_dropped"] = dropped_sources
+    trace["payload_chars"] = min(_payload_size(payload), budget)
     return payload
 
 
@@ -220,6 +245,9 @@ async def enqueue_conversation_turn(
     require_durable_acceptance: bool = False,
     source_timestamp: str | None = None,
     reference_timezone: str = "UTC",
+    confirmed_by_turn_id: str | None = None,
+    derived_from_evidence_ids: list[str] | None = None,
+    confirmed_proposal: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Internal runtime operation; not intended for model-selected tools."""
     if not session_id.strip() or not turn_id.strip():
@@ -235,6 +263,21 @@ async def enqueue_conversation_turn(
         ).engine.memory.features.reliable_retention:
             raise ValueError("reliable delivery is disabled")
     try:
+        from src.engine.interface import ConversationProposal
+
+        proposal = (
+            ConversationProposal(
+                proposal_type=confirmed_proposal.get("proposal_type", ""),
+                normalized_content=confirmed_proposal.get("normalized_content", ""),
+                assistant_turn_id=confirmed_proposal.get("assistant_turn_id", ""),
+                trusted_evidence_ids=tuple(
+                    confirmed_proposal.get("trusted_evidence_ids", ())
+                ),
+                expires_at=confirmed_proposal.get("expires_at"),
+            )
+            if confirmed_proposal is not None
+            else None
+        )
         result = await _get_conversation_memory_service().enqueue_conversation_turn(
             ConversationTurn(
                 session_id=session_id,
@@ -243,6 +286,9 @@ async def enqueue_conversation_turn(
                 assistant_text=assistant_text,
                 source_timestamp=source_timestamp,
                 reference_timezone=reference_timezone,
+                confirmed_by_turn_id=confirmed_by_turn_id,
+                derived_from_evidence_ids=tuple(derived_from_evidence_ids or ()),
+                confirmed_proposal=proposal,
             )
         )
     except (ValueError, RuntimeError) as error:
@@ -263,6 +309,31 @@ async def enqueue_conversation_turn(
             content_hash=hashlib.sha256(
                 json.dumps(
                     [user_text, assistant_text],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest(),
+            provenance_hash=hashlib.sha256(
+                json.dumps(
+                    [
+                        confirmed_by_turn_id,
+                        sorted(set(derived_from_evidence_ids or ())),
+                        *(
+                            [
+                                {
+                                    "proposalType": proposal.proposal_type,
+                                    "normalizedContent": proposal.normalized_content,
+                                    "assistantTurnId": proposal.assistant_turn_id,
+                                    "trustedEvidenceIds": list(
+                                        proposal.trusted_evidence_ids
+                                    ),
+                                    "expiresAt": proposal.expires_at,
+                                }
+                            ]
+                            if proposal is not None
+                            else []
+                        ),
+                    ],
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ).encode()
@@ -369,6 +440,7 @@ async def query_knowledge(
     timeout_seconds: float | None = None,
     max_tokens: int | None = None,
     max_candidates: int | None = None,
+    route: Literal["knowledge", "conversation", "mixed"] = "knowledge",
 ) -> dict[str, Any]:
     """通过 Hindsight 统一入口执行 recall 或 reflect。"""
     result = await _get_query_service().query(
@@ -395,6 +467,7 @@ async def query_knowledge(
             timeout_seconds=timeout_seconds,
             max_tokens=max_tokens,
             max_candidates=max_candidates,
+            route=route,
         )
     )
     return _bound_search_payload(asdict(result))
@@ -505,7 +578,9 @@ async def search_knowledge_fast(
     """快速知识检索。用于简单事实、定义、明确关键词、指定文件内容和文件定位。
 
     只返回检索证据，不在服务端生成最终答案；调用此工具的模型应根据 sources
-    组织回答。不要用于跨文档比较、多跳关系、时间线或复杂综合分析。
+    组织回答。metadata.metadata_only=true 表示仅文档元数据相关、没有可靠正文，
+    不得推断或引用不存在的正文，回答中必须明确披露该限制。不要用于跨文档比较、
+    多跳关系、时间线或复杂综合分析。
     """
     return await query_knowledge(
         query,
@@ -513,6 +588,7 @@ async def search_knowledge_fast(
         mode="fast",
         top_k=top_k,
         needs_answer=False,
+        route="knowledge",
     )
 
 
@@ -524,7 +600,8 @@ async def search_knowledge_deep(
     """深度知识检索。用于跨文档比较、多跳关系、时间线、原因分析和综合总结。
 
     只返回检索证据，不在服务端生成最终答案；调用此工具的模型应综合 sources
-    和 related_entities 回答。简单事实查询应优先使用 search_knowledge_fast。
+    和 related_entities 回答。metadata.metadata_only=true 不是正文证据，必须明确说明
+    未找到可靠段落且不得补写文档内容。简单事实查询应优先使用 search_knowledge_fast。
     """
     from src.engine.hindsight_components.errors import DeepSearchError
 
@@ -536,6 +613,7 @@ async def search_knowledge_deep(
             top_k=top_k,
             needs_answer=False,
             correlation_id=correlation_id,
+            route="knowledge",
         )
     except DeepSearchError as error:
         return error.as_payload()
@@ -646,9 +724,7 @@ async def list_documents(
     from config.settings import settings
 
     effective_page_size = min(page_size, settings.engine_tools_list_page_max)
-    return await _get_kb().list_documents(
-        page, effective_page_size, file_type, status
-    )
+    return await _get_kb().list_documents(page, effective_page_size, file_type, status)
 
 
 async def remove_document(doc_id: str, approved: bool = False) -> dict[str, Any]:

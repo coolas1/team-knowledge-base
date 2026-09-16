@@ -32,7 +32,14 @@ async def init_db() -> None:
                 "ADD COLUMN IF NOT EXISTS version_group UUID, "
                 "ADD COLUMN IF NOT EXISTS version_number INTEGER NOT NULL DEFAULT 1, "
                 "ADD COLUMN IF NOT EXISTS version_of UUID, "
-                "ADD COLUMN IF NOT EXISTS is_current BOOLEAN NOT NULL DEFAULT true"
+                "ADD COLUMN IF NOT EXISTS is_current BOOLEAN NOT NULL DEFAULT true, "
+                "ADD COLUMN IF NOT EXISTS processing_generation UUID"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE chunks "
+                "ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT ''"
             )
         )
         await conn.execute(
@@ -93,6 +100,12 @@ async def init_db() -> None:
         )
         await conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS idx_document_retrieval_embedding "
+                "ON document_retrieval USING hnsw (embedding vector_cosine_ops)"
+            )
+        )
+        await conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS idx_memory_units_embedding "
                 "ON memory_units USING hnsw (embedding vector_cosine_ops)"
             )
@@ -108,9 +121,16 @@ async def init_db() -> None:
 
     await migrate_entities(engine)
 
-    from src.engine.components.store.file_summary_migration import migrate_file_summaries
+    from src.engine.components.store.file_summary_migration import (
+        migrate_file_summaries,
+    )
 
     await migrate_file_summaries(engine)
+    from src.engine.components.store.memory_lifecycle_migration import (
+        migrate_memory_lifecycle,
+    )
+
+    await migrate_memory_lifecycle(engine)
 
     # Existing deployments need an online expansion because create_all does not
     # add columns or indexes to an already-present table.

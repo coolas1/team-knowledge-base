@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "corpus_version": "retrieval-refine-ablation-v1",
+  "repetitions": 1000,
+  "selected_configuration": "safety_lane",
+  "variants": {
+    "current": {"mrr": 0.458333, "ndcg_at_5": 0.613821, "recall_at_5": 1.0, "unique_document_coverage": 11, "latency_ms": {"p50": 0.0031, "p95": 0.0034}},
+    "source_isolation": {"mrr": 0.625, "ndcg_at_5": 0.723197, "recall_at_5": 1.0, "unique_document_coverage": 9, "latency_ms": {"p50": 0.0033, "p95": 0.0035}},
+    "source_local_fusion": {"mrr": 0.625, "ndcg_at_5": 0.723197, "recall_at_5": 1.0, "unique_document_coverage": 9, "latency_ms": {"p50": 0.0034, "p95": 0.0037}},
+    "hierarchical": {"mrr": 0.75, "ndcg_at_5": 0.75, "recall_at_5": 0.75, "unique_document_coverage": 5, "latency_ms": {"p50": 0.0036, "p95": 0.0038}},
+    "safety_lane": {"mrr": 1.0, "ndcg_at_5": 1.0, "recall_at_5": 1.0, "unique_document_coverage": 6, "latency_ms": {"p50": 0.0047, "p95": 0.005}}
+  }
+}

@@ -7,20 +7,26 @@ from src.frontend.webapp.server.routes_memory import (
     get_operation,
     list_operations,
     refresh_model,
+    retry_operation,
 )
 
 
 class Service:
+    def __init__(self, *, kind="conversation"):
+        self.kind = kind
+        self.retried = []
+
     async def list_memory_operations(self, **_filters):
         return [
             OperationView(
                 id="operation",
                 status="failed",
                 stages={"retain": "failed"},
-                kind="conversation",
+                kind=self.kind,
                 subject="turn",
                 session_id="session",
                 turn_id="turn",
+                document_id="document-id" if self.kind == "document" else None,
                 error="TimeoutError",
             )
         ]
@@ -36,6 +42,18 @@ class Service:
         if model_id == "missing":
             raise KeyError(model_id)
         return True
+
+    async def retry_memory_operation(self, operation_id):
+        self.retried.append(operation_id)
+        return 1
+
+
+class KnowledgeBase:
+    def __init__(self):
+        self.reingested = []
+
+    async def reingest(self, document_id):
+        self.reingested.append(document_id)
 
 
 @pytest.mark.asyncio
@@ -57,6 +75,30 @@ async def test_memory_routes_report_missing_resources():
     with pytest.raises(HTTPException) as model_error:
         await refresh_model("missing", service=Service())
     assert model_error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_document_operation_retry_schedules_document_reingest():
+    service = Service(kind="document")
+    kb = KnowledgeBase()
+
+    result = await retry_operation("operation", service=service, kb=kb)
+
+    assert result == {"changed": 1}
+    assert kb.reingested == ["document-id"]
+    assert service.retried == ["operation"]
+
+
+@pytest.mark.asyncio
+async def test_conversation_operation_retry_uses_memory_queue():
+    service = Service()
+    kb = KnowledgeBase()
+
+    result = await retry_operation("operation", service=service, kb=kb)
+
+    assert result == {"changed": 1}
+    assert service.retried == ["operation"]
+    assert kb.reingested == []
 
 
 def test_model_form_rejects_invalid_refresh_interval():
