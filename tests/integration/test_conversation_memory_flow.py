@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from src.engine.components.store.models import Document
 from src.engine.components.store.postgres import async_session_factory, init_db
@@ -20,6 +20,11 @@ from src.engine.hindsight_components.conversation_service import (
     ConversationMemoryService,
 )
 from src.engine.hindsight_components.repository import PostgresMemoryRepository
+from src.engine.hindsight_components.models import (
+    MemoryUnit,
+    ObservationEvidence,
+    ObservationRecord,
+)
 from src.engine.interface import ConversationForgetRequest, ConversationTurn
 
 pytestmark = pytest.mark.integration
@@ -167,7 +172,6 @@ async def test_queue_idempotency_file_hiding_and_targeted_forget():
                 )
             )
             await session.commit()
-
         listed = await backend.list_documents(page=1, page_size=500)
         listed_ids = {item["id"] for item in listed["items"]}
         assert str(public_id) in listed_ids
@@ -193,3 +197,109 @@ async def test_queue_idempotency_file_hiding_and_targeted_forget():
         async with async_session_factory() as session:
             await session.execute(delete(Document).where(Document.id == public_id))
             await session.commit()
+
+
+async def test_delete_reanchors_observation_without_position_collision():
+    await init_db()
+    source_id, replacement_id = uuid.uuid4(), uuid.uuid4()
+    source_fact_id, replacement_fact_id = uuid.uuid4(), uuid.uuid4()
+    observation_id, occupied_id = uuid.uuid4(), uuid.uuid4()
+    repository = PostgresMemoryRepository()
+
+    try:
+        async with async_session_factory() as session, session.begin():
+            session.add_all(
+                [
+                    Document(
+                        id=source_id,
+                        title="conversation-to-delete",
+                        file_type="conversation",
+                        raw_text="source",
+                        status="indexed",
+                    ),
+                    Document(
+                        id=replacement_id,
+                        title="remaining-conversation",
+                        file_type="conversation",
+                        raw_text="replacement",
+                        status="indexed",
+                    ),
+                ]
+            )
+            await session.flush()
+            common = {
+                "chunk_index": 0,
+                "memory_index": 0,
+                "text": "fact",
+                "source_text": "fact",
+            }
+            session.add_all(
+                [
+                    MemoryUnit(
+                        id=source_fact_id,
+                        document_id=source_id,
+                        **common,
+                    ),
+                    MemoryUnit(
+                        id=replacement_fact_id,
+                        document_id=replacement_id,
+                        **common,
+                    ),
+                    MemoryUnit(
+                        id=observation_id,
+                        document_id=source_id,
+                        chunk_index=-2,
+                        memory_index=3,
+                        memory_type="observation",
+                        text="cross-source observation",
+                        source_text="cross-source observation",
+                        source_memory_ids=[source_fact_id, replacement_fact_id],
+                    ),
+                    MemoryUnit(
+                        id=occupied_id,
+                        document_id=replacement_id,
+                        chunk_index=-2,
+                        memory_index=3,
+                        memory_type="observation",
+                        text="existing observation",
+                        source_text="existing observation",
+                    ),
+                ]
+            )
+            await session.flush()
+            session.add_all(
+                [
+                    ObservationRecord(
+                        memory_id=observation_id,
+                        normalized_text="cross-source observation",
+                    ),
+                    ObservationEvidence(
+                        observation_id=observation_id,
+                        fact_id=replacement_fact_id,
+                        fact_version=1,
+                    ),
+                ]
+            )
+
+        await repository.delete_document(str(source_id))
+
+        async with async_session_factory() as session:
+            reanchored = await session.get(MemoryUnit, observation_id)
+            assert reanchored is not None
+            assert reanchored.document_id == replacement_id
+            assert reanchored.chunk_index == -2
+            assert reanchored.memory_index > 3
+            positions = list(
+                await session.scalars(
+                    select(MemoryUnit.memory_index).where(
+                        MemoryUnit.document_id == replacement_id,
+                        MemoryUnit.chunk_index == -2,
+                    )
+                )
+            )
+            assert len(positions) == len(set(positions))
+    finally:
+        async with async_session_factory() as session, session.begin():
+            await session.execute(
+                delete(Document).where(Document.id.in_((source_id, replacement_id)))
+            )

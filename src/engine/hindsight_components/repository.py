@@ -1625,15 +1625,17 @@ class PostgresMemoryRepository:
     ) -> None:
         """Keep cross-source observations available for safe recomputation."""
         candidates = list(
-            await session.scalars(
-                select(MemoryUnit.id).where(
-                    MemoryUnit.document_id == deleted_document_id,
-                    MemoryUnit.memory_type == "observation",
-                    MemoryUnit.id.in_(select(ObservationRecord.memory_id)),
+            (
+                await session.execute(
+                    select(MemoryUnit.id, MemoryUnit.chunk_index).where(
+                        MemoryUnit.document_id == deleted_document_id,
+                        MemoryUnit.memory_type == "observation",
+                        MemoryUnit.id.in_(select(ObservationRecord.memory_id)),
+                    )
                 )
-            )
+            ).all()
         )
-        for observation_id in candidates:
+        for observation_id, chunk_index in candidates:
             replacement = await session.scalar(
                 select(MemoryUnit.document_id)
                 .join(ObservationEvidence, ObservationEvidence.fact_id == MemoryUnit.id)
@@ -1647,10 +1649,25 @@ class PostgresMemoryRepository:
                 .limit(1)
             )
             if replacement is not None:
+                # Observation positions are unique inside a document. Keeping
+                # the old memory_index while moving between documents can
+                # collide with an existing observation and abort deletion at
+                # commit because uq_memory_source_index is deferred.
+                await session.execute(
+                    select(func.pg_advisory_xact_lock(document_lock_key(replacement)))
+                )
+                next_index = await session.scalar(
+                    select(
+                        func.coalesce(func.max(MemoryUnit.memory_index), -1) + 1
+                    ).where(
+                        MemoryUnit.document_id == replacement,
+                        MemoryUnit.chunk_index == chunk_index,
+                    )
+                )
                 await session.execute(
                     MemoryUnit.__table__.update()
                     .where(MemoryUnit.id == observation_id)
-                    .values(document_id=replacement)
+                    .values(document_id=replacement, memory_index=next_index)
                 )
 
     async def _dependent_graph_documents(
