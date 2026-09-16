@@ -38,7 +38,7 @@
 
 - [x] 4.1 `uv run ruff check` passes with no new findings.
 - [x] 4.2 `uv run pytest` passes (unit + contract + BFF).
-- [ ] 4.3 Push the branch and open a PR into `develop` using
+- [x] 4.3 Push the branch and open a PR into `develop` using
   `.github/PULL_REQUEST_TEMPLATE.md`, carrying this change's spec delta.
 
 ## 5. Staging enablement and trial (operator)
