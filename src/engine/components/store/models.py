@@ -6,6 +6,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     CheckConstraint,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -187,6 +188,169 @@ class Chunk(BankOwned, Base):
 
     __table_args__ = (
         UniqueConstraint("doc_id", "chunk_index", name="uq_chunks_doc_chunk_index"),
+    )
+
+
+class ArchiveJob(Base):
+    """自动归档持久队列：inbox 中发现的每个稳定文件一行。
+
+    状态机: queued -> processing -> awaiting_review / done / failed；用户暂不
+    归档后为 unarchived。skipped 仅为 V1 历史兼容状态。
+    content_hash 是去重键：已存在同 hash 的 job 时扫描器不再入队。
+    """
+
+    __tablename__ = "archive_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    file_name: Mapped[str] = mapped_column(Text, nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)  # inbox 内绝对路径
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)  # SHA256
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="queued", server_default="queued"
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=text("now()")
+    )
+    # 分类决策证据（候选、置信度、校验结果），待审时供前端展示。
+    plan: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    routing_reason: Mapped[str | None] = mapped_column(Text)
+    error_msg: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=text("now()"),
+        onupdate=_utcnow,
+    )
+
+    __table_args__ = (
+        Index("idx_archive_jobs_status", "status"),
+        Index("idx_archive_jobs_hash", "content_hash"),
+    )
+
+
+class ArchiveOperation(Base):
+    """归档操作日志（撤销依据）：每次执行的 move 一行。
+
+    status: executed -> done（入库成功）| indexing_failed（入库失败，可重试）
+    undo_status: None | undone | conflict
+    """
+
+    __tablename__ = "archive_operations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("archive_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_path: Mapped[str] = mapped_column(Text, nullable=False)
+    destination_path: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_source: Mapped[str] = mapped_column(Text, nullable=False)  # auto|review|manual|migration
+    confidence: Mapped[float | None] = mapped_column(Float)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    policy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("archive_policies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    policy_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    kb_doc_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="executed", server_default="executed"
+    )
+    undo_status: Mapped[str | None] = mapped_column(Text)
+    error_msg: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=text("now()"),
+        onupdate=_utcnow,
+    )
+
+    __table_args__ = (
+        Index("idx_archive_operations_job", "job_id"),
+    )
+
+
+class ArchivePolicy(Base):
+    """可编辑且版本化的归档规则；任一时刻至多一个 active 版本。"""
+
+    __tablename__ = "archive_policies"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    rules: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("version", name="uq_archive_policy_version"),
+        Index(
+            "uq_archive_policy_active",
+            "active",
+            unique=True,
+            postgresql_where=text("active"),
+        ),
+    )
+
+
+class ArchiveMigrationBatch(Base):
+    """存量文件归档的可审计批次：扫描/预览结果与逐项执行结果。"""
+
+    __tablename__ = "archive_migration_batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("archive_policies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="planned", server_default="planned"
+    )
+    plan: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=text("now()"),
+        onupdate=_utcnow,
     )
 
 

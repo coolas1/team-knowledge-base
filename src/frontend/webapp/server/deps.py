@@ -24,6 +24,7 @@ _graph_worker = None
 _conversation_worker = None
 _consolidation_worker = None
 _mental_model_worker = None
+_archive_runtime = None
 _app_config: AppConfig | None = None
 
 
@@ -37,7 +38,7 @@ def app_config() -> AppConfig:
 async def startup() -> None:
     global _kb, _plugin, _llm, _query
     global _graph_worker, _conversation_worker, _consolidation_worker
-    global _mental_model_worker
+    global _mental_model_worker, _archive_runtime
     cfg = app_config()
 
     from src.engine.components.store.postgres import init_db
@@ -69,6 +70,16 @@ async def startup() -> None:
     set_kb(_kb)
     set_query_service(_query)
     set_hooks(_plugin.hooks)
+
+    # 自动归档流水线（archive.enabled 门控）：scanner + worker 后台任务。
+    from src.engine.components.archive.config import merge_archive_config
+
+    archive_cfg = merge_archive_config(cfg)
+    if archive_cfg.enabled:
+        from src.engine.components.archive.runtime import build_archive_runtime
+
+        _archive_runtime = build_archive_runtime(archive_cfg, _kb)
+        await _archive_runtime.start()
 
     if (
         cfg.engine.memory.enabled
@@ -177,11 +188,16 @@ async def startup() -> None:
 
 async def shutdown() -> None:
     global _graph_worker, _conversation_worker, _consolidation_worker
-    global _mental_model_worker, _query
+    global _mental_model_worker, _query, _archive_runtime
     try:
         try:
-            if _conversation_worker is not None:
-                await _conversation_worker.stop()
+            try:
+                if _conversation_worker is not None:
+                    await _conversation_worker.stop()
+            finally:
+                _conversation_worker = None
+                if _graph_worker is not None:
+                    await _graph_worker.stop()
         finally:
             _conversation_worker = None
             try:
@@ -196,8 +212,11 @@ async def shutdown() -> None:
                 _consolidation_worker = None
                 if _graph_worker is not None:
                     await _graph_worker.stop()
+            _graph_worker = None
+            if _archive_runtime is not None:
+                await _archive_runtime.stop()
     finally:
-        _graph_worker = None
+        _archive_runtime = None
         from src.agent.tkb.mcp.server import set_conversation_memory_service
 
         set_conversation_memory_service(None)
@@ -231,6 +250,26 @@ def get_llm():
 
 def get_query(request: Request = None) -> KnowledgeQuery | None:
     return bind_service(_query, _binding(request))
+
+
+def get_archive():
+    """归档运行时（archive.enabled 时存在）；未启用时返回结构化 503。"""
+    if _archive_runtime is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            503,
+            {
+                "code": "archive_disabled",
+                "message": "自动归档未启用（config/app.yaml archive.enabled）",
+                "retryable": False,
+            },
+        )
+    return _archive_runtime
+
+
+def archive_enabled() -> bool:
+    return _archive_runtime is not None
 
 
 def engine_initialized() -> bool:
