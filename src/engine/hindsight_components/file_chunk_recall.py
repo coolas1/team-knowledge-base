@@ -13,6 +13,7 @@ from src.engine.components.store.models import (
 from src.engine.components.store.scope import scope_predicate, tag_predicate
 from .types import RecallCandidate, RecallFilter
 from .utils import lexical_tokens
+from .retrieval_flags import bank_read_enabled
 
 
 def _conditions(scope, filters):
@@ -75,13 +76,29 @@ def reliable_passage(score: float, threshold: float) -> bool:
     return float(score) >= threshold
 
 
-async def search_file_chunks(sessions, scope, embedding, limit, source_type, filters):
+async def search_file_chunks(
+    sessions,
+    scope,
+    embedding,
+    limit,
+    source_type,
+    filters,
+    *,
+    hierarchical_enabled=None,
+):
     filters = filters or RecallFilter()
     if _excluded(source_type, filters):
         return []
     from config.settings import settings
 
-    if settings.hindsight_hierarchical_retrieval_enabled:
+    if hierarchical_enabled is None:
+        hierarchical_enabled = await bank_read_enabled(
+            sessions,
+            scope,
+            "hierarchical_retrieval_enabled",
+            process_enabled=settings.hindsight_hierarchical_retrieval_enabled,
+        )
+    if hierarchical_enabled:
         return await _search_hierarchical_chunks(
             sessions, scope, embedding, limit, filters
         )

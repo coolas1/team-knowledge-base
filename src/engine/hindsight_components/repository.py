@@ -1924,6 +1924,14 @@ class PostgresMemoryRepository:
         if not query_tokens:
             return []
         from .file_chunk_recall import search_file_keywords
+        from .retrieval_flags import bank_read_enabled
+
+        keyword_index_enabled = await bank_read_enabled(
+            self._session_factory,
+            self.scope,
+            "keyword_index_enabled",
+            process_enabled=self._keyword_index_enabled,
+        )
 
         file_candidates = await search_file_keywords(
             self._session_factory,
@@ -1947,7 +1955,7 @@ class PostgresMemoryRepository:
                 .where(*conditions)
             )
             params: dict[str, Any] = {}
-            if self._keyword_index_enabled:
+            if keyword_index_enabled:
                 token = func.unnest(MemoryUnit.lexical_tokens).column_valued("token")
                 overlap_score = (
                     select(func.count(func.distinct(token)))
@@ -1977,7 +1985,7 @@ class PostgresMemoryRepository:
                 else await session.execute(base)
             )
             raw_rows = list(result.all())
-            if self._keyword_index_enabled:
+            if keyword_index_enabled:
                 # The enabled path is SQL-indexed end to end: candidate
                 # generation and deterministic overlap ranking are already
                 # complete in the bounded query above. Never rebuild a Python
@@ -2026,7 +2034,7 @@ class PostgresMemoryRepository:
         for candidate in candidates.values():
             candidate.metadata.update(
                 keyword_index_mode=(
-                    "indexed_sql" if self._keyword_index_enabled else "legacy_python"
+                    "indexed_sql" if keyword_index_enabled else "legacy_python"
                 ),
                 keyword_candidate_count=len(raw_rows),
                 keyword_candidate_limit=self._keyword_candidate_limit,
