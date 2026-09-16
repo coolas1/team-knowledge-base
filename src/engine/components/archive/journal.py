@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import shutil
 from pathlib import Path
@@ -18,6 +17,8 @@ from uuid import UUID
 from src.engine.components.store.models import ArchiveJob, ArchiveOperation, Document
 from src.engine.components.store.postgres import async_session_factory
 from src.engine.interface import KnowledgeBase
+
+from .hashing import file_sha256_async
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class ArchiveJournal:
             if not dest.is_file():
                 await self._mark(session, op, "conflict")
                 raise UndoConflict(f"归档文件不存在: {dest}")
-            digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+            digest = await file_sha256_async(dest)
             if digest != op.content_hash:
                 await self._mark(session, op, "conflict")
                 raise UndoConflict("归档后文件已被修改，拒绝撤销")

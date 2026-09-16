@@ -26,6 +26,7 @@ from src.engine.components.archive.planner import (
     PlanError,
     build_plan,
     validate_plan,
+    validate_plan_async,
 )
 from src.engine.components.archive.scanner import InboxScanner, is_temp_file
 from src.engine.components.archive.worker import ArchiveWorker, route_decision
@@ -289,6 +290,24 @@ def test_validate_plan_blocks_changed_source(tmp_path):
 
     with pytest.raises(PlanError, match="发生变化"):
         validate_plan(plan, archive_root)
+
+
+@pytest.mark.asyncio
+async def test_validate_plan_async_blocks_changed_source(tmp_path):
+    archive_root = tmp_path / "archive"
+    invoices = archive_root / "财务"
+    invoices.mkdir(parents=True)
+    job, source, _ = _job(tmp_path)
+    plan = build_plan(
+        job,
+        _decision(candidate_id="财务"),
+        archive_root,
+        candidate_dirs={"财务": invoices},
+    )
+    source.write_bytes(b"changed after classification")
+
+    with pytest.raises(PlanError, match="发生变化"):
+        await validate_plan_async(plan, archive_root)
 
 
 def test_validate_plan_blocks_missing_source(tmp_path):

@@ -111,7 +111,10 @@ class ArchiveSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_prefix="ARCHIVE_", extra="ignore"
+        env_file=".env",
+        env_prefix="ARCHIVE_",
+        env_parse_none_str="",
+        extra="ignore",
     )
 
     workspace_dir: str = "workspace"

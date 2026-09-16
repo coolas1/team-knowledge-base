@@ -7,12 +7,13 @@
 """
 from __future__ import annotations
 
-import hashlib
+import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from .jobs import ArchiveJobQueue
+from .hashing import file_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,8 @@ def file_fingerprint(path: Path) -> tuple[int, float] | None:
 
 
 def content_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """Compatibility wrapper for synchronous callers and unit tests."""
+    return file_sha256(path)
 
 
 @dataclass
@@ -98,7 +100,7 @@ class InboxScanner:
                 result.pending_stability += 1
                 continue
 
-            digest = content_hash(entry)
+            digest = await asyncio.to_thread(content_hash, entry)
             enqueued = await self._enqueue(entry, digest)
             if enqueued is None:
                 result.skipped_duplicate += 1

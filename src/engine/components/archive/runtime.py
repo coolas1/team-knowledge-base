@@ -25,7 +25,7 @@ from .executor import ArchiveExecutor
 from .jobs import PostgresArchiveJobQueue, to_claimed
 from .journal import ArchiveJournal
 from .legacy import LegacyArchiveService
-from .planner import ActionPlan, build_plan, validate_plan
+from .planner import ActionPlan, build_plan, validate_plan_async
 from .policy import ArchivePolicyStore, policy_to_dict
 from .scanner import InboxScanner, ScanResult
 from .worker import ArchiveWorker, load_job
@@ -317,7 +317,7 @@ class ArchiveRuntime:
                 (job_row.plan or {}).get("max_directory_depth", 2)
             ),
         )
-        plan = validate_plan(
+        plan = await validate_plan_async(
             plan,
             self._archive_root,
             collision_policy=self.config.collision_policy,
@@ -438,7 +438,7 @@ class ArchiveRuntime:
             creates_directory=False,
             decision=decision,
         )
-        plan = validate_plan(
+        plan = await validate_plan_async(
             plan,
             self._archive_root,
             collision_policy=self.config.collision_policy,

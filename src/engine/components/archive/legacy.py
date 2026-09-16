@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import shutil
 from pathlib import Path
 from uuid import UUID
@@ -18,6 +17,7 @@ from src.engine.components.store.models import (
 from src.engine.components.store.postgres import async_session_factory
 
 from .classifier import ArchiveClassifier, ClassificationError
+from .hashing import file_sha256_async
 from .planner import _resolve_new_subdirectory, safe_component
 from .policy import ArchivePolicyStore
 
@@ -228,7 +228,7 @@ class LegacyArchiveService:
                     raise ValueError("原始文件不存在")
                 resolved_parent.mkdir(parents=True, exist_ok=True)
                 destination = _available_destination(resolved_parent, destination.name)
-                digest = hashlib.sha256(source.read_bytes()).hexdigest()
+                digest = await file_sha256_async(source)
                 await asyncio.to_thread(shutil.move, str(source), str(destination))
                 async with async_session_factory() as session:
                     doc = await session.get(Document, UUID(doc_id))

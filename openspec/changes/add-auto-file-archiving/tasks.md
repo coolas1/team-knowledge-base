@@ -79,3 +79,12 @@
 - [ ] 6.4 `uv run ruff check`、`uv run pytest`、前端 `npm test` 全绿。
 - [ ] 6.5 单测：已有目录复用、已有但不匹配时新建、空目录新建、多文件冷启动
   不汇入兜底目录、禁用自动新建时仍保留人工确认建议。
+
+## 7. Fast-follow 稳定性工作
+
+- [ ] 7.1 消除 move 与 `ArchiveOperation` 持久化之间的崩溃窗口：先创建
+  `executing` 日志，移动完成后再更新最终状态，并补充中断恢复测试。
+- [ ] 7.2 明确并实现 defer 时预创建知识文档的生命周期，避免长期保留指向
+  已清理 inbox 文件的 `documents.file_path`。
+- [ ] 7.3 将模型异常降级扩展到完整 GraphRAG overview 路径，保证模型不可用
+  或请求异常不会拖垮基础文档入库。

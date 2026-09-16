@@ -19,7 +19,7 @@ from .classifier import ArchiveClassifier, ClassificationError, ArchiveDecision
 from .config import ArchiveRuntimeConfig
 from .executor import ArchiveExecutor
 from .jobs import ArchiveJobQueue, ClaimedJob
-from .planner import PlanError, build_plan, validate_plan
+from .planner import PlanError, build_plan, validate_plan_async
 from .policy import ArchivePolicyStore
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ class ArchiveWorker:
             candidate_dirs=candidate_dirs,
             max_directory_depth=max_directory_depth,
         )
-        plan = validate_plan(
+        plan = await validate_plan_async(
             plan, Path(self._config.archive_root), collision_policy=self._config.collision_policy
         )
 

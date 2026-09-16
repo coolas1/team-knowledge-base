@@ -8,11 +8,11 @@
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from .classifier import ArchiveDecision
+from .hashing import file_sha256, file_sha256_async
 from .jobs import ClaimedJob
 
 
@@ -114,17 +114,28 @@ def validate_plan(
 
     返回同一 plan（destination_path 可能因 suffix 策略而调整）。
     """
-    root = archive_root.resolve()
+    if not plan.source_path.is_file():
+        raise PlanError(f"源文件不存在: {plan.source_path}")
+    return _validate_plan_with_digest(
+        plan,
+        archive_root,
+        digest=file_sha256(plan.source_path),
+        collision_policy=collision_policy,
+    )
 
-    # 1. 边界（resolve 后复核，覆盖符号链接与 ..）
+
+def _validate_plan_with_digest(
+    plan: ActionPlan,
+    archive_root: Path,
+    *,
+    digest: str,
+    collision_policy: str,
+) -> ActionPlan:
+    """Finish deterministic validation with a precomputed source digest."""
+    root = archive_root.resolve()
     resolved_dir = plan.destination_dir.resolve()
     if resolved_dir == root or root not in resolved_dir.parents:
         raise PlanError(f"目标越界: {resolved_dir}")
-
-    # 2. 源存在 + 指纹匹配（分类后文件被改动则中止）
-    if not plan.source_path.is_file():
-        raise PlanError(f"源文件不存在: {plan.source_path}")
-    digest = hashlib.sha256(plan.source_path.read_bytes()).hexdigest()
     if digest != plan.content_hash:
         raise PlanError("源文件在分类后发生变化，中止执行")
 
@@ -150,3 +161,20 @@ def validate_plan(
     if plan.creates_directory and root not in resolved_dir.parents:
         raise PlanError("新建目录越界")
     return plan
+
+
+async def validate_plan_async(
+    plan: ActionPlan,
+    archive_root: Path,
+    *,
+    collision_policy: str = "suffix",
+) -> ActionPlan:
+    """Async validator used by runtime paths so hashing never blocks the loop."""
+    if not plan.source_path.is_file():
+        raise PlanError(f"源文件不存在: {plan.source_path}")
+    return _validate_plan_with_digest(
+        plan,
+        archive_root,
+        digest=await file_sha256_async(plan.source_path),
+        collision_policy=collision_policy,
+    )
