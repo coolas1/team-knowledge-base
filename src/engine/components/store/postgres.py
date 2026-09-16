@@ -43,6 +43,19 @@ async def init_db() -> None:
             )
         )
         await conn.execute(
+            text(
+                "ALTER TABLE archive_operations "
+                "ADD COLUMN IF NOT EXISTS policy_version INTEGER, "
+                "ADD COLUMN IF NOT EXISTS policy_id UUID"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE archive_migration_batches "
+                "ADD COLUMN IF NOT EXISTS policy_id UUID"
+            )
+        )
+        await conn.execute(
             text("UPDATE documents SET version_group = id WHERE version_group IS NULL")
         )
         await conn.execute(

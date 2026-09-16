@@ -170,6 +170,18 @@ async def _ingest_uploaded(kb: KnowledgeBase, filename: str, data: bytes):
     """调用入库并归一错误为 (status, detail)；成功返回 DocumentRef。"""
     try:
         return await kb.ingest(IngestSource(name=filename, data=data))
+    except UnicodeEncodeError as exc:
+        # UnicodeEncodeError 是 ValueError 的子类，顺序不能反：编码失败是
+        # 我们处理文档时出的错，不能让用户去"确认文件未损坏"。
+        # 归一层已保证提取文本可编码，这里是防止回归的兜底。
+        logger.exception("上传文件 %s 时编码失败", filename)
+        raise _upload_error(
+            503,
+            "upload_encoding_failed",
+            "处理文件内容时出错",
+            "请稍后直接重试；如果持续失败，请联系维护者并提供该文件。",
+            retryable=True,
+        ) from exc
     except ValueError as exc:
         raise _upload_error(
             400,
@@ -270,6 +282,16 @@ async def edit_document_content(
         raise HTTPException(400, "仅支持 Markdown 文档")
     try:
         return asdict(await kb.edit_content(str(doc_id), body.content))
+    except UnicodeEncodeError as e:
+        # 编辑内容来自请求体、不经过提取器，编码失败与"文档不存在"无关。
+        logger.exception("编辑文档 %s 时编码失败", doc_id)
+        raise _upload_error(
+            503,
+            "edit_encoding_failed",
+            "处理编辑内容时出错",
+            "请稍后直接重试；如果持续失败，请联系维护者。",
+            retryable=True,
+        ) from e
     except ValueError as e:
         raise HTTPException(404, str(e))
 

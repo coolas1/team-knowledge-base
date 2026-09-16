@@ -42,11 +42,19 @@ class Capabilities:
 
 @dataclass
 class IngestSource:
-    """A file to ingest: either raw bytes (name+data) or a path on disk."""
+    """A file to ingest: either raw bytes (name+data) or a path on disk.
+
+    keep_path=True (workspace 来源, 如自动归档): 不把字节复制进 uploads/,
+    documents.file_path 直接指向 source.path —— 归档目录成为持久文件仓。
+    """
 
     name: str
     data: bytes = b""
     path: Path | None = None
+    keep_path: bool = False
+    # 调用方已经完成可信文本提取时传入。知识库直接复用这份全文，
+    # 避免归档分类和 GraphRAG 各自读取、提取同一个文件。
+    extracted_text: str | None = None
 
 
 @dataclass

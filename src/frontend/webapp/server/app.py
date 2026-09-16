@@ -7,12 +7,14 @@ SPA's client-side routes. Any other GET falls through to the built SPA.
 
 from __future__ import annotations
 
+import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -27,6 +29,7 @@ from src.frontend.webapp.server.routes_agent import router as agent_router
 from src.frontend.webapp.server.routes_artifacts import router as artifacts_router
 from src.frontend.webapp.server.routes_config import router as config_router
 from src.frontend.webapp.server.routes_memory import router as memory_router
+from src.frontend.webapp.server.routes_archive import router as archive_router
 from src.agent.tkb.mcp.server import build_app as build_mcp_app
 
 SPA_DIST = Path(os.getenv("SPA_DIST", "src/frontend/webapp/client/dist"))
@@ -71,7 +74,58 @@ api.include_router(agent_router)
 api.include_router(artifacts_router)
 api.include_router(config_router)
 api.include_router(memory_router)
+api.include_router(archive_router)
 app.include_router(api)
+
+logger = logging.getLogger(__name__)
+
+API_PREFIX = "/api"
+
+
+def _is_api_request(request: Request) -> bool:
+    path = request.url.path
+    return path == API_PREFIX or path.startswith(API_PREFIX + "/")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception(request: Request, exc: Exception):
+    """未处理异常也回结构化信封，而不是裸的 500。
+
+    与上传路径同一个形状（code/message/suggestion/retryable），SPA 的
+    responseError 原样可读，客户端无需改动。附带 request_id 并写进同一条
+    日志，事后可以凭用户报的编号定位 traceback——记忆页那次 500 之所以
+    无从查起，就是因为什么都没有。
+
+    只覆盖 /api：/mcp 与 SPA 静态资源沿用原有行为。显式的 HTTPException
+    走 FastAPI 自己的处理器，响应形状不变。
+    """
+    if not _is_api_request(request):
+        raise exc
+
+    request_id = uuid.uuid4().hex[:12]
+    logger.error(
+        "未处理异常 [request_id=%s] %s %s",
+        request_id,
+        request.method,
+        request.url.path,
+        exc_info=exc,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "code": "internal_error",
+                "message": "服务器内部错误",
+                "suggestion": (
+                    "请稍后重试；如果持续失败，请联系维护者并提供错误编号："
+                    f"{request_id}"
+                ),
+                "retryable": True,
+                "request_id": request_id,
+            }
+        },
+    )
+
 
 # MCP: always mounted in-process (single-app wiring).
 app.mount("/mcp", build_mcp_app(), name="mcp")

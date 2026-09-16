@@ -202,6 +202,125 @@ export interface AgentSessionList {
 }
 
 export interface ToolActivity { activity?: string; jobId?: string; artifactId?: string; version?: number; errorSummary?: string }
+
+// ── 归档 ─────────────────────────────────────────────────────────
+
+export interface ArchiveDecisionInfo {
+  candidate_id: string | null
+  new_subdirectory: string | null
+  new_name: string | null
+  confidence: number | null
+  rationale: string
+}
+
+export interface ArchiveCandidate {
+  candidate_id: string
+  description: string
+  doc_count: number
+}
+
+export interface ArchiveJobItem {
+  id: string
+  file_name: string
+  file_path: string
+  status: string
+  attempts: number
+  plan: {
+    decision?: ArchiveDecisionInfo
+    candidates?: ArchiveCandidate[]
+    destination?: string
+    validation_notes?: string[]
+  }
+  routing_reason: string | null
+  error_msg: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface ArchiveOperationItem {
+  id: string
+  job_id: string | null
+  source_path: string
+  destination_path: string
+  decision_source: 'auto' | 'review' | 'manual' | 'migration'
+  confidence: number | null
+  rationale: string | null
+  policy_id?: string | null
+  policy_version?: number | null
+  kb_doc_id: string | null
+  status: string
+  undo_status: string | null
+  error_msg: string | null
+  created_at?: string | null
+}
+
+export interface ArchiveTreeDocument {
+  id: string
+  title: string
+  file_type: string
+  status: string
+  overview: string
+  created_at: string | null
+}
+
+export interface ArchiveTreeItem {
+  candidate_id: string
+  description: string
+  doc_count: number
+  documents: ArchiveTreeDocument[]
+}
+
+export interface ArchiveMode {
+  review_all: boolean
+}
+
+export interface ArchivePolicy {
+  id: string
+  version: number
+  enabled: boolean
+  rules: {
+    strategy?: string
+    instructions: string
+    allow_new_directories?: boolean
+    max_directory_depth?: number
+  }
+  created_at?: string | null
+}
+
+export interface LegacyArchiveCandidate {
+  doc_id: string
+  title: string
+  file_path: string
+  file_exists: boolean
+  status: string
+}
+
+export interface LegacyArchivePlanItem {
+  doc_id: string
+  title: string
+  source_path: string
+  destination_path?: string
+  directory?: string
+  new_name?: string
+  confidence?: number
+  rationale?: string
+  creates_directory?: boolean
+  requires_confirmation?: boolean
+  error?: string
+}
+
+export interface LegacyArchivePlan {
+  batch_id: string
+  policy_version: number
+  items: LegacyArchivePlanItem[]
+}
+
+export interface ArchiveInboxResult {
+  filename: string
+  queued: boolean
+  enqueued: string[]
+}
+
 export type PiAgentEvent =
   | { type: 'message.accepted'; sessionId: string; turnId: string; messageId: string; clientMessageId: string; status: AgentTurnStatus; replayed?: boolean }
   | { type: 'message.start'; sessionId: string; name?: string }
@@ -625,5 +744,154 @@ export const api = {
       if (event.type === 'message.failed') failure = event
     })
     if (failure) throw new AgentStreamError(failure)
+  },
+
+  // 归档
+  listArchiveReviews() {
+    return request<{ items: ArchiveJobItem[] }>('/archive/reviews')
+  },
+
+  approveArchiveReview(jobId: string) {
+    return request<{ job_id: string; status: string }>(
+      `/archive/reviews/${encodeURIComponent(jobId)}/approve`,
+      { method: 'POST' },
+    )
+  },
+
+  deferArchiveReview(jobId: string) {
+    return request<{ job_id: string; status: string }>(
+      `/archive/reviews/${encodeURIComponent(jobId)}/defer`,
+      { method: 'POST' },
+    )
+  },
+
+  reassignArchiveReview(jobId: string, directory: string) {
+    return request<{ job_id: string; status: string }>(
+      `/archive/reviews/${encodeURIComponent(jobId)}/reassign`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory }),
+      },
+    )
+  },
+
+  listArchiveSkipped() {
+    return request<{ items: ArchiveJobItem[] }>('/archive/skipped')
+  },
+
+  replanUnarchived(jobId: string) {
+    return request<{ job_id: string; status: string }>(
+      `/archive/unarchived/${encodeURIComponent(jobId)}/replan`,
+      { method: 'POST' },
+    )
+  },
+
+  assignArchiveSkipped(jobId: string, directory: string) {
+    return request<{ job_id: string; status: string }>(
+      `/archive/skipped/${encodeURIComponent(jobId)}/assign`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory }),
+      },
+    )
+  },
+
+  listArchiveOperations() {
+    return request<{ items: ArchiveOperationItem[] }>('/archive/operations')
+  },
+
+  undoArchiveOperation(operationId: string) {
+    return request<{ operation_id: string; undo_status: string }>(
+      `/archive/operations/${encodeURIComponent(operationId)}/undo`,
+      { method: 'POST' },
+    )
+  },
+
+  reindexArchiveOperation(operationId: string) {
+    return request<{ operation_id: string; status: string }>(
+      `/archive/operations/${encodeURIComponent(operationId)}/reindex`,
+      { method: 'POST' },
+    )
+  },
+
+  getArchiveMode() {
+    return request<ArchiveMode>('/archive/mode')
+  },
+
+  setArchiveMode(reviewAll: boolean) {
+    return request<ArchiveMode>('/archive/mode', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ review_all: reviewAll }),
+    })
+  },
+
+  getArchiveTree() {
+    return request<{ items: ArchiveTreeItem[] }>('/archive/tree')
+  },
+
+  getArchivePolicy() {
+    return request<ArchivePolicy>('/archive/policy')
+  },
+
+  updateArchivePolicy(enabled: boolean, rules: ArchivePolicy['rules']) {
+    return request<ArchivePolicy>('/archive/policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, rules }),
+    })
+  },
+
+  scanLegacyArchive() {
+    return request<{ items: LegacyArchiveCandidate[] }>('/archive/legacy/scan')
+  },
+
+  planLegacyArchive(documentIds?: string[]) {
+    return request<LegacyArchivePlan>('/archive/legacy/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ document_ids: documentIds }),
+    })
+  },
+
+  executeLegacyArchive(
+    batchId: string,
+    documentIds?: string[],
+    overrides?: Record<string, { directory?: string; new_name?: string }>,
+  ) {
+    return request<{ batch_id: string; status: string; done: number; failed: number }>(
+      '/archive/legacy/execute',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          batch_id: batchId,
+          document_ids: documentIds,
+          overrides,
+        }),
+      },
+    )
+  },
+
+  async uploadToInbox(file: File) {
+    const form = new FormData()
+    form.append('file', file)
+    try {
+      return await request<ArchiveInboxResult>('/archive/inbox', {
+        method: 'POST',
+        body: form,
+      })
+    } catch (error) {
+      if (error instanceof ApiError) throw error
+      throw new ApiError(
+        '无法连接上传服务',
+        0,
+        'network_error',
+        '请检查网络或服务状态，恢复后可直接重试。',
+        true,
+      )
+    }
   },
 }

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-import hashlib
 import logging
 from pathlib import Path
 import uuid
@@ -34,7 +33,8 @@ from src.engine.components.analyzer import (
 from src.engine.components.chunker import chunk_text
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import registry
-from src.engine.components.retry import retry_transient
+from src.engine.components.extractors.sanitize import sha256_of_text
+from src.engine.components.retry import is_transient, retry_transient
 from src.engine.graphrag.progress import clear_progress, set_progress
 from src.engine.interface import DocumentIndexHook
 from src.engine.scope import MemoryScope, TagFilter
@@ -182,7 +182,7 @@ class Pipeline:
 
         async with asyncio.TaskGroup() as tg:
             overview_task = tg.create_task(
-                self._summary_overview(raw_text, title, doc_id)
+                self._summary_overview_resilient(raw_text, title, doc_id)
                 if self._vector_only
                 else self._with_retry(
                     lambda: self._analyzer.analyze_overview(raw_text, title),
@@ -249,6 +249,23 @@ class Pipeline:
         summary = await self._summary_manager.prepare(str(doc_id), raw_text, title)
         return AnalysisResult(overview=summary.text)
 
+    async def _summary_overview_resilient(self, raw_text, title, doc_id):
+        """Keep vector-only ingestion available when summary LLM is rate-limited."""
+        try:
+            return await self._with_retry(
+                lambda: self._summary_overview(raw_text, title, doc_id),
+                description="document summary",
+            )
+        except Exception as error:
+            if not is_transient(error):
+                raise
+            logger.warning(
+                "document summary retries exhausted; using extractive fallback: %s",
+                error,
+            )
+            excerpt = " ".join(raw_text.split())[:1900]
+            return AnalysisResult(overview=("[Extractive fallback] " + excerpt)[:2000])
+
     async def process_file(
         self,
         doc_id: UUID,
@@ -256,8 +273,9 @@ class Pipeline:
         title: str,
         file_type: str,
         previous_version: VersionParent | None = None,
+        extracted_text: str | None = None,
     ) -> None:
-        """处理新上传的文件：提取 -> 分块 -> 分析 -> embedding -> 写入。
+        """处理新上传的文件：提取/复用全文 -> 分块 -> 分析 -> 写入。
 
         幂等性：通过 content_hash (SHA256) 判断，内容未变则跳过。
         doc 信号量限制并发处理的文档数；分析阶段内部并行（chunk 信号量限流）。
@@ -276,10 +294,18 @@ class Pipeline:
 
         try:
             # 3. 提取 + 并行分析（doc 信号量限制并发文档数）
-            set_progress(str(doc_id), "extracting", "提取文本")
+            set_progress(
+                str(doc_id),
+                "extracting",
+                "复用已提取文本" if extracted_text is not None else "提取文本",
+            )
             async with self._doc_sem:
-                raw_text = await asyncio.to_thread(registry.extract, file_path)
-                content_hash = hashlib.sha256(raw_text.encode()).hexdigest()
+                raw_text = (
+                    extracted_text
+                    if extracted_text is not None
+                    else await asyncio.to_thread(registry.extract, file_path)
+                )
+                content_hash = sha256_of_text(raw_text)
                 logger.info(f"文档 {doc_id} 提取完成, {len(raw_text)} 字符")
                 (
                     doc_analysis,
@@ -541,7 +567,7 @@ class Pipeline:
             version_of = doc.version_of
             version_number = doc.version_number
             is_current = doc.is_current
-            content_hash = hashlib.sha256(new_text.encode()).hexdigest()
+            content_hash = sha256_of_text(new_text)
 
         try:
             # 并行分析（doc 信号量限制并发文档数）

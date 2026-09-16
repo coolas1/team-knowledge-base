@@ -396,9 +396,7 @@ async def test_reingest_schedules_the_available_retry_path(
 
 @pytest.mark.no_uploads_redirect
 def test_upload_dir_follows_uploads_dir_setting(monkeypatch, tmp_path):
-    # UPLOAD_DIR is settings-driven: an absolute UPLOADS_DIR is honored, and
-    # without it the module keeps the relative default. Both modules are
-    # reloaded (and restored) because the binding happens at import time.
+    # 普通上传使用 UPLOADS_DIR；归档来源通过 keep_path 直接使用 archive。
     import importlib
 
     import config.settings as settings_mod
@@ -981,3 +979,79 @@ async def test_version_operations_reject_foreign_bank(monkeypatch, operation, ar
     )
     with pytest.raises(ValueError):
         await getattr(backend, operation)(str(document_id), *args)
+
+
+async def test_ingest_keep_path_skips_upload_copy(monkeypatch, tmp_path):
+    """Auto-archived sources keep their path and reuse pre-extracted text."""
+    monkeypatch.setattr(backend_mod, "UPLOAD_DIR", tmp_path / "uploads")
+    archived = tmp_path / "archive" / "finance"
+    archived.mkdir(parents=True)
+    archived_file = archived / "f.md"
+    archived_file.write_bytes(b"# F\n\narchived content")
+    document_ids = iter([uuid.uuid4(), uuid.uuid4()])
+
+    class EmptyResult:
+        def scalar_one_or_none(self):
+            return None
+
+        def all(self):
+            return []
+
+    class FakeSession:
+        def __init__(self):
+            self.doc = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def add(self, doc):
+            self.doc = doc
+
+        async def execute(self, _statement):
+            return EmptyResult()
+
+        async def commit(self):
+            return None
+
+        async def refresh(self, _doc):
+            self.doc.id = next(document_ids)
+
+    calls = []
+
+    class FakePipeline:
+        async def process_file(self, doc_id, file_path, title, file_type, **kwargs):
+            calls.append((doc_id, file_path, title, file_type, kwargs))
+
+    monkeypatch.setattr(backend_mod, "async_session_factory", lambda: FakeSession())
+    backend = GraphRAGBackend(SimpleNamespace(), FakePipeline())
+
+    ref = await backend.ingest(
+        IngestSource(name="f.md", path=archived_file, keep_path=True)
+    )
+    await asyncio.sleep(0)
+
+    assert ref.title == "f.md"
+    uploads = tmp_path / "uploads"
+    assert not uploads.exists() or not any(uploads.iterdir())
+    assert calls[0][1] == archived_file
+
+    monkeypatch.setattr(
+        backend_mod.registry,
+        "extract",
+        lambda _path: (_ for _ in ()).throw(AssertionError("must reuse text")),
+    )
+    second = archived / "g.md"
+    second.write_bytes(b"bytes need not be parsed again")
+    await backend.ingest(
+        IngestSource(
+            name="g.md",
+            path=second,
+            keep_path=True,
+            extracted_text="shared extracted text",
+        )
+    )
+    await asyncio.sleep(0)
+    assert calls[1][4]["extracted_text"] == "shared extracted text"

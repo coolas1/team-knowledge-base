@@ -167,3 +167,55 @@ async def test_startup_conversation_memory_off(stubs, tmp_path, monkeypatch):
     await deps.startup()
     assert deps._conversation_worker is None
     assert mcp_server._conversation_memory_service is None
+
+
+def _write_cfg_with_archive(tmp_path, memory: bool, archive_enabled: bool) -> Path:
+    p = tmp_path / "app.yaml"
+    p.write_text(
+        "engine:\n  impl: graphrag\n"
+        f"  memory:\n    enabled: {str(memory).lower()}\n"
+        "plugin:\n  impl: tkb\n"
+        f"archive:\n  enabled: {str(archive_enabled).lower()}\n",
+        encoding="utf-8",
+    )
+    return p
+
+
+@pytest.mark.asyncio
+async def test_startup_archive_off_leaves_runtime_none(stubs, tmp_path):
+    _write_cfg_with_archive(tmp_path, memory=False, archive_enabled=False)
+    await deps.startup()
+    assert deps.archive_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_startup_archive_on_builds_and_starts_runtime(stubs, tmp_path, monkeypatch):
+    _write_cfg_with_archive(tmp_path, memory=False, archive_enabled=True)
+    started = {}
+
+    class FakeArchiveRuntime:
+        def __init__(self, config, kb):
+            self.config = config
+            self.kb = kb
+
+        async def start(self):
+            started["runtime"] = True
+
+        async def stop(self):
+            started["stopped"] = True
+
+    monkeypatch.setattr(
+        "src.engine.components.archive.runtime.build_archive_runtime",
+        lambda config, kb: FakeArchiveRuntime(config, kb),
+    )
+
+    await deps.startup()
+    assert deps.archive_enabled() is True
+    assert started["runtime"] is True
+    runtime = deps.get_archive()
+    assert runtime.kb is deps.get_kb()  # 与 BFF 共享同一个引擎实例
+    assert runtime.config.enabled is True
+
+    await deps.shutdown()
+    assert started["stopped"] is True
+    assert deps._archive_runtime is None

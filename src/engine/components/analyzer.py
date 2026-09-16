@@ -285,21 +285,39 @@ class Analyzer:
             )
         if not settings.llm.enabled:
             return AnalysisResult(overview=("[Extractive excerpt] " + excerpt)[:2000])
-        raw = await self._call_openai_compatible(
+        prompt = (
             "Summarize this document for a knowledge base. Preserve key decisions, "
             "names, dates and qualifications. Do not invent missing facts. "
             "The text may contain explicitly omitted sections. "
             "Return JSON with only an overview string, at most 2000 characters.\n"
-            f"Title: {title[:500]}\nDocument:\n{excerpt}",
-            max_tokens=2048,
-            memory_task=True,
+            f"Title: {title[:500]}\nDocument:\n{excerpt}"
         )
-        data = json.loads(raw)
-        overview = data.get("overview")
-        if not isinstance(overview, str) or not overview.strip():
-            raise ValueError("document summary is empty")
         prefix = "[Summary of sampled document sections] " if sampled else ""
-        return AnalysisResult(overview=(prefix + overview.strip())[:2000])
+        for attempt in range(2):
+            raw = await self._call_openai_compatible(
+                prompt,
+                # Reasoning tokens share this budget on some compatible providers.
+                # 2048 was too small for GLM and regularly truncated the JSON body.
+                max_tokens=4096,
+                memory_task=True,
+            )
+            data = _extract_json(raw)
+            overview = data.get("overview") if data is not None else None
+            if isinstance(overview, str) and overview.strip():
+                return AnalysisResult(overview=(prefix + overview.strip())[:2000])
+            logger.warning(
+                "document summary returned invalid JSON or an empty overview "
+                "(attempt %d/2)",
+                attempt + 1,
+            )
+
+        # A summary is enrichment, not a prerequisite for indexing. Preserve a
+        # useful extractive overview so malformed provider output cannot fail the
+        # entire document pipeline; users can regenerate it on a later reindex.
+        fallback = " ".join(excerpt.split())[:1900]
+        return AnalysisResult(
+            overview=(prefix + "[Extractive fallback] " + fallback)[:2000]
+        )
 
     # ── 版本变更分析（LLM diff）────────────────────────────────────
 

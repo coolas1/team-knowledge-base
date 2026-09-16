@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import hashlib
 import logging
 import shutil
 import uuid
@@ -23,6 +22,11 @@ from config.settings import settings
 from src.engine.components.analyzer import Analyzer
 from src.engine.components.embedder import embedder
 from src.engine.components.extractors.registry import ExtractorRegistry, registry
+from src.engine.components.extractors.sanitize import (
+    format_positions,
+    sanitize_surrogates,
+    sha256_of_text,
+)
 from src.engine.components.store.models import (
     Chunk,
     Document,
@@ -51,8 +55,8 @@ from src.engine.hindsight_components.enrich import MemoryStateEnricher
 from src.engine.hindsight_components.hook import build_retain_hook
 from src.engine.scope import MemoryScope, TagFilter
 
-# Uploaded document originals; settings-driven (UPLOADS_DIR) so the compose
-# deployment can point at its named volume while the default stays relative.
+# 普通上传继续使用独立持久卷；自动归档来源通过 keep_path=True 直接
+# 指向 archive/，不会复制到这里。
 UPLOAD_DIR = Path(settings.uploads_dir)
 
 logger = logging.getLogger(__name__)
@@ -229,24 +233,31 @@ class GraphRAGBackend:
         if not self.scope.permits(self.scope.bank_id, self._write_tags):
             raise ValueError("document write tags are outside the trusted scope")
         data = source.data
-        if source.path is not None and not data:
+        if (
+            source.path is not None
+            and not data
+            and (source.extracted_text is None or not source.keep_path)
+        ):
             data = source.path.read_bytes()
         file_type = ExtractorRegistry.guess_file_type(Path(source.name))
 
         # Version identity is based on extracted text for every input format.
         # Hashing container bytes (.docx/.pdf) makes a no-op edit/upload look
         # different because metadata and compression bytes are unstable.
-        extract_dir = UPLOAD_DIR / str(uuid.uuid4())
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        extract_path = extract_dir / _safe_filename(source.name)
-        extract_path.write_bytes(data)
-        try:
-            new_text = await asyncio.to_thread(registry.extract, extract_path)
-        finally:
-            shutil.rmtree(extract_dir, ignore_errors=True)
+        if source.extracted_text is not None:
+            new_text = source.extracted_text
+        else:
+            extract_dir = UPLOAD_DIR / str(uuid.uuid4())
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            extract_path = extract_dir / _safe_filename(source.name)
+            extract_path.write_bytes(data)
+            try:
+                new_text = await asyncio.to_thread(registry.extract, extract_path)
+            finally:
+                shutil.rmtree(extract_dir, ignore_errors=True)
 
         # 版本链检测：同名文档的当前版本存在时，本次上传成为新版本。
-        content_hash = hashlib.sha256(new_text.encode()).hexdigest()
+        content_hash = sha256_of_text(new_text)
         async with async_session_factory() as session:
             parent = (
                 await session.execute(
@@ -310,10 +321,15 @@ class GraphRAGBackend:
                 return ref, empty_task
 
             doc_id = uuid.uuid4()
-            doc_dir = UPLOAD_DIR / str(doc_id)
-            doc_dir.mkdir(parents=True, exist_ok=True)
-            file_path = doc_dir / _safe_filename(source.name)
-            file_path.write_bytes(data)
+            if source.keep_path and source.path is not None:
+                # workspace 来源（自动归档）：不复制字节，file_path 直接
+                # 指向归档位置 —— 归档目录成为持久文件仓。
+                file_path = source.path
+            else:
+                doc_dir = UPLOAD_DIR / str(doc_id)
+                doc_dir.mkdir(parents=True, exist_ok=True)
+                file_path = doc_dir / _safe_filename(source.name)
+                file_path.write_bytes(data)
 
             if parent is not None:
                 # 挂入版本链：旧版让出 current，新版继承 version_group。
@@ -370,18 +386,15 @@ class GraphRAGBackend:
             # 不变量：_ingest_one 把创建的 task 返回给调用方（ingest /
             # ingest_batch 均持有引用），任务不会被 GC，也无需注册表。
             # 重构时若改为不返回 task，必须改用 _schedule_background。
+            process_kwargs: dict[str, Any] = {}
             if previous_version is not None:
-                return asyncio.create_task(
-                    self._pipeline.process_file(
-                        doc_id,
-                        file_path,
-                        source.name,
-                        file_type,
-                        previous_version=previous_version,
-                    )
-                )
+                process_kwargs["previous_version"] = previous_version
+            if source.extracted_text is not None:
+                process_kwargs["extracted_text"] = new_text
             return asyncio.create_task(
-                self._pipeline.process_file(doc_id, file_path, source.name, file_type)
+                self._pipeline.process_file(
+                    doc_id, file_path, source.name, file_type, **process_kwargs
+                )
             )
 
         task = _spawn()
@@ -409,6 +422,19 @@ class GraphRAGBackend:
         当前版本退位（is_current=False），新行继承 version_group 并
         链接 version_of；内容 hash 一致时跳过（幂等）。
         """
+        # 编辑内容直接来自请求体，不经过 extractor registry，代理项必须在
+        # 这里归一化：否则 asyncpg 写 raw_text 与文件落盘都会抛
+        # UnicodeEncodeError，上传接口再把它误判成用户错误。
+        sanitized = sanitize_surrogates(new_text)
+        if sanitized.positions:
+            logger.warning(
+                "编辑内容含代理项，已替换为 U+FFFD: 文档=%s 替换数=%d 位置=[%s]",
+                doc_id,
+                sanitized.replacements,
+                format_positions(sanitized.positions),
+            )
+        new_text = sanitized.text
+
         uid = uuid.UUID(doc_id)
         async with async_session_factory() as session:
             doc = await session.get(Document, uid)
@@ -419,7 +445,7 @@ class GraphRAGBackend:
             title = doc.title
             file_type = doc.file_type
             old_text = doc.raw_text or ""
-            content_hash = hashlib.sha256(new_text.encode()).hexdigest()
+            content_hash = sha256_of_text(new_text)
 
             if content_hash == doc.content_hash or new_text == old_text:
                 # 内容未变：不产生新版本

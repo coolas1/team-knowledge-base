@@ -7,11 +7,29 @@ from the developer's real .env; env vars are set via monkeypatch.
 import pytest
 
 from config.settings import (
+    ArchiveSettings,
     EmbeddingSettings,
     InfraSettings,
     LLMSettings,
     RerankerSettings,
 )
+
+
+def test_archive_settings_treat_empty_overrides_as_unset(monkeypatch):
+    for name in (
+        "ARCHIVE_THRESHOLD",
+        "ARCHIVE_DELTA",
+        "ARCHIVE_REVIEW_ALL",
+        "ARCHIVE_POLL_SECONDS",
+    ):
+        monkeypatch.setenv(name, "")
+
+    settings = ArchiveSettings(_env_file=None)
+
+    assert settings.threshold is None
+    assert settings.delta is None
+    assert settings.review_all is None
+    assert settings.poll_seconds is None
 
 
 def test_llm_settings_reads_prefixed_env(monkeypatch):

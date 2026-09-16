@@ -103,6 +103,31 @@ class RerankerSettings(BaseSettings):
     api_key: str = ""
 
 
+class ArchiveSettings(BaseSettings):
+    """自动归档的部署级设置与 app.yaml 覆盖项（env 优先）。
+
+    workspace_dir 是唯一必有值的路径项；其余为 None 时回落到
+    config/app.yaml 的 archive 段（见 merge_archive_config）。
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_prefix="ARCHIVE_",
+        env_parse_none_str="",
+        extra="ignore",
+    )
+
+    workspace_dir: str = "workspace"
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    delta: float | None = Field(default=None, ge=0.0, le=0.5)
+    review_all: bool | None = None
+    poll_seconds: float | None = Field(default=None, gt=0)
+    stability_checks: int | None = Field(default=None, ge=1)
+    max_attempts: int | None = Field(default=None, ge=1)
+    top_k: int | None = Field(default=None, ge=1)
+    collision_policy: str | None = Field(default=None, pattern="^(suffix|block)$")
+
+
 class InfraSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     memory_scope_bindings: dict[str, ScopeBinding] = Field(
@@ -229,6 +254,7 @@ class InfraSettings(BaseSettings):
     reranker: RerankerSettings = Field(default_factory=RerankerSettings)
     image: ImageSettings = Field(default_factory=ImageSettings)
     ppt: PPTSettings = Field(default_factory=PPTSettings)
+    archive: ArchiveSettings = Field(default_factory=ArchiveSettings)
 
     @property
     def postgres_dsn(self) -> str:
