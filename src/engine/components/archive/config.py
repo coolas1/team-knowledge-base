@@ -48,7 +48,7 @@ def merge_archive_config(app: AppConfig) -> ArchiveRuntimeConfig:
     cfg: ArchiveCfg = app.archive
     env = settings.archive
     return ArchiveRuntimeConfig(
-        enabled=cfg.enabled,
+        enabled=env.enabled if env.enabled is not None else cfg.enabled,
         workspace_dir=env.workspace_dir,
         threshold=env.threshold if env.threshold is not None else cfg.threshold,
         delta=env.delta if env.delta is not None else cfg.delta,

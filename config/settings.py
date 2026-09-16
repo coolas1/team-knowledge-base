@@ -118,6 +118,9 @@ class ArchiveSettings(BaseSettings):
     )
 
     workspace_dir: str = "workspace"
+    # 三态:None = env 未表态,回落 app.yaml 的 archive.enabled。
+    # 不要"简化"成 bool = False —— 那会让 env 恒胜,静默改变现有部署。
+    enabled: bool | None = None
     threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     delta: float | None = Field(default=None, ge=0.0, le=0.5)
     review_all: bool | None = None

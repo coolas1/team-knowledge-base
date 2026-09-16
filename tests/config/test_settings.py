@@ -32,6 +32,21 @@ def test_archive_settings_treat_empty_overrides_as_unset(monkeypatch):
     assert settings.poll_seconds is None
 
 
+def test_archive_settings_enabled_parses_env_and_defaults_to_none(monkeypatch):
+    """enabled 是三态:未设置时必须保留 None(交给 app.yaml),而不是 False。"""
+    monkeypatch.delenv("ARCHIVE_ENABLED", raising=False)
+    assert ArchiveSettings(_env_file=None).enabled is None
+
+    monkeypatch.setenv("ARCHIVE_ENABLED", "true")
+    assert ArchiveSettings(_env_file=None).enabled is True
+
+    monkeypatch.setenv("ARCHIVE_ENABLED", "false")
+    assert ArchiveSettings(_env_file=None).enabled is False
+
+    monkeypatch.setenv("ARCHIVE_ENABLED", "")
+    assert ArchiveSettings(_env_file=None).enabled is None
+
+
 def test_llm_settings_reads_prefixed_env(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "https://api.example/v1")
     monkeypatch.setenv("LLM_MODEL", "some-model")

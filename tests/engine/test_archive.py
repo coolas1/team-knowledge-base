@@ -875,17 +875,24 @@ async def test_worker_review_all_intercepts_high_confidence(tmp_path):
 # ── 配置合并 ──────────────────────────────────────────────────────
 
 
+def _patch_archive_env(monkeypatch, **overrides):
+    """以固定值替换 settings.archive;未列出的旋钮为 None(env 无意见)。"""
+    values = {
+        "workspace_dir": "ws", "enabled": None, "threshold": None, "delta": None,
+        "review_all": None, "poll_seconds": None, "stability_checks": None,
+        "max_attempts": None, "top_k": None, "collision_policy": None,
+    }
+    values.update(overrides)
+    monkeypatch.setattr(
+        "src.engine.components.archive.config.settings",
+        SimpleNamespace(archive=SimpleNamespace(**values)),
+    )
+
+
 def test_merge_archive_config_defaults(monkeypatch):
     from config.schema import AppConfig
 
-    monkeypatch.setattr(
-        "src.engine.components.archive.config.settings",
-        SimpleNamespace(archive=SimpleNamespace(
-            workspace_dir="ws", threshold=None, delta=None, review_all=None,
-            poll_seconds=None, stability_checks=None, max_attempts=None,
-            top_k=None, collision_policy=None,
-        )),
-    )
+    _patch_archive_env(monkeypatch, workspace_dir="ws")
     cfg = merge_archive_config(AppConfig())
     assert cfg.enabled is False  # schema 默认关
     assert cfg.threshold == 0.75
@@ -898,13 +905,10 @@ def test_merge_archive_config_defaults(monkeypatch):
 def test_merge_archive_config_env_overrides_win(monkeypatch):
     from config.schema import AppConfig, ArchiveCfg
 
-    monkeypatch.setattr(
-        "src.engine.components.archive.config.settings",
-        SimpleNamespace(archive=SimpleNamespace(
-            workspace_dir="/app/workspace", threshold=0.9, delta=0.05,
-            review_all=True, poll_seconds=2.0, stability_checks=3,
-            max_attempts=7, top_k=8, collision_policy="block",
-        )),
+    _patch_archive_env(
+        monkeypatch, workspace_dir="/app/workspace", threshold=0.9, delta=0.05,
+        review_all=True, poll_seconds=2.0, stability_checks=3,
+        max_attempts=7, top_k=8, collision_policy="block",
     )
     app = AppConfig(archive=ArchiveCfg(enabled=True))
     cfg = merge_archive_config(app)
@@ -913,6 +917,42 @@ def test_merge_archive_config_env_overrides_win(monkeypatch):
     assert cfg.review_all is True
     assert cfg.poll_seconds == 2.0
     assert cfg.collision_policy == "block"
+
+
+@pytest.mark.parametrize(
+    ("env_enabled", "yaml_enabled", "expected"),
+    [
+        (True, False, True),    # env 开启
+        (False, True, False),   # env 关闭,覆盖 app.yaml
+        (None, False, False),   # 都未开启
+        (None, True, True),     # env 未表态 -> app.yaml
+    ],
+)
+def test_merge_archive_config_resolves_enabled(
+    monkeypatch, env_enabled, yaml_enabled, expected
+):
+    from config.schema import AppConfig, ArchiveCfg
+
+    _patch_archive_env(monkeypatch, enabled=env_enabled)
+    app = AppConfig(archive=ArchiveCfg(enabled=yaml_enabled))
+    assert merge_archive_config(app).enabled is expected
+
+
+def test_merge_archive_config_unset_enabled_defers_to_app_yaml(monkeypatch):
+    """哨兵守卫:ARCHIVE_ENABLED 未设置时 app.yaml 的 true 必须保留。
+
+    若把 `bool | None = None` "简化"为 `bool = False`,env 就会恒胜,
+    该部署的归档流水线会被静默关掉。
+    """
+    from config.schema import AppConfig, ArchiveCfg
+
+    _patch_archive_env(monkeypatch, enabled=None)
+    assert merge_archive_config(AppConfig(archive=ArchiveCfg(enabled=True))).enabled
+
+    _patch_archive_env(monkeypatch, enabled=False)
+    assert not merge_archive_config(
+        AppConfig(archive=ArchiveCfg(enabled=True))
+    ).enabled
 
 
 def test_archive_cfg_rejects_negative_delta():
