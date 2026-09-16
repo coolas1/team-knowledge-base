@@ -90,14 +90,14 @@
 
 ## 6. Live verification on staging
 
-- [ ] 6.1 Confirm memory routes are unaffected by the new handler.
+- [x] 6.1 Confirm memory routes are unaffected by the new handler.
   Verify: `curl -s -o /dev/null -w '%{http_code}'` on each of
   `/api/memory/{operations,facts,models,directives,policy}` returns 200 on
   `:8001`.
-- [ ] 6.2 Confirm both affected PDFs ingest end to end against staging.
+- [x] 6.2 Confirm both affected PDFs ingest end to end against staging.
   Verify: uploading each returns a document ref, and
   `GET /api/documents/{id}` reaches `indexed` with non-empty extracted text.
-- [ ] 6.3 Confirm no encoding or extraction errors remain in the staging log.
+- [x] 6.3 Confirm no encoding or extraction errors remain in the staging log.
   Verify: `podman logs team-kb-dev-webapp` shows no `UnicodeEncodeError` and no
   `PdfStreamError` since the deploy.
 
