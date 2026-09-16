@@ -103,6 +103,7 @@ export class ConversationDeliveryWorker {
         {
           confirmedByTurnId: turn.delivery!.confirmedByTurnId,
           derivedFromEvidenceIds: turn.delivery!.derivedFromEvidenceIds,
+          confirmedProposal: turn.delivery!.confirmedProposal,
         },
       );
       // Delivery journals written before provenance binding carry neither
@@ -121,6 +122,7 @@ export class ConversationDeliveryWorker {
         referenceTimezone: "UTC",
         confirmedByTurnId: expected.confirmedByTurnId,
         derivedFromEvidenceIds: expected.derivedFromEvidenceIds,
+        confirmedProposal: expected.confirmedProposal,
       }, { timeoutMs: this.options.timeoutMs });
       if (
         result.durable_acceptance !== true ||

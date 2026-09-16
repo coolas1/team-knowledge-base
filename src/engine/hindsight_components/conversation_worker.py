@@ -144,6 +144,7 @@ class ConversationRetentionWorker:
                                 "retained_types",
                                 "confirmed_by_turn_id",
                                 "derived_from_evidence_ids",
+                                "confirmed_proposal",
                                 "expires_at",
                                 "lifecycle_state",
                             )

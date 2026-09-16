@@ -32,10 +32,18 @@ describe("transcript journal", () => {
     await store.initialize("s1");
     const { turn } = await store.accept("s1", "question", "client");
     const delivery = completedTurnDelivery("scope-A", "s1", turn.id, "question", "answer");
+    const pendingProposal = {
+      proposalType: "decision" as const,
+      normalizedContent: "Use the indexed plan",
+      assistantTurnId: turn.id,
+      trustedEvidenceIds: ["doc:1"],
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    };
     await store.append({ type: "assistant.completed", sessionId: "s1", turnId: turn.id,
-      messageId: "answer", text: "answer", timestamp: new Date().toISOString(), delivery });
+      messageId: "answer", text: "answer", timestamp: new Date().toISOString(), delivery,
+      pendingProposal });
     const restored = await new TranscriptStore(directory).snapshot("s1");
-    expect(restored?.turns[0]).toMatchObject({ status: "completed", delivery });
+    expect(restored?.turns[0]).toMatchObject({ status: "completed", delivery, pendingProposal });
     expect(JSON.stringify(restored?.messages)).not.toContain("scope-A");
     expect(completedTurnDelivery("scope-B", "s1", turn.id, "question", "answer").key).not.toBe(delivery.key);
     const incomplete = await store.accept("s1", "unfinished", "next");

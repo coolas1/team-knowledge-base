@@ -16,6 +16,13 @@ async function fixture() {
   const intent = completedTurnDelivery("scope-A", "s1", turn.id, "问题", "answer", {
     confirmedByTurnId: turn.id,
     derivedFromEvidenceIds: ["doc:2", "doc:1", "doc:2"],
+    confirmedProposal: {
+      proposalType: "decision",
+      normalizedContent: "采用有依据的方案",
+      assistantTurnId: "prior-turn",
+      trustedEvidenceIds: ["doc:1", "doc:2"],
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    },
   });
   await store.append({ type: "assistant.completed", sessionId: "s1", turnId: turn.id,
     messageId: "m1", text: "answer", timestamp: new Date().toISOString(), delivery: intent });
@@ -50,6 +57,7 @@ it("delivers trusted provenance out of band and rejects journal tampering", asyn
   expect(legitimate.enqueue).toHaveBeenCalledWith(expect.objectContaining({
     confirmedByTurnId: legitimate.turn.id,
     derivedFromEvidenceIds: ["doc:1", "doc:2"],
+    confirmedProposal: legitimate.intent.confirmedProposal,
   }), expect.anything());
 
   const tampered = await fixture();

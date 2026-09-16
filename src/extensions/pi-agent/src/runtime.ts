@@ -35,6 +35,7 @@ import { enabledTkbTools } from "./tools.js";
 import { AUTHORING_NAMES, AUTHORING_PROMPT, AuthoringBudget, authoringActivity, buildAuthoringTools } from "./authoring.js";
 import { ToolLibrary } from "./tool-library.js";
 import { redact, RunnerClient, type RunnerHealth } from "./runner-client.js";
+import { buildProposalTool, currentProposalDraft, type ProposalDraftState } from "./proposal.js";
 import {
   buildConversationMemoryExtension,
   type ConversationRouteClassifier,
@@ -47,6 +48,7 @@ import {
   type TranscriptSnapshot,
   type TranscriptTurn,
   type TurnStatus,
+  type PendingProposal,
 } from "./transcript.js";
 
 const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent。
@@ -70,6 +72,7 @@ const SYSTEM_PROMPT = `你是 Team Knowledge Base 产品内置的知识库 Agent
 - 知识库回答必须列出依据的文档标题和 doc_id；没有充分证据时明确说明“知识库中未找到充分依据”。
 - 达到调用限制时，停止探索并依据已经获得的证据作答；工具错误必须如实处理。
 - 深度检索返回 degraded 或 fallback 标记时，继续使用现有证据作答，并在答案中说明检索发生了降级或快速兜底。
+- 当你基于文档证据提出需要用户确认的决定、偏好或承诺时，先调用 tkb_register_pending_proposal；不要把普通回答注册为提议。
 - 用户提出任何 PPT、PPTX 或 PowerPoint 生成请求时，先读取 tkb-image-ppt skill，再使用 tkb_generate_image_ppt 在当前对话中直接生成；不得改用 tkb_generate_document。Word 或 PDF 才使用 tkb_generate_document。
 - 图片 PPT 的工具参数保持精简，每页只保留必要标题、要点、布局和简洁讲稿，避免在参数中重复文档全文或解释生成过程。
 - 图片 PPT 的单次工具调用会在每页视觉检查不通过时内部重试。生成失败后停止当前轮次并如实报告，等待用户决定是否再次生成。生成成功后，在最终回答中原样使用工具返回的 download_url 给出 Markdown 下载链接，并说明页面元素不可逐项编辑；不得虚构 Slidev 或其他链接。`;
@@ -204,6 +207,7 @@ interface ManagedSession {
   budget: ExecutionBudget;
   turnDeadline: TurnDeadlineBudget;
   fallbackBudget: SearchFallbackBudget;
+  proposalDraft: ProposalDraftState;
   lastAccess: number;
   active?: {
     clientMessageId: string;
@@ -244,6 +248,22 @@ function textFromMessage(message: unknown): string {
 function userExplicitlyConfirms(text: string): boolean {
   return /(?:^|[\s，。,.!?！？])(?:确认|同意|就按这个|决定采用|yes|confirmed|agreed|approve|はい|同意します)(?:$|[\s，。,.!?！？])/iu
     .test(text.trim());
+}
+
+export function confirmedPendingProposal(
+  snapshot: TranscriptSnapshot,
+  currentTurnId: string,
+  userText: string,
+  now = Date.now(),
+): PendingProposal | undefined {
+  if (!userExplicitlyConfirms(userText)) return undefined;
+  const currentIndex = snapshot.turns.findIndex((turn) => turn.id === currentTurnId);
+  if (currentIndex < 1) return undefined;
+  const prior = snapshot.turns[currentIndex - 1];
+  const proposal = prior.status === "completed" ? prior.pendingProposal : undefined;
+  if (!proposal || proposal.assistantTurnId !== prior.id) return undefined;
+  if (!proposal.trustedEvidenceIds.length || Date.parse(proposal.expiresAt) <= now) return undefined;
+  return proposal;
 }
 
 export function terminalPptFailureFrom(message: unknown): string | undefined {
@@ -572,6 +592,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     const acceptance = this.transcripts.accept(id, message, clientMessageId);
     managed.active = { clientMessageId, acceptance };
     let accepted: TranscriptTurn | undefined;
+    let confirmedProposal: PendingProposal | undefined;
     const citations = new Set<string>();
     let unsubscribe: () => void = () => {};
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -581,6 +602,10 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       accepted = result.turn;
       managed.active.turnId = accepted.id;
       managed.active.acceptance = undefined;
+      confirmedProposal = confirmedPendingProposal(
+        await this.requireSnapshot(id), accepted.id, accepted.userText,
+      );
+      managed.proposalDraft.value = undefined;
       await emit({
         type: "message.accepted", sessionId: id, turnId: accepted.id,
         messageId: accepted.userMessageId, clientMessageId, status: accepted.status,
@@ -633,11 +658,23 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       if (!answerText) throw new Error("agent returned no answer");
       const assistantMessageId = randomUUID();
       const retentionProvenance = {
-        ...(userExplicitlyConfirms(accepted.userText)
+        ...(confirmedProposal
           ? { confirmedByTurnId: accepted.id }
           : {}),
-        derivedFromEvidenceIds: [...citations].sort().slice(0, 50),
+        derivedFromEvidenceIds: confirmedProposal
+          ? confirmedProposal.trustedEvidenceIds
+          : [...citations].sort().slice(0, 50),
+        ...(confirmedProposal ? { confirmedProposal } : {}),
       };
+      const proposalDraft = currentProposalDraft(managed.proposalDraft);
+      const pendingProposal = proposalDraft && citations.size
+        ? {
+            ...proposalDraft,
+            assistantTurnId: accepted.id,
+            trustedEvidenceIds: [...citations].sort().slice(0, 50),
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+          }
+        : undefined;
       await this.transcripts.append({
         type: "assistant.completed", sessionId: id, turnId: accepted.id,
         messageId: assistantMessageId, text: answerText, timestamp: new Date().toISOString(),
@@ -645,6 +682,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
           delivery: completedTurnDelivery(this.adapterConfig.scopeKey ?? "default-team", id,
             accepted.id, accepted.userText, answerText, retentionProvenance),
         } : {}),
+        ...(pendingProposal ? { pendingProposal } : {}),
       });
       this.logTranscript("completed", id, accepted.id);
       await this.enqueueCompletedTurn(
@@ -777,6 +815,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     );
     const fallbackBudget = new SearchFallbackBudget();
     const authoringBudget = new AuthoringBudget(this.config.maxCodeJobs, this.config.maxBuildAttempts);
+    const proposalDraft: ProposalDraftState = {};
     const tools = enforceToolBudget(
       [
         ...enabledTkbTools({
@@ -786,6 +825,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
           fallbackBudget,
         }),
         buildSkillReadTool(this.skillsDir),
+        buildProposalTool(proposalDraft),
         ...(this.library ? buildAuthoringTools(this.library, this.runner, authoringBudget) : []),
       ],
       budget,
@@ -809,6 +849,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
       authoringBudget,
       turnDeadline,
       fallbackBudget,
+      proposalDraft,
       lastAccess: Date.now(),
     };
   }
@@ -821,6 +862,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
     provenance: {
       confirmedByTurnId?: string;
       derivedFromEvidenceIds: string[];
+      confirmedProposal?: PendingProposal;
     } = { derivedFromEvidenceIds: [] },
   ): Promise<void> {
     if (!this.adapterConfig.conversationMemoryEnabled) return;
@@ -838,6 +880,7 @@ export class PiAgentRuntime implements AgentRuntimeApi {
           sourceTimestamp: (await this.findSubmissionByTurn(sessionId, turnId))?.timestamp,
           confirmedByTurnId: provenance.confirmedByTurnId,
           derivedFromEvidenceIds: provenance.derivedFromEvidenceIds,
+          confirmedProposal: provenance.confirmedProposal,
         },
         { timeoutMs: this.adapterConfig.defaultToolTimeoutMs },
       );

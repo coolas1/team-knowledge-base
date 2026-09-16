@@ -199,6 +199,30 @@ class ConversationMemoryService:
             if turn.source_timestamp
             else None
         )
+        proposal = turn.confirmed_proposal
+        if (proposal is None) != (turn.confirmed_by_turn_id is None):
+            raise ValueError("confirmation requires a structured pending proposal")
+        if proposal is not None:
+            normalized_content = proposal.normalized_content.strip()
+            if (
+                proposal.proposal_type
+                not in {"decision", "preference", "commitment"}
+                or not normalized_content
+                or len(normalized_content) > 2000
+                or not proposal.assistant_turn_id.strip()
+                or proposal.assistant_turn_id == turn_id
+            ):
+                raise ValueError("invalid confirmed proposal")
+            proposal_evidence = tuple(sorted(set(proposal.trusted_evidence_ids)))
+            if not proposal_evidence or proposal_evidence != evidence_ids:
+                raise ValueError("confirmed proposal evidence does not match provenance")
+            if proposal.expires_at is None:
+                raise ValueError("confirmed proposal expiry is required")
+            expires_at = datetime.fromisoformat(
+                proposal.expires_at.replace("Z", "+00:00")
+            )
+            if expires_at.tzinfo is None or expires_at <= datetime.now(expires_at.tzinfo):
+                raise ValueError("confirmed proposal has expired")
         if turn.source_timestamp is not None and timestamp is None:
             raise ValueError("invalid source timestamp")
         RetainInput(
@@ -211,7 +235,11 @@ class ConversationMemoryService:
         )
         retained_types: tuple[str, ...] = ()
         if self._selective_retention_enabled:
-            retained_types = self._retention_policy.classify_user_text(user_text)
+            retained_types = (
+                (proposal.proposal_type,)
+                if proposal is not None
+                else self._retention_policy.classify_user_text(user_text)
+            )
             if not retained_types:
                 return ConversationEnqueueResult(
                     document_id=str(
@@ -222,7 +250,7 @@ class ConversationMemoryService:
         # 内容上界：粘贴的巨文档不再整段落库（否则每轮触发 50+ 次
         # LLM 抽取），超出部分截断并附显式标记；恰好一次留存。
         content = (
-            f"[user]\n{user_text}"
+            f"[user]\n{proposal.normalized_content if proposal else user_text}"
             if self._selective_retention_enabled
             else f"[user]\n{user_text}\n\n[assistant]\n{assistant_text}"
         )
@@ -251,6 +279,19 @@ class ConversationMemoryService:
                         ),
                         "confirmed_by_turn_id": turn.confirmed_by_turn_id,
                         "derived_from_evidence_ids": evidence_ids,
+                        **(
+                            {
+                                "confirmed_proposal": {
+                                    "proposal_type": proposal.proposal_type,
+                                    "normalized_content": proposal.normalized_content,
+                                    "assistant_turn_id": proposal.assistant_turn_id,
+                                    "trusted_evidence_ids": proposal_evidence,
+                                    "expires_at": proposal.expires_at,
+                                }
+                            }
+                            if proposal is not None
+                            else {}
+                        ),
                     }
                     if self._selective_retention_enabled
                     else {}
@@ -263,6 +304,17 @@ class ConversationMemoryService:
                         turn.assistant_text,
                         turn.confirmed_by_turn_id,
                         evidence_ids,
+                        (
+                            {
+                                "proposal_type": proposal.proposal_type,
+                                "normalized_content": proposal.normalized_content,
+                                "assistant_turn_id": proposal.assistant_turn_id,
+                                "trusted_evidence_ids": proposal_evidence,
+                                "expires_at": proposal.expires_at,
+                            }
+                            if proposal is not None
+                            else None
+                        ),
                     ],
                     ensure_ascii=False,
                     separators=(",", ":"),

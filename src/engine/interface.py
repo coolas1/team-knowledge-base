@@ -284,6 +284,15 @@ class ConversationMemoryRecallResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationProposal:
+    proposal_type: Literal["decision", "preference", "commitment"]
+    normalized_content: str
+    assistant_turn_id: str
+    trusted_evidence_ids: tuple[str, ...] = ()
+    expires_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ConversationTurn:
     session_id: str
     turn_id: str
@@ -293,6 +302,7 @@ class ConversationTurn:
     reference_timezone: str = "UTC"
     confirmed_by_turn_id: str | None = None
     derived_from_evidence_ids: tuple[str, ...] = ()
+    confirmed_proposal: ConversationProposal | None = None
 
 
 @dataclass(frozen=True, slots=True)

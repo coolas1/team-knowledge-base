@@ -247,6 +247,7 @@ async def enqueue_conversation_turn(
     reference_timezone: str = "UTC",
     confirmed_by_turn_id: str | None = None,
     derived_from_evidence_ids: list[str] | None = None,
+    confirmed_proposal: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Internal runtime operation; not intended for model-selected tools."""
     if not session_id.strip() or not turn_id.strip():
@@ -262,6 +263,21 @@ async def enqueue_conversation_turn(
         ).engine.memory.features.reliable_retention:
             raise ValueError("reliable delivery is disabled")
     try:
+        from src.engine.interface import ConversationProposal
+
+        proposal = (
+            ConversationProposal(
+                proposal_type=confirmed_proposal.get("proposal_type", ""),
+                normalized_content=confirmed_proposal.get("normalized_content", ""),
+                assistant_turn_id=confirmed_proposal.get("assistant_turn_id", ""),
+                trusted_evidence_ids=tuple(
+                    confirmed_proposal.get("trusted_evidence_ids", ())
+                ),
+                expires_at=confirmed_proposal.get("expires_at"),
+            )
+            if confirmed_proposal is not None
+            else None
+        )
         result = await _get_conversation_memory_service().enqueue_conversation_turn(
             ConversationTurn(
                 session_id=session_id,
@@ -272,6 +288,7 @@ async def enqueue_conversation_turn(
                 reference_timezone=reference_timezone,
                 confirmed_by_turn_id=confirmed_by_turn_id,
                 derived_from_evidence_ids=tuple(derived_from_evidence_ids or ()),
+                confirmed_proposal=proposal,
             )
         )
     except (ValueError, RuntimeError) as error:
@@ -301,6 +318,21 @@ async def enqueue_conversation_turn(
                     [
                         confirmed_by_turn_id,
                         sorted(set(derived_from_evidence_ids or ())),
+                        *(
+                            [
+                                {
+                                    "proposalType": proposal.proposal_type,
+                                    "normalizedContent": proposal.normalized_content,
+                                    "assistantTurnId": proposal.assistant_turn_id,
+                                    "trustedEvidenceIds": list(
+                                        proposal.trusted_evidence_ids
+                                    ),
+                                    "expiresAt": proposal.expires_at,
+                                }
+                            ]
+                            if proposal is not None
+                            else []
+                        ),
                     ],
                     ensure_ascii=False,
                     separators=(",", ":"),

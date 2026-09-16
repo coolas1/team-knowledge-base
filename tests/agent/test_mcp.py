@@ -197,6 +197,13 @@ async def test_conversation_delivery_acknowledges_committed_content(
         require_durable_acceptance=True,
         confirmed_by_turn_id="turn-1",
         derived_from_evidence_ids=["doc:2", "doc:1", "doc:2"],
+        confirmed_proposal={
+            "proposal_type": "decision",
+            "normalized_content": "采用有依据的方案",
+            "assistant_turn_id": "turn-0",
+            "trusted_evidence_ids": ["doc:1", "doc:2"],
+            "expires_at": "2099-01-01T00:00:00.000Z",
+        },
     )
     assert result["durable_acceptance"] is True
     assert (
@@ -211,12 +218,24 @@ async def test_conversation_delivery_acknowledges_committed_content(
         result["provenance_hash"]
         == hashlib.sha256(
             json.dumps(
-                ["turn-1", ["doc:1", "doc:2"]],
+                [
+                    "turn-1",
+                    ["doc:1", "doc:2"],
+                    {
+                        "proposalType": "decision",
+                        "normalizedContent": "采用有依据的方案",
+                        "assistantTurnId": "turn-0",
+                        "trustedEvidenceIds": ["doc:1", "doc:2"],
+                        "expiresAt": "2099-01-01T00:00:00.000Z",
+                    },
+                ],
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode()
         ).hexdigest()
     )
+    retained_turn = service.calls[-1][1]
+    assert retained_turn.confirmed_proposal.normalized_content == "采用有依据的方案"
     service.fail = True
     with pytest.raises(RuntimeError, match="enqueue failed"):
         await mcp_mod.enqueue_conversation_turn(

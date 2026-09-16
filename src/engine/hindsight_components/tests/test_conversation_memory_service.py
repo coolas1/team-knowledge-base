@@ -14,6 +14,7 @@ from src.engine.hindsight_components.types import (
 from src.engine.interface import (
     ConversationForgetRequest,
     ConversationMemoryRecallRequest,
+    ConversationProposal,
     ConversationTurn,
 )
 
@@ -235,6 +236,67 @@ async def test_selective_retention_marks_unconfirmed_preference_as_user_stated()
         "doc:1",
         "doc:2",
     )
+
+
+async def test_confirmation_retains_structured_pending_proposal_as_decision():
+    queue = FakeQueue()
+    service = ConversationMemoryService(
+        queue,
+        FakeRecall(None),
+        FakeRepository(),
+        selective_retention_enabled=True,
+    )
+    proposal = ConversationProposal(
+        proposal_type="decision",
+        normalized_content="后续查询排除第一条结果",
+        assistant_turn_id="assistant-turn-1",
+        trusted_evidence_ids=("doc:2", "doc:1"),
+        expires_at="2099-01-01T00:00:00Z",
+    )
+
+    result = await service.enqueue_conversation_turn(
+        ConversationTurn(
+            session_id="session-1",
+            turn_id="turn-2",
+            user_text="同意",
+            assistant_text="已记录",
+            confirmed_by_turn_id="turn-2",
+            derived_from_evidence_ids=("doc:1", "doc:2"),
+            confirmed_proposal=proposal,
+        )
+    )
+
+    assert result.status == "pending"
+    assert queue.enqueued["content"] == "[user]\n后续查询排除第一条结果"
+    context = queue.enqueued["source_context"]
+    assert context["retained_types"] == ("decision",)
+    assert context["authority"] == "user_confirmed"
+    assert context["confirmed_by_turn_id"] == "turn-2"
+    assert context["derived_from_evidence_ids"] == ("doc:1", "doc:2")
+    assert context["confirmed_proposal"]["assistant_turn_id"] == "assistant-turn-1"
+
+
+@pytest.mark.parametrize("text", ["同意", "不同意"])
+async def test_confirmation_words_without_trusted_pending_proposal_are_not_retained(text):
+    queue = FakeQueue()
+    service = ConversationMemoryService(
+        queue,
+        FakeRecall(None),
+        FakeRepository(),
+        selective_retention_enabled=True,
+    )
+
+    result = await service.enqueue_conversation_turn(
+        ConversationTurn(
+            session_id="session-1",
+            turn_id="turn-2",
+            user_text=text,
+            assistant_text="收到",
+        )
+    )
+
+    assert result.status == "skipped_by_policy"
+    assert queue.enqueued is None
 
 
 @pytest.mark.parametrize(

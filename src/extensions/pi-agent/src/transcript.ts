@@ -47,6 +47,15 @@ export interface AssistantCompletedEvent {
   text: string;
   timestamp: string;
   delivery?: DeliveryIntent;
+  pendingProposal?: PendingProposal;
+}
+
+export interface PendingProposal {
+  proposalType: "decision" | "preference" | "commitment";
+  normalizedContent: string;
+  assistantTurnId: string;
+  trustedEvidenceIds: string[];
+  expiresAt: string;
 }
 
 export interface DeliveryIntent {
@@ -56,11 +65,13 @@ export interface DeliveryIntent {
   provenanceHash?: string;
   confirmedByTurnId?: string;
   derivedFromEvidenceIds?: string[];
+  confirmedProposal?: PendingProposal;
 }
 
 export interface RetentionProvenance {
   confirmedByTurnId?: string;
   derivedFromEvidenceIds?: Iterable<string>;
+  confirmedProposal?: PendingProposal;
 }
 
 export interface DeliveryResultEvent {
@@ -85,12 +96,17 @@ export function completedTurnDelivery(
     scopeKey,
     contentHash: createHash("sha256").update(JSON.stringify([userText, assistantText])).digest("hex"),
     provenanceHash: createHash("sha256")
-      .update(JSON.stringify([provenance.confirmedByTurnId ?? null, evidenceIds]))
+      .update(JSON.stringify(provenance.confirmedProposal
+        ? [provenance.confirmedByTurnId ?? null, evidenceIds, provenance.confirmedProposal]
+        : [provenance.confirmedByTurnId ?? null, evidenceIds]))
       .digest("hex"),
     ...(provenance.confirmedByTurnId
       ? { confirmedByTurnId: provenance.confirmedByTurnId }
       : {}),
     derivedFromEvidenceIds: evidenceIds,
+    ...(provenance.confirmedProposal
+      ? { confirmedProposal: provenance.confirmedProposal }
+      : {}),
   };
 }
 
@@ -129,6 +145,7 @@ export interface TranscriptTurn {
   timestamp: string;
   assistantText?: string;
   delivery?: DeliveryIntent;
+  pendingProposal?: PendingProposal;
   deliveryResult?: DeliveryResultEvent;
 }
 
@@ -216,6 +233,7 @@ export function foldTranscript(parsed: ParsedJournal): TranscriptSnapshot {
         turn.status = "completed";
         turn.assistantText = event.text;
         turn.delivery = event.delivery;
+        turn.pendingProposal = event.pendingProposal;
         if (event.text.trim() && !messageIds.has(event.messageId)) {
           messages.push({
             id: event.messageId,
