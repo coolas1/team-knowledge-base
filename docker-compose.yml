@@ -173,6 +173,8 @@ services:
       # Behavior knobs (threshold/delta/mode/...) come from config/app.yaml
       # and can be overridden here via ARCHIVE_* variables.
       ARCHIVE_WORKSPACE_DIR: ${ARCHIVE_WORKSPACE_DIR:-/app/workspace}
+      # 归档总开关:未设置即回落 config/app.yaml 的 archive.enabled(默认关)。
+      ARCHIVE_ENABLED:
       ARCHIVE_THRESHOLD:
       ARCHIVE_DELTA:
       ARCHIVE_REVIEW_ALL:
