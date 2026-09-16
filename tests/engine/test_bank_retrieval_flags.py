@@ -1,6 +1,5 @@
 from types import SimpleNamespace
 
-from config.settings import settings
 from src.engine.hindsight_components import file_chunk_recall
 from src.engine.hindsight_components.types import RecallFilter
 from src.engine.scope import MemoryScope
@@ -32,6 +31,8 @@ class _Session:
 
 
 async def test_hierarchy_is_enabled_per_bank_after_migration(monkeypatch) -> None:
+    from config.settings import settings
+
     session = _Session(
         {
             "bank-a": {"hierarchical_retrieval_enabled": True},
