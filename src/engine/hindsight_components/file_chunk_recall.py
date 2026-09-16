@@ -161,16 +161,34 @@ async def _search_hierarchical_chunks(sessions, scope, embedding, limit, filters
         passage_score = (1 - Chunk.embedding.cosine_distance(embedding)).label(
             "passage_score"
         )
+        passage_rank = func.row_number().over(
+            partition_by=Chunk.doc_id,
+            order_by=(passage_score.desc(), Chunk.id),
+        ).label("passage_rank")
+        ranked_passages = (
+            select(
+                Chunk.id.label("chunk_id"),
+                passage_score,
+                passage_rank,
+            )
+            .join(Document, Document.id == Chunk.doc_id)
+            .where(
+                *_conditions(scope, filters),
+                Chunk.doc_id.in_([row.doc_id for row, _, _ in parents]),
+                Chunk.embedding.is_not(None),
+            )
+            .subquery("ranked_passages")
+        )
         passage_rows = list(
             await session.execute(
-                select(Chunk, Document, passage_score)
+                select(Chunk, Document, ranked_passages.c.passage_score)
+                .join(ranked_passages, ranked_passages.c.chunk_id == Chunk.id)
                 .join(Document, Document.id == Chunk.doc_id)
                 .where(
-                    *_conditions(scope, filters),
-                    Chunk.doc_id.in_([row.doc_id for row, _, _ in parents]),
-                    Chunk.embedding.is_not(None),
+                    ranked_passages.c.passage_rank
+                    <= settings.hindsight_max_passages_per_document
                 )
-                .order_by(passage_score.desc(), Chunk.id)
+                .order_by(ranked_passages.c.passage_score.desc(), Chunk.id)
                 .limit(parent_limit * settings.hindsight_max_passages_per_document)
             )
         )
@@ -314,16 +332,35 @@ async def search_file_keywords(
         for token in tokens
     )
     async with sessions() as session:
+        lexical_rank = func.row_number().over(
+            partition_by=Chunk.doc_id,
+            order_by=(overlap.desc(), Chunk.id),
+        ).label("lexical_rank")
+        ranked_lexical = (
+            select(
+                Chunk.id.label("chunk_id"),
+                overlap.label("lexical_overlap"),
+                lexical_rank,
+            )
+            .join(Document, Document.id == Chunk.doc_id)
+            .where(*_conditions(scope, filters), overlap > 0)
+            .subquery("ranked_lexical")
+        )
+        from config.settings import settings
+
         rows = list(
             await session.execute(
                 select(Chunk, Document)
+                .join(ranked_lexical, ranked_lexical.c.chunk_id == Chunk.id)
                 .join(Document, Document.id == Chunk.doc_id)
-                .where(*_conditions(scope, filters), overlap > 0)
-                .order_by(overlap.desc(), Chunk.id)
+                .where(
+                    ranked_lexical.c.lexical_rank
+                    <= settings.hindsight_max_passages_per_document
+                )
+                .order_by(ranked_lexical.c.lexical_overlap.desc(), Chunk.id)
                 .limit(candidate_limit)
             )
         )
-    from config.settings import settings
 
     fields = {
         "title": [d.title or "" for _, d in rows],
