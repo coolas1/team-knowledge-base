@@ -85,6 +85,10 @@ async def retry_operation(
     if operation.kind == "document" and operation.document_id:
         try:
             await kb.reingest(operation.document_id)
+            # A document retry must also revive its cancelled/failed downstream
+            # consolidation and mental-model jobs.  Reingest alone may reuse all
+            # unchanged facts and therefore enqueue no new consolidation event.
+            await service.retry_memory_operation(operation_id)
         except ValueError as error:
             raise HTTPException(400, "document is not retryable") from error
         except Exception as error:

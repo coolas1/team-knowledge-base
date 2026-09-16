@@ -91,7 +91,28 @@ def validate_actions(
     canonical_scope = tuple(sorted(set(write_scope)))
     if canonical_scope not in (scope.observation_scopes or ((),)):
         raise ValueError("unauthorized consolidation write scope")
-    plan = ConsolidationPlan.model_validate(payload)
+    # Models occasionally echo the read-only ``version``/``state`` fields from
+    # the observation context into an action.  Those fields grant no authority:
+    # publication always uses the server-owned read-set version and state.  Drop
+    # only these known echoes while retaining ``extra=forbid`` for every other
+    # unexpected field so malformed or injected plans still fail closed.
+    normalized_payload = payload
+    raw_actions = payload.get("actions") if isinstance(payload, dict) else None
+    if isinstance(raw_actions, list):
+        normalized_payload = {
+            **payload,
+            "actions": [
+                {
+                    key: value
+                    for key, value in raw_action.items()
+                    if key not in {"version", "state"}
+                }
+                if isinstance(raw_action, dict)
+                else raw_action
+                for raw_action in raw_actions
+            ],
+        }
+    plan = ConsolidationPlan.model_validate(normalized_payload)
     if max_actions is not None and len(plan.actions) > max_actions:
         raise ValueError("consolidation plan exceeds the action limit")
     merged: dict[tuple[str, str], ConsolidationAction] = {}

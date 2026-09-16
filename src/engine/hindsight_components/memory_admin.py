@@ -300,16 +300,30 @@ class PostgresMemoryAdminRepository:
                 .where(
                     HindsightDocumentState.operation_id == identity,
                     self._document_scope(),
-                    HindsightDocumentState.status.in_(
-                        ("failed", "degraded", "pending", "processing")
-                    ),
                 )
                 .with_for_update()
             )
             if state is not None:
-                state.status = "pending" if retry else "failed"
-                state.error_msg = None if retry else "cancelled_by_admin"
-                changed += 1
+                state_changed = False
+                if state.status in ("failed", "degraded", "pending", "processing"):
+                    state.status = "pending" if retry else "failed"
+                    state.error_msg = None if retry else "cancelled_by_admin"
+                    state_changed = True
+                stages = dict(state.stage_results or {})
+                if stages.get("consolidate") in {
+                    "queued",
+                    "pending",
+                    "processing",
+                    "failed",
+                    "cancelled",
+                }:
+                    state.stage_results = {
+                        **stages,
+                        "consolidate": "queued" if retry else "cancelled",
+                    }
+                    state_changed = True
+                if state_changed:
+                    changed += 1
             consolidation_status = (
                 or_(
                     ConsolidationJob.status.in_(

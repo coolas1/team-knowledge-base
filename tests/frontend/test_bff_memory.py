@@ -86,7 +86,7 @@ async def test_document_operation_retry_schedules_document_reingest():
 
     assert result == {"changed": 1}
     assert kb.reingested == ["document-id"]
-    assert service.retried == []
+    assert service.retried == ["operation"]
 
 
 @pytest.mark.asyncio
