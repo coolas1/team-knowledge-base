@@ -184,6 +184,20 @@ class ConversationRetentionWorker:
                 or critical_stage_incomplete
             ):
                 raise RuntimeError("retention_stage_incomplete")
+            if any(value == "partial" for value in stage_results.values()):
+                # Partial extraction kept every salvageable fact and its
+                # outcome is deterministic, so the job completes here
+                # instead of re-paying extraction on the retry ladder.
+                logger.info(
+                    "Conversation retention %s completed with partial "
+                    "extraction stages %s",
+                    job.document_id,
+                    [
+                        stage
+                        for stage, value in stage_results.items()
+                        if value == "partial"
+                    ],
+                )
         except asyncio.CancelledError:
             raise
         except RetentionLeaseLost:

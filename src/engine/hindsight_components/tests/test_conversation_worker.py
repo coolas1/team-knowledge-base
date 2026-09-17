@@ -99,6 +99,28 @@ async def test_incomplete_extraction_is_retried_instead_of_completed(status):
     assert queue.statuses["document-1"] == "pending"
 
 
+async def test_partial_extraction_completes_without_retry_ladder() -> None:
+    class PartialService(FakeService):
+        async def retain(self, retain_input):
+            # One chunk kept its valid facts but had a schema-invalid
+            # sibling: deterministic, so the job must complete on the
+            # first attempt instead of burning the retry ladder.
+            return SimpleNamespace(
+                status="partial",
+                stage_results={"extract": "partial", "chunk:0": "partial"},
+            )
+
+    queue = FakeQueue([_job()])
+    result = await ConversationRetentionWorker(
+        queue, PartialService(), FakeCleaner()
+    ).run_once()
+
+    assert result.completed == 1
+    assert result.retried == 0
+    assert result.failed == 0
+    assert queue.statuses["document-1"] == "completed"
+
+
 async def test_entity_resolution_degradation_does_not_retry_committed_memory() -> None:
     class EntityDegradedService(FakeService):
         async def retain(self, retain_input):

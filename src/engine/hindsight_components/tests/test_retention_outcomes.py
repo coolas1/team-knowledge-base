@@ -74,6 +74,52 @@ def test_incomplete_schema_is_not_silently_classified_as_world(fact):
         RetainEngine._parse_facts({"facts": [fact]})
 
 
+def test_tolerant_parse_remaps_caused_by_to_surviving_positions() -> None:
+    payload = {
+        "facts": [
+            {"text": "invalid fact", "type": "nonsense"},
+            {"text": "Alice visited Oslo in May.", "type": "world"},
+            {
+                "text": "She flew there for a conference.",
+                "type": "world",
+                "caused_by": [1],
+            },
+        ]
+    }
+
+    facts, rejected = RetainEngine._parse_facts_tolerant(payload, None)
+
+    assert len(rejected) == 1
+    assert [fact.text for fact in facts] == [
+        "Alice visited Oslo in May.",
+        "She flew there for a conference.",
+    ]
+    # The link pointed at original index 1 (the visit); after the sibling
+    # rejection it must still point at the visit, now survivor position 0.
+    assert facts[1].caused_by == [0]
+
+
+def test_tolerant_parse_drops_links_that_pointed_at_rejected_facts() -> None:
+    payload = {
+        "facts": [
+            {"text": "invalid fact", "type": "nonsense"},
+            {"text": "Alice visited Oslo in May.", "type": "world"},
+            {
+                "text": "She flew there for a conference.",
+                "type": "world",
+                "caused_by": [0],
+            },
+        ]
+    }
+
+    facts, rejected = RetainEngine._parse_facts_tolerant(payload, None)
+
+    assert len(rejected) == 1
+    # The link pointed at the rejected sibling: dropped, never re-pointed
+    # at the surviving fact that took over its position.
+    assert facts[1].caused_by == []
+
+
 async def test_embedding_failure_is_failed_and_does_not_replace_existing_memories():
     class BrokenEmbedding(FakeProviders):
         async def embed(self, *args, **kwargs):
@@ -101,8 +147,8 @@ async def test_embedding_failure_is_failed_and_does_not_replace_existing_memorie
         ({"facts": []}, "empty"),
         (TimeoutError("provider unavailable"), "degraded"),
         ({"unexpected": []}, "degraded"),
-        ({"facts": [{"text": "fact", "type": "invalid"}]}, "degraded"),
-        ({"facts": [{"text": "fact", "occurred_start": "bad-date"}]}, "degraded"),
+        ({"facts": [{"text": "fact", "type": "invalid"}]}, "partial"),
+        ({"facts": [{"text": "fact", "occurred_start": "bad-date"}]}, "partial"),
     ],
 )
 async def test_empty_and_failed_extractions_preserve_source_without_fabricating_facts(
@@ -152,7 +198,7 @@ async def test_invalid_fact_degrades_chunk_but_preserves_valid_sibling(caplog):
             )
         )
 
-    assert result.status == "degraded"
+    assert result.status == "partial"
     assert result.facts == 1
     assert result.error_code == "invalid_fact_type"
     assert repository.plan.error_code == "invalid_fact_type"

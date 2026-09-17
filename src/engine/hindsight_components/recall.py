@@ -24,6 +24,22 @@ from .utils import cosine, estimate_tokens, lexical_tokens, parse_datetime
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
+# Skip categories that describe by-design omissions — the fallback arm is
+# unneeded because primary evidence exists, a phase is not required for this
+# query, or a capability is not implemented. Anything not listed here keeps
+# flagging the search as degraded so unknown skip reasons stay visible.
+_BENIGN_SKIP_CATEGORIES = frozenset(
+    {
+        "fast_mode",
+        "not_requested",
+        "not_supported",
+        "not_required",
+        "primary_evidence_available",
+        "adaptive_simple_query",
+        "deterministic_evidence_sufficient",
+    }
+)
+
 
 @dataclass(slots=True)
 class _PhaseResult:
@@ -1359,7 +1375,7 @@ class RecallEngine:
             }
             or (
                 value["outcome"] == PhaseStatus.SKIPPED.value
-                and value.get("category") not in {"fast_mode", "not_requested"}
+                and value.get("category") not in _BENIGN_SKIP_CATEGORIES
             )
         ]
 

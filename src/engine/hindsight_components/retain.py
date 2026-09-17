@@ -238,6 +238,8 @@ class RetainEngine:
         status = (
             "degraded"
             if "degraded" in chunk_outcomes
+            else "partial"
+            if "partial" in chunk_outcomes
             else "success"
             if facts
             else "empty"
@@ -323,7 +325,7 @@ class RetainEngine:
             status=status,
             stage_results=plan.stage_results,
             error_code=plan.error_code
-            or ("extraction_incomplete" if status == "degraded" else None),
+            or ("extraction_incomplete" if status in {"degraded", "partial"} else None),
             revision=plan.revision,
         )
         return await self._commit(plan, result, retain_input, request_hash)
@@ -362,10 +364,12 @@ class RetainEngine:
                 else retain_input
             )
             try:
+                # Bump this version whenever the extraction prompt or fact
+                # schema changes, so stale cached payloads are invalidated.
                 key = sha256(
                     json.dumps(
                         [
-                            "tkb-extraction-v4",
+                            "tkb-extraction-v5",
                             provider_identity,
                             extraction_context(chunk_input),
                             chunk_input.source_type,
@@ -424,7 +428,11 @@ class RetainEngine:
                         error_code,
                         len(rejected),
                     )
-                    return facts, "degraded", None, None, error_code
+                    # Parse-level rejections are deterministic for this
+                    # payload, unlike provider-level failures: report
+                    # "partial" so consumers can complete instead of
+                    # retrying an outcome a retry cannot change.
+                    return facts, "partial", None, None, error_code
                 return facts, "success" if facts else "empty", key, payload, None
             except Exception as error:
                 # Keep the source chunk, but never manufacture an extracted fact.
@@ -456,13 +464,30 @@ class RetainEngine:
         """Keep valid facts while reporting schema-invalid siblings safely."""
         if not isinstance(payload, dict) or not isinstance(payload.get("facts"), list):
             raise ValueError("invalid extraction payload")
-        facts: list[ExtractedFact] = []
+        kept: list[tuple[int, ExtractedFact]] = []
         rejected: list[str] = []
-        for raw in payload["facts"]:
+        for original_index, raw in enumerate(payload["facts"]):
             try:
-                facts.extend(cls._parse_facts({"facts": [raw]}, context))
+                parsed = cls._parse_facts({"facts": [raw]}, context)
             except ValueError as error:
                 rejected.append(_safe_extraction_error(error))
+                continue
+            kept.extend((original_index, fact) for fact in parsed)
+        # caused_by references original payload indexes; remap them to
+        # surviving positions so rejecting a sibling cannot re-point a
+        # causal link at the wrong fact or drop it as a false self-link.
+        survivor_positions = {
+            original_index: position
+            for position, (original_index, _fact) in enumerate(kept)
+        }
+        facts: list[ExtractedFact] = []
+        for _original_index, fact in kept:
+            fact.caused_by = [
+                survivor_positions[target]
+                for target in fact.caused_by
+                if target in survivor_positions
+            ]
+            facts.append(fact)
         return facts, rejected
 
     @staticmethod
