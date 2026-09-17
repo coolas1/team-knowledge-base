@@ -24,9 +24,9 @@
 
 ## 2. Layer resolution
 
-- [x] 2.1 Make `load_config` resolve three layers in order — committed
-      `config/app.yaml`, then `config/app.runtime.yaml` if present, then
-      environment overrides. `AppConfig`'s schema is unchanged.
+- [x] 2.1 Make `load_config` resolve three layers, highest wins per key —
+      committed `config/app.yaml`, then environment overrides, then
+      `config/app.runtime.yaml` if present. `AppConfig`'s schema is unchanged.
       Verify: `uv run pytest tests/config/test_layers.py` passes, including
       "no runtime file resolves identically to today".
 
