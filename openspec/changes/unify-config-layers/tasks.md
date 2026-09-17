@@ -104,6 +104,6 @@
       revision and on this one, and diff the serialized effective config —
       no difference.
 
-- [ ] 6.4 Open the PR into `develop` with the spec delta and code, described
+- [x] 6.4 Open the PR into `develop` with the spec delta and code, described
       with `.github/PULL_REQUEST_TEMPLATE.md`.
       Verify: `gh pr view --json baseRefName,url` reports `develop`.
