@@ -2060,11 +2060,31 @@ class PostgresMemoryRepository:
                 keyword_candidate_count=len(raw_rows),
                 keyword_candidate_limit=self._keyword_candidate_limit,
             )
-        return sorted(
-            [*candidates.values(), *file_candidates],
-            key=lambda candidate: candidate.keyword_score or 0,
-            reverse=True,
-        )[:limit]
+        return self._merge_keyword_pools(
+            list(candidates.values()), file_candidates, limit
+        )
+
+    @staticmethod
+    def _merge_keyword_pools(
+        memories: list[RecallCandidate],
+        files: list[RecallCandidate],
+        limit: int,
+    ) -> list[RecallCandidate]:
+        """Rank each source pool independently, then concatenate.
+
+        Memory rows are scored by lexical overlap/BM25 counts while file rows
+        carry fielded weights (a title hit is worth several body hits), so the
+        two live on different scales. Truncating them together lets the
+        higher-scoring pool evict the other entirely before pool-local RRF
+        ever sees it; each pool keeps its own top ``limit`` instead.
+        """
+
+        def top(items: list[RecallCandidate]) -> list[RecallCandidate]:
+            return sorted(
+                items, key=lambda item: item.keyword_score or 0, reverse=True
+            )[:limit]
+
+        return [*top(memories), *top(files)]
 
     async def graph_search(
         self,
