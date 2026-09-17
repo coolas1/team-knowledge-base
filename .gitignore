@@ -15,6 +15,9 @@ wheels/
 # Environment variables
 .env
 
+# Runtime config layer (written by PUT /api/config; per-container, disposable)
+config/app.runtime.yaml
+
 # Uploaded files
 uploads/
 artifacts/
