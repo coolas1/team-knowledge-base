@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import pytest
@@ -70,6 +71,22 @@ def _uploads_in_tmp_dir(request, _uploads_tmp_root, monkeypatch):
 
     monkeypatch.setattr(backend, "UPLOAD_DIR", _uploads_tmp_root)
     monkeypatch.setattr(settings, "uploads_dir", str(_uploads_tmp_root))
+
+
+#: 这一路径故意不存在:测试进程绝不读仓库根的 .env。
+_NO_DOTENV = Path("/nonexistent/tkb-tests-no-dotenv")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_dotenv(monkeypatch):
+    """把环境层的 `.env` 指到不存在的路径。
+
+    本机开发克隆里有 `.env`,CI 的克隆里没有;若默认读它,同一个断言会随
+    开发环境变化。要验证 `.env` 这一层的用例显式传 `dotenv_path`。
+    """
+    from config import schema
+
+    monkeypatch.setattr(schema, "DOTENV_PATH", _NO_DOTENV)
 
 
 @pytest.fixture

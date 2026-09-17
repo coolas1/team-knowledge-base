@@ -15,6 +15,82 @@
 
 ---
 
+## 配置分层与覆盖
+
+### 三层，逐键高者胜
+
+有效配置由三层解析而成：
+
+| 层 | 位置 | 谁来写 |
+|---|---|---|
+| 已提交默认值 | `config/app.yaml` | 维护者,随代码提交;运行中的应用**绝不**写它 |
+| 环境覆盖 | `.env` 与进程环境变量(派生名 `TKB_*`) | 每个部署自己 |
+| 运行时改动 | `config/app.runtime.yaml` | `PUT /api/config` |
+
+环境层读两处:进程环境变量与工作目录下的 `.env`,两者写派生名都生效,
+**进程环境变量优先**(与 `pydantic-settings` 的 env > .env 一致)。`.env` 缺席
+时这一层就只是进程环境——与引入分层之前完全一致。
+
+层缺席即不参与：没有运行时文件、也没设环境变量的部署,解析结果恰好等于已提交的
+默认值。`GET /api/config` 返回有效配置,并逐键给出 `sources`(`default`、
+`app.yaml`、`env`、`runtime`),所以"我改了但没生效"能看出是哪一层压住了它。
+
+### 派生覆盖名
+
+`config/app.yaml` 里**每一个**叶子键都可以用环境变量覆盖,名字由路径派生：
+
+```
+TKB_ + 点分路径的大写、下划线连接
+```
+
+例：`engine.ingest.chunk_concurrency` → `TKB_ENGINE_INGEST_CHUNK_CONCURRENCY`;
+`engine.memory.consolidation_batch_size` → `TKB_ENGINE_MEMORY_CONSOLIDATION_BATCH_SIZE`。
+
+名字只由已存在的 schema 路径**生成**、再去环境里查存在与否,永不反解析回路径,
+因此键名里的下划线(`chunk_concurrency`)与路径分隔符不会混淆。新增配置键自动
+获得覆盖名,不需要额外代码;改某个部署的行为不再需要改已提交文件或重建镜像。
+类型转换交给 schema 的 pydantic 类型,值不合法时的报错与写在文件里一致。
+
+### 别名：`ARCHIVE_*`
+
+`ARCHIVE_*` 是唯一早于派生规则、且命名对应 `config/app.yaml` 键的前缀族。两个
+在线部署都在用它,所以保留为**有文档的别名**而不是改名。同一旋钮同时设置时
+优先级为：
+
+```
+ARCHIVE_*  >  TKB_ARCHIVE_*  >  config/app.yaml
+```
+
+`ARCHIVE_WORKSPACE_DIR` 是部署路径,`app.yaml` 里没有对应键,只来自环境,不受
+别名规则影响。`HINDSIGHT_*` 与 `ENGINE_TOOLS_*` **不是**别名:它们是
+`config/settings.py` 的原生字段,今天就从环境读取,与 `app.yaml` 的重名项如何
+合并见下方"暂缓项"。
+
+### `.env.example` 只列部署要选的事实
+
+模板只放凭据、端点、宿主端口、路径、功能开关;行为默认值留在 `config/app.yaml`
+(需要按部署改时用上面的 `TKB_*` 名,不必回填模板)。两个测试守着这条线:模板里
+每个键都必须有人读,每个部署必需项都必须列在模板里。
+
+### 暂缓项(本次不做)
+
+- **旋钮合并**：把 `HINDSIGHT_*` / `ENGINE_TOOLS_*` 与 `config/app.yaml` 里
+  描述同一件事的段落(如 `hindsight_graph_worker_enabled` 对 `memory.graph_worker`)
+  收敛到一处。这是后续独立改动,本机制先跑通。
+- **pi-agent sidecar**：`src/extensions/pi-agent` 的约 50 个 `PI_AGENT_*` /
+  `TKB_*` 键采用同一套约定,同样另开一个改动。
+- **运行时覆盖的持久化**：`config/` 被烤进镜像,`/app/config` 不是 compose 挂载,
+  所以运行时改动只在容器重建之前有效。这是既有缺陷(`PUT /api/config` 一直如此),
+  分层已按最终形态命名与排序,日后加挂载只需改文件位置,不动优先级语义。
+- **让部署的 `.env` 直达容器**：compose 的 `environment:` 是显式白名单,
+  `--env-file deploy.env` 只喂 `${VAR}` 插值,不进容器环境。因此通用 `TKB_*`
+  覆盖在宿主运行(CLI / MCP / `uv run`)与容器内都可用,但在 compose 部署里
+  还需要一步:把部署侧的 `deploy.env` 改名为 `.env` 并为服务加 `env_file: .env`。
+  这要迁移宿主机上的 `.deploy/*/deploy.env`(见 cicd/README.md)并重新部署,
+  单独一个改动跟进。
+
+---
+
 ## 数据库与存储
 
 ### Postgres(pgvector,由 docker compose 管理)

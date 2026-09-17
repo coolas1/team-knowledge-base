@@ -1,12 +1,29 @@
-"""App config: validates config/app.yaml and selects implementations."""
+"""App config: validates config/app.yaml and selects implementations.
+
+有效配置由三层解析而成,逐键高者胜:
+
+    config/app.yaml            已提交的默认值,运行中的应用绝不写它
+            ↓ 被覆盖
+    .env (环境变量)            每个部署自己的事实
+            ↓ 被覆盖
+    config/app.runtime.yaml    运行时改动(PUT /api/config)
+
+层缺席即不参与贡献:没有运行时文件、也没设环境变量的部署,解析结果
+恰好等于已提交的默认值。覆盖名由 config/overrides.py 从 schema 派生。
+"""
 
 from __future__ import annotations
 
+import copy
+import os
 from pathlib import Path
 
 import yaml
+from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from src.engine.scope_policy import MemoryFeatures
+
+from config.overrides import as_leaf_map, derived_names, env_overrides
 
 
 class MemoryCfg(BaseModel):
@@ -119,12 +136,109 @@ class AppConfig(BaseModel):
     archive: ArchiveCfg = Field(default_factory=ArchiveCfg)
 
 
-def load_config(path: Path | str | None = None) -> AppConfig:
-    """Load AppConfig from a YAML file; missing file yields defaults."""
-    p = Path(path) if path is not None else Path("config/app.yaml")
-    data: dict = {}
-    if p.exists():
-        loaded = yaml.safe_load(p.read_text(encoding="utf-8"))
-        if loaded:
-            data = loaded
-    return AppConfig.model_validate(data)
+#: 运行时层文件名;与被它覆盖的已提交文件同目录(见 runtime_config_path)。
+RUNTIME_CONFIG_NAME = "app.runtime.yaml"
+
+#: 环境层的文件层。`uv run` 的宿主运行与部署共用同一份 `.env`;真实环境变量
+#: 优先级高于它,与 pydantic-settings 的 env > .env 一致。
+DOTENV_PATH = Path(".env")
+
+#: GET /api/config 为每个键报告的来源层。
+SOURCE_DEFAULT = "default"  # 只有 schema 默认值,两个文件都没写
+SOURCE_FILE = "app.yaml"  # 显式写在已提交的 config/app.yaml 里
+SOURCE_ENV = "env"  # 派生环境名(TKB_*)在当前环境里
+SOURCE_RUNTIME = "runtime"  # 写在 config/app.runtime.yaml 里
+
+
+def runtime_config_path(app_path: Path) -> Path:
+    """运行时层路径:与被它覆盖的已提交文件同目录。"""
+    return app_path.with_name(RUNTIME_CONFIG_NAME)
+
+
+def _read_yaml(path: Path) -> dict:
+    """读 YAML 映射;文件缺席或不是映射时给出空层。"""
+    if not path.exists():
+        return {}
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _set_leaf(data: dict, path: str, value: object) -> None:
+    """把点分路径的值写进嵌套字典,沿途补齐缺失的层。"""
+    parts = path.split(".")
+    cursor = data
+    for part in parts[:-1]:
+        nxt = cursor.get(part)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cursor[part] = nxt
+        cursor = nxt
+    cursor[parts[-1]] = value
+
+
+def _env_layer(dotenv_path: Path | None = None) -> dict[str, str]:
+    """环境层里已表态的叶子:`.env` 的值被真实环境变量覆盖。
+
+    `.env` 缺席时这一层就只是进程环境——与没有这一层之前完全一致。
+    """
+    merged: dict[str, str] = {}
+    path = DOTENV_PATH if dotenv_path is None else Path(dotenv_path)
+    if path.exists():
+        merged.update(
+            {
+                name: value
+                for name, value in dotenv_values(path).items()
+                if value is not None
+            }
+        )
+    merged.update(os.environ)
+    return env_overrides(merged)
+
+
+def load_config_with_sources(
+    path: Path | str | None = None,
+    dotenv_path: Path | str | None = None,
+) -> tuple[AppConfig, dict[str, str]]:
+    """解析三层,并给出每个叶子的来源层。
+
+    环境值以原始字符串写入,类型转换交给 schema 的 pydantic 类型——转换失败
+    时报错与从文件读入同一形状,并指出键名。
+    """
+    app_path = Path(path) if path is not None else Path("config/app.yaml")
+    committed = _read_yaml(app_path)
+    runtime = _read_yaml(runtime_config_path(app_path))
+    from_env = _env_layer(Path(dotenv_path) if dotenv_path is not None else None)
+
+    effective = copy.deepcopy(committed)
+    for leaf_path, value in from_env.items():  # 环境层高于已提交默认值
+        _set_leaf(effective, leaf_path, value)
+    for leaf_path, value in as_leaf_map(runtime).items():  # 运行时层最高
+        _set_leaf(effective, leaf_path, value)
+
+    cfg = AppConfig.model_validate(effective)
+    return cfg, _sources(committed, runtime, from_env)
+
+
+def _sources(
+    committed: dict, runtime: dict, from_env: dict[str, str]
+) -> dict[str, str]:
+    committed_leaves = as_leaf_map(committed)
+    runtime_leaves = as_leaf_map(runtime)
+    sources: dict[str, str] = {}
+    for leaf_path in derived_names():
+        if leaf_path in runtime_leaves:
+            sources[leaf_path] = SOURCE_RUNTIME
+        elif leaf_path in from_env:
+            sources[leaf_path] = SOURCE_ENV
+        elif leaf_path in committed_leaves:
+            sources[leaf_path] = SOURCE_FILE
+        else:
+            sources[leaf_path] = SOURCE_DEFAULT
+    return sources
+
+
+def load_config(
+    path: Path | str | None = None, dotenv_path: Path | str | None = None
+) -> AppConfig:
+    """有效配置:已提交默认值 + 环境覆盖 + 运行时覆盖。"""
+    return load_config_with_sources(path, dotenv_path)[0]
