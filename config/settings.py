@@ -185,6 +185,10 @@ class InfraSettings(BaseSettings):
     # Retrieval-refinement rollout switches. Disabled states preserve the
     # existing indexed document path and never broaden a query to conversation
     # records. They can be enabled independently during staged acceptance.
+    #
+    # All of them default to off here except knowledge_memory_context, which the
+    # integrated deployment relies on: it stays bounded by
+    # knowledge_memory_context_limit and never contributes document evidence.
     hindsight_mixed_source_search_enabled: bool = False
     hindsight_knowledge_memory_context_enabled: bool = True
     hindsight_knowledge_memory_context_limit: int = Field(default=2, ge=0, le=10)

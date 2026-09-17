@@ -15,6 +15,33 @@ from config.settings import (
 )
 
 
+def test_retrieval_refinement_switches_default(monkeypatch):
+    """检索细化开关的默认值：分阶段验收，逐个开启。
+
+    knowledge_memory_context 是唯一的例外——集成部署依赖它，所以默认开，
+    但始终受 knowledge_memory_context_limit 约束且不进入文档证据。
+    """
+    for name in (
+        "HINDSIGHT_MIXED_SOURCE_SEARCH_ENABLED",
+        "HINDSIGHT_KNOWLEDGE_MEMORY_CONTEXT_ENABLED",
+        "HINDSIGHT_HIERARCHICAL_RETRIEVAL_ENABLED",
+        "HINDSIGHT_HYBRID_SAFETY_LANE_ENABLED",
+        "HINDSIGHT_ADAPTIVE_DEEP_SEARCH_ENABLED",
+        "HINDSIGHT_SELECTIVE_RETENTION_ENABLED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = InfraSettings(_env_file=None)
+
+    assert settings.hindsight_mixed_source_search_enabled is False
+    assert settings.hindsight_hierarchical_retrieval_enabled is False
+    assert settings.hindsight_hybrid_safety_lane_enabled is False
+    assert settings.hindsight_adaptive_deep_search_enabled is False
+    assert settings.hindsight_selective_retention_enabled is False
+    # 故意的例外：集成部署依赖记忆上下文
+    assert settings.hindsight_knowledge_memory_context_enabled is True
+
+
 def test_archive_settings_treat_empty_overrides_as_unset(monkeypatch):
     for name in (
         "ARCHIVE_THRESHOLD",

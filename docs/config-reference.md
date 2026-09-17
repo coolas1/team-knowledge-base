@@ -132,6 +132,29 @@ provider 说明:
 | `HINDSIGHT_KEYWORD_CANDIDATE_LIMIT` | `300` | Python BM25 关键词候选上限 |
 | `HINDSIGHT_KEYWORD_INDEX_ENABLED` | `false` | **仅在词法回填报告 `complete=true` 后启用** |
 
+### 检索细化开关(分阶段验收)
+
+这些开关默认关:关闭态严格保持既有"仅索引文档"路径,绝不放宽到会话记忆。唯一例外是 `HINDSIGHT_KNOWLEDGE_MEMORY_CONTEXT_ENABLED`——集成部署依赖它,默认开,但始终受条数上限约束,且永不进入文档证据。
+
+| 变量 | 默认值(settings) | 说明 |
+|---|---|---|
+| `HINDSIGHT_MIXED_SOURCE_SEARCH_ENABLED` | `false` | 允许单次查询同时检索文档与会话记忆(混合路由) |
+| `HINDSIGHT_KNOWLEDGE_MEMORY_CONTEXT_ENABLED` | `true` | 知识查询附带会话记忆上下文(唯一默认开的开关;受 limit 约束,不参与文档引用) |
+| `HINDSIGHT_KNOWLEDGE_MEMORY_CONTEXT_LIMIT` | `2` | 附带记忆条数上限 |
+| `HINDSIGHT_HIERARCHICAL_RETRIEVAL_ENABLED` | `false` | 文档父记录 → 片段的分层检索 |
+| `HINDSIGHT_HYBRID_SAFETY_LANE_ENABLED` | `false` | 混合检索的安全兜底通道 |
+| `HINDSIGHT_HYBRID_SAFETY_LANE_LIMIT` | `3` | 安全通道条数上限 |
+| `HINDSIGHT_HYBRID_SAFETY_LANE_MIN_SCORE` | `0.8` | 安全通道最低分数 |
+| `HINDSIGHT_ADAPTIVE_DEEP_SEARCH_ENABLED` | `false` | 深检索充分性闸门与自适应阶段裁剪 |
+| `HINDSIGHT_SELECTIVE_RETENTION_ENABLED` | `false` | 选择性留存策略(仅留用户发起的持久事实) |
+| `HINDSIGHT_MIN_PASSAGE_SCORE` | `0.35` | 片段最低相关分 |
+| `HINDSIGHT_MAX_PASSAGES_PER_DOCUMENT` | `3` | 单文档最多选用片段数(多样性上限) |
+| `HINDSIGHT_MAX_MEMORIES_PER_TURN` | `1` | 单轮会话记忆最多选用条数 |
+| `HINDSIGHT_TRACE_CANDIDATE_LIMIT` | `20` | 检索 trace 保留的候选数 |
+| `HINDSIGHT_EVIDENCE_SUFFICIENCY_MIN_MARGIN` | `0.01` | 充分性判定的最小分差 |
+
+字段化词法权重(`HINDSIGHT_LEXICAL_*_WEIGHT`,标题 `3.0`、文件名 `2.5`、概览 `1.8`、标签 `2.0`、正文 `1.0`)决定关键词臂中各字段命中的相对价值——也是分阶段验收期的主要调参旋钮。
+
 ### 召回相关性门槛
 
 公开搜索/应答召回:语义下限在所有模式生效,deep 模式的 rerank 分数门槛叠加其上。低于门槛的结果被丢弃,使无覆盖的查询返回"未找到"而非无关记忆。
