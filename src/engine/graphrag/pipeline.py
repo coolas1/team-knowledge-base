@@ -378,6 +378,16 @@ class Pipeline:
             clear_progress(str(doc_id))
             logger.info(f"文档 {doc_id} Pipeline 完成 ✓")
 
+        except asyncio.CancelledError as error:
+            # CancelledError 是 BaseException，不会进 except Exception：
+            # 不在这里收尾的话，父行会永远停在 pending，对检索不可见。
+            try:
+                await asyncio.shield(
+                    self._mark_failed(doc_id, error, "Pipeline", fence=fence)
+                )
+            except Exception:
+                logger.warning("文档 %s 取消后的失败收尾未完成", doc_id, exc_info=True)
+            raise
         except StaleDocumentGeneration:
             clear_progress(str(doc_id))
             logger.info("文档 %s 的过期 pipeline 结果未发布", doc_id)
@@ -503,7 +513,7 @@ class Pipeline:
     async def _mark_failed(
         self,
         doc_id: UUID,
-        exc: Exception,
+        exc: BaseException,
         stage: str,
         *,
         fence: ProcessingFence | None = None,
@@ -645,6 +655,15 @@ class Pipeline:
 
             logger.info(f"文档 {doc_id} re-index 完成 ✓")
 
+        except asyncio.CancelledError as error:
+            # 同 process_document：取消也必须走失败收尾，否则父行停在 pending。
+            try:
+                await asyncio.shield(
+                    self._mark_failed(doc_id, error, "re-index", fence=fence)
+                )
+            except Exception:
+                logger.warning("文档 %s 取消后的失败收尾未完成", doc_id, exc_info=True)
+            raise
         except StaleDocumentGeneration:
             clear_progress(str(doc_id))
             logger.info("文档 %s 的过期 re-index 结果未发布", doc_id)

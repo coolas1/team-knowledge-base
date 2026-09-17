@@ -338,6 +338,47 @@ async def test_mark_failed_writes_non_empty_error_for_messageless_exception(
             assert "CancelledError" in params["error_msg"]
 
 
+async def test_process_file_cancellation_still_marks_document_failed(
+    monkeypatch, tmp_path
+):
+    """取消也要走失败收尾。
+
+    CancelledError 是 BaseException，不会进 ``except Exception``；不处理
+    就会把文档行和检索父行永远留在 pending，文档对检索不可见。
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from src.engine.graphrag import pipeline as pipeline_mod
+
+    doc_id = uuid4()
+    doc = SimpleNamespace(
+        id=doc_id, content_hash=None, status="pending", bank_id="default-team", tags=[]
+    )
+    session = _PipelineSession({doc_id: doc})
+    monkeypatch.setattr(pipeline_mod, "async_session_factory", lambda: session)
+    monkeypatch.setattr(pipeline_mod, "registry", _ThreadRecordingRegistry())
+    monkeypatch.setattr(pipeline_mod, "embedder", _FakeEmbedder())
+
+    file_path = tmp_path / "t.md"
+    file_path.write_text("# T", encoding="utf-8")
+
+    analyzer = _RecordingAnalyzer()
+    analyzer.summarize_document = analyzer.analyze_overview
+    pipe = Pipeline(_RecordingNeo4j(), analyzer=analyzer)
+
+    async def cancelled_indexed(**_kwargs):
+        raise asyncio.CancelledError()
+
+    pipe._notify_indexed = AsyncMock(side_effect=cancelled_indexed)
+
+    with pytest.raises(asyncio.CancelledError):
+        await pipe.process_file(doc_id, file_path, "t.md", "markdown")
+
+    # 取消被原样抛回调用方，但文档行已经写成 failed（不是停在 processing）
+    assert _doc_statuses(session)[-1] == "failed"
+
+
 class _RecordingNeo4j:
     def __init__(self):
         self.entity_items = None

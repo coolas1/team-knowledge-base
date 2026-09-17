@@ -41,6 +41,14 @@ def stubs(monkeypatch, tmp_path):
     async def fake_init_db():
         made["init_db"] = True
 
+    async def fake_reconcile():
+        made["reconcile"] = True
+        return 0
+
+    monkeypatch.setattr(
+        "src.engine.graphrag.backend.reconcile_interrupted_processing", fake_reconcile
+    )
+
     def fake_build_engine(ecfg):
         made["engine_config"] = ecfg
         kb = FakeKB()
@@ -108,6 +116,24 @@ async def test_startup_memory_off(stubs, tmp_path):
     assert deps.get_query() is None
     assert deps._graph_worker is None
     assert stubs["engine_config"].memory is None
+
+
+@pytest.mark.asyncio
+async def test_startup_reconciles_interrupted_processing(stubs, tmp_path, monkeypatch):
+    """启动时对账一次中断的 pipeline，避免文档对检索永久不可见。"""
+    _write_cfg(tmp_path, memory=False)
+    called = {}
+
+    async def fake_reconcile():
+        called["reconcile"] = True
+        return 0
+
+    monkeypatch.setattr(
+        "src.engine.graphrag.backend.reconcile_interrupted_processing", fake_reconcile
+    )
+    await deps.startup()
+
+    assert called.get("reconcile") is True
 
 
 @pytest.mark.asyncio

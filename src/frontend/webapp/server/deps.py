@@ -44,6 +44,13 @@ async def startup() -> None:
     from src.engine.components.store.postgres import init_db
 
     await init_db()
+
+    # 上一进程被取消/杀掉的 pipeline 会留下 processing 文档与 pending 父行；
+    # 启动时对账一次，避免这些文档对检索永久不可见。
+    from src.engine.graphrag.backend import reconcile_interrupted_processing
+
+    await reconcile_interrupted_processing()
+
     _kb = build_engine(engine_config_from_app(cfg))
 
     if cfg.engine.memory.enabled:

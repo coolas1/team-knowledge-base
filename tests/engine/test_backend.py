@@ -61,6 +61,42 @@ class _UpdateRecordingSession:
         return None
 
 
+async def test_reconcile_interrupted_processing_marks_stranded_rows(monkeypatch):
+    """启动对账把上一进程残留的 processing 文档与 pending 父行标成 failed。"""
+
+    class _Result:
+        rowcount = 2
+
+    class Session:
+        def __init__(self):
+            self.statements = []
+            self.committed = False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            return _Result()
+
+        async def commit(self):
+            self.committed = True
+
+    session = Session()
+    monkeypatch.setattr(backend_mod, "async_session_factory", lambda: session)
+
+    stranded = await backend_mod.reconcile_interrupted_processing()
+
+    assert stranded == 2
+    assert session.committed is True
+    params = [statement.compile().params for statement in session.statements]
+    assert any(value.get("status") == "failed" for value in params)
+    assert any(value.get("generation_state") == "failed" for value in params)
+
+
 class _QueryResult:
     def __init__(self, *, scalar_value=0, items=None):
         self._scalar_value = scalar_value
