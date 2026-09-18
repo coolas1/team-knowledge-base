@@ -19,6 +19,8 @@ from src.engine.hindsight_components.utils import (
     normalize_entity,
 )
 
+from .fakes import candidate
+
 
 def test_bm25_ranks_matching_english_and_chinese_documents() -> None:
     documents = [
@@ -221,6 +223,78 @@ async def test_all_retrieval_arms_filter_source_and_incomplete_conversations() -
     assert all("conversation_memory_sources" in str(item) for item in compiled)
     assert all("metadata_json" in str(item) for item in compiled)
     assert all("conversation" in item.params.values() for item in compiled)
+
+
+async def test_keyword_search_truncates_each_source_pool_separately(
+    monkeypatch,
+) -> None:
+    """文件池字段加权分远高于记忆池 overlap 计数，不能共用一个 ``[:limit]``。
+
+    记忆行按 lexical overlap/BM25 计数打分，文件行按字段加权分（标题命中
+    可值数倍正文），量纲不同。合并后一起排序再截断，文件池会把记忆行整体
+    挤出 keyword 臂，池内 RRF 根本看不到它们。
+    """
+    from src.engine.hindsight_components import file_chunk_recall
+    from src.engine.hindsight_components import repository as repository_mod
+
+    memory_ids = [uuid.uuid4() for _ in range(2)]
+
+    class Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    class Session:
+        def __init__(self):
+            self.calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, _statement, *_args):
+            self.calls += 1
+            if self.calls == 1:
+                return Result([(mid, "alpha alpha alpha") for mid in memory_ids])
+            # 真实数据库只返回 IN (score_by_id) 命中的行
+            return Result(
+                [
+                    (SimpleNamespace(id=mid), SimpleNamespace(id="document"))
+                    for mid in memory_ids
+                ]
+            )
+
+    session = Session()
+    repository = PostgresMemoryRepository(lambda: session)
+
+    # 文件池：字段加权分 100 起步；记忆池：BM25 计数只有个位数
+    files = [candidate(f"f{i}", "file", keyword=100.0 - i) for i in range(5)]
+
+    async def fake_file_keywords(*_args, **_kwargs):
+        return files
+
+    monkeypatch.setattr(
+        file_chunk_recall, "search_file_keywords", fake_file_keywords
+    )
+    monkeypatch.setattr(
+        repository_mod.PostgresMemoryRepository,
+        "_candidate",
+        staticmethod(
+            lambda unit, document, **scores: candidate(
+                f"m{unit.id}", "memory", keyword=scores.get("keyword_score", 0.0)
+            )
+        ),
+    )
+
+    results = await repository.keyword_search("alpha", 2)
+
+    pools = {item.id[0] for item in results}
+    assert pools == {"m", "f"}, f"一个池被整体挤掉了: {[i.id for i in results]}"
+    assert len(results) == 4  # 每个池各自保留 limit 条
 
 
 async def test_indexed_keyword_search_limits_materialized_candidates() -> None:

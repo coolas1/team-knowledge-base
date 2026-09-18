@@ -914,6 +914,10 @@ def build_query_service(
         rerank_text_limit_chars=settings.hindsight_rerank_text_limit_chars,
         rerank_total_chars=settings.hindsight_rerank_total_chars,
         keyword_candidate_limit=settings.hindsight_keyword_candidate_limit,
+        # 多样性上限：不接进来的话 Webapp/CLI 路径永远用 HindsightOptions 的
+        # 默认值，对应的环境变量形同虚设。
+        max_passages_per_document=settings.hindsight_max_passages_per_document,
+        max_memories_per_turn=settings.hindsight_max_memories_per_turn,
     )
     core = HindsightService(repository, ProjectHindsightProviders(), options)
     return HindsightQueryService(

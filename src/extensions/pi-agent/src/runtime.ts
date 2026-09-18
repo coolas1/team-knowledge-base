@@ -246,7 +246,9 @@ function textFromMessage(message: unknown): string {
 }
 
 function userExplicitlyConfirms(text: string): boolean {
-  return /(?:^|[\s，。,.!?！？])(?:确认|同意|就按这个|决定采用|yes|confirmed|agreed|approve|はい|同意します)(?:$|[\s，。,.!?！？])/iu
+  // 中文的"同意/确认"前面常常带主语（我同意、我们确认），所以除行首和标点外，
+  // 还允许紧跟在一个非否定汉字之后；"不同意/没同意/不确定"这类否定仍必须排除。
+  return /(?:^|[\s，。,.!?！？]|(?<=[一-鿿])(?<![不没无需别]))(?:确认|同意|就按这个|决定采用|yes|confirmed|agreed|approve|はい|同意します)(?:$|[\s，。,.!?！？])/iu
     .test(text.trim());
 }
 

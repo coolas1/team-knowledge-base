@@ -44,6 +44,24 @@ describe("structured pending proposals", () => {
       .toBe("后续查询排除第一条结果");
   });
 
+  it("accepts CJK confirmations that carry a subject pronoun", () => {
+    // 中文里"同意/确认"极少单独成句，前面常常带主语（我/我们）。
+    for (const text of ["我同意", "我确认", "我们同意", "好的我同意"]) {
+      expect(
+        confirmedPendingProposal(snapshot(text), "confirming-turn-2", text)
+          ?.normalizedContent,
+      ).toBe("后续查询排除第一条结果");
+    }
+  });
+
+  it("still rejects negated confirmations", () => {
+    for (const text of ["我不同意", "不确定", "没同意", "别同意"]) {
+      expect(
+        confirmedPendingProposal(snapshot(text), "confirming-turn-2", text),
+      ).toBeUndefined();
+    }
+  });
+
   it("rejects negative, missing, and expired proposals", () => {
     expect(confirmedPendingProposal(snapshot("不同意"), "confirming-turn-2", "不同意"))
       .toBeUndefined();

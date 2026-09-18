@@ -86,12 +86,45 @@ def _recovery_done_callback(task: asyncio.Task) -> None:
         logger.error("标记文档 failed 状态时出错", exc_info=error)
 
 
+async def reconcile_interrupted_processing() -> int:
+    """启动对账：把上一进程残留的 processing 文档与 pending 检索父行标记为 failed。
+
+    被取消或被杀的 pipeline 可能没跑失败收尾（CancelledError 不进
+    except Exception），残留行会让文档对检索永久不可见。只在进程启动、
+    本进程尚无任何 pipeline 运行时调用。
+    """
+    async with async_session_factory() as session:
+        docs = await session.execute(
+            update(Document)
+            .where(Document.status == "processing", Document.is_current.is_(True))
+            .values(
+                status="failed",
+                error_msg="CancelledError: interrupted by restart",
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await session.execute(
+            update(DocumentRetrieval)
+            .where(DocumentRetrieval.generation_state == "pending")
+            .values(generation_state="failed")
+            .execution_options(synchronize_session=False)
+        )
+        await session.commit()
+        stranded = getattr(docs, "rowcount", 0) or 0
+    if stranded:
+        logger.warning("启动对账：%s 个中断文档已标记为 failed", stranded)
+    return stranded
+
+
 def _make_background_done_callback(
     document_id: uuid.UUID, label: str
 ) -> Callable[[asyncio.Task], None]:
     def _callback(task: asyncio.Task) -> None:
         _background_tasks.discard(task)
         if task.cancelled():
+            # 取消 ≠ 失败：不在这里写 failed（见
+            # test_cancelled_background_task_is_not_reported_as_failure）。
+            # 崩溃/被杀的残留行由 reconcile_interrupted_processing 启动对账。
             logger.info("后台任务已取消: %s（文档 %s）", label, document_id)
             return
         error = task.exception()

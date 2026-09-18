@@ -97,3 +97,74 @@
 - [ ] 10.7 Roll out through the pipeline in bounded scopes, monitor search quality and resource metrics after each batch, and stop promotion on any gate failure; verify final production state has complete indexed/hierarchical reads, zero conversation leakage into document evidence, bounded auxiliary memory, no disallowed active memories, and recoverable audit artifacts.
 - [x] 10.8 Preserve valid sibling facts when one model-produced fact is malformed, persist and log sanitized extraction error codes, and make document-operation retry schedule actual reingestion; verify partial extraction, secret-safe diagnostics, and document/conversation retry routing.
 - [x] 10.9 Close browser-regression gaps by recovering abandoned consolidation leases, exposing a guarded conversation-cleanup CLI, rendering Markdown math, sanitizing legacy incomplete chat projections, and improving dense graph layout; verify unit suites, production frontend build, and read-only browser checks.
+
+## 11. Post-merge review follow-ups
+
+独立复查（PR #23 合并后）发现的缺陷与修复。10.x 已完成项的回归修复记在下面，
+已修复的条目在修复 PR 中带测试。
+
+### 11.1 已修复
+
+- [x] 11.1a 深检索的"按设计跳过"不再算降级：`document_index_fallback` 跳过
+  归类为 `primary_evidence_available`，但 `_degraded_phases` 白名单只认
+  `fast_mode`/`not_requested`，导致每次成功的深检索都被标记 `degraded`；
+  同时补齐 `adaptive_simple_query`/`not_required`/`not_supported`/
+  `deterministic_evidence_sufficient`。
+- [x] 11.1b 宽容解析后重映射 `caused_by`：兄弟事实被拒后按原索引取值会
+  把因果链指向错误事实或误判为自指而丢弃；改为映射到幸存位置，指向被拒
+  事实的链接直接丢弃。
+- [x] 11.1c 提取缓存键升到 `tkb-extraction-v5`：`lifecycle_key`/`expires_at`
+  进入 schema 后未升版，旧缓存载荷会让新字段恒为 None，覆盖与过期静默失效。
+- [x] 11.1d 部分解析结果用新的 `partial` 结果码：此前与提供方异常共用
+  `degraded`，会让确定性失败烧完 10 次重试阶梯并终态 `failed`；现在
+  `degraded` 仍可重试，`partial` 一次完成并记日志。
+- [x] 11.1e 取消也要收尾：`CancelledError` 是 `BaseException`，不经过
+  `except Exception`，被取消的 pipeline 会把检索父行永久留在 `pending`
+  （读侧只认 `ready`）。pipeline 取消时 shield 一次失败收尾并原样抛出；
+  新增启动对账 `reconcile_interrupted_processing` 清理上一进程残留的
+  `processing` 文档与 `pending` 父行。注意后端"取消 ≠ 失败"的既有约定
+  （`test_cancelled_background_task_is_not_reported_as_failure`）保持不变。
+- [x] 11.1f 关键词臂按池独立截断：记忆池是 overlap/BM25 计数、文件池是
+  字段加权分，合并后共用 `[:limit]` 会让分数高的池把另一个池整体挤出，
+  池内 RRF 看不到它。
+- [x] 11.1g 检索细化开关的默认值歧义：`hindsight_knowledge_memory_context_enabled`
+  默认 `True`，但同段注释只说"关闭态保持旧路径"，读起来像是全组默认关。
+  该默认值有测试锁定（`test_infra_settings_postgres_dsn` ），且集成部署依赖它，
+  因此保留 `True`，改为在注释、`.env.example` 说明与 `docs/config-reference.md`
+  中写明它是唯一的默认开例外（仍受条数上限约束、不入文档证据）。
+- [x] 11.1h 补齐 compose/`.env.example`/`config-reference` 漏掉的 7 个
+  `HINDSIGHT_*`（每文档片段上限、每轮记忆上限、五个字段化词法权重），
+  并把 `max_passages_per_document`/`max_memories_per_turn` 接进
+  `build_query_service`（此前 Webapp/CLI 永远用类默认值，环境变量无效）。
+- [x] 11.1i Pi 确认正则支持中文主语：边界类不含汉字，`我同意`/`我确认`
+  匹配不上；改为允许紧跟在非否定汉字之后，`不同意`/`没同意`/`不确定`
+  仍然拒绝。
+
+### 11.2 待处理（需要产品/方案决策）
+
+- [ ] 11.2a 行内 LaTeX 实际不渲染：`normalizeLatexDelimiters` 把 `\(...\)`
+  改写成 `$...$`，而 `MarkdownContent` 设了 `singleDollarTextMath: false`，
+  行内公式永远只是字面量（渲染验证：`\[...\]` 正常，`\(...\)` 与 `$...$`
+  都不出 KaTeX）。开启单美元行内公式会让金额被当成公式
+  （验证：`costs $5 and $10 total` 渲染出 2 个 KaTeX 节点），对含价格的
+  知识库不可接受；正解需要转义字面 `$`（仅数字相邻，或全部非展示型 `$`），
+  属产品取舍。
+- [ ] 11.2b 每次召回都跑过期清理写事务：`recall.py` 在每次召回开头执行
+  `expire_due_memories()`（行锁 UPDATE + 依赖失效），未受开关约束，与留存
+  写方争用读路径。按 `HINDSIGHT_SELECTIVE_RETENTION_ENABLED` 关闭会连带
+  停掉过期（`expires_at` 是无条件写入的），属行为回归；可选方案：改由后台
+  worker 承担、限流、或明确接受该语义。
+- [ ] 11.2c 检索视图回填的模型标签失真：`retrieval_view_backfill.py` 硬编码
+  `embedding_model="backfill-runtime-model"`，且 upsert 的 `set_` 不含该列，
+  `inspect()`/`dry_run_manifest` 的 `embedding_model == target` 统计因此失真。
+  修法简单（把 `embedder._model` 透传进来并写进 upsert），但属尚无生产入口的
+  迁移机制一簇，一并处理更合适。
+- [ ] 11.2d 迁移安全项（与 11.2c 同簇）：`Chunk.embedding` 原地覆盖且无
+  `embedding_model` 读过滤，`rollback_reads` 只切开关不还原数据；启用闸门是
+  按运行（run）校验而开关是按库（bank）翻转；`rollback_reads` 无代际校验；
+  每次 `init_db` 全表 UPDATE + 重建约束与非并发索引；清理回滚契约
+  `validate_restoration_preconditions` 无生产调用方。
+- [ ] 11.2e 验收证据未覆盖合并点：四份 acceptance JSON 来自四个不同的
+  历史 SHA，`acceptance.md` 又是第三组数字；质量分块是 fixture 冒烟数据
+  （README 自述"非生产质量结论"）。`deep-search-resilience` 与
+  `retrieval-relevance` 两个主规格被本次改动实质修改却没有 delta。

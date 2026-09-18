@@ -29,6 +29,9 @@ async def test_deep_recall_runs_four_arms_and_returns_trace() -> None:
     }
     assert result.trace["algorithm"].endswith("RRF/neural-rerank/MMR")
     assert result.entities["Alice"]["canonical_name"] == "Alice"
+    assert result.trace["outcome"] == "success"
+    assert result.trace["degraded"] is False
+    assert result.trace["degraded_phases"] == []
     assert len(result.results) == 2
     fusion = result.trace["source_local_fusion"]
     assert fusion["method"] == "weighted_rrf"
@@ -54,6 +57,21 @@ async def test_fast_recall_skips_llm_graph_temporal_and_rerank() -> None:
     assert result.trace["phase_ms"]["query_analysis_llm"] == 0
     assert result.trace["phase_ms"]["neural_rerank_llm"] == 0
     assert result.trace["algorithm"] == "semantic+BM25/RRF/MMR"
+
+
+async def test_deep_recall_by_design_skips_do_not_flag_degraded() -> None:
+    repository = FakeRepository()
+    engine = RecallEngine(repository, FakeProviders(), HindsightOptions())
+
+    # A simple query legitimately skips LLM analysis, optional arms and the
+    # neural rerank via the adaptive sufficiency gate; none of that is
+    # degradation, and the document-index fallback is unneeded once the
+    # primary arms return evidence.
+    result = await engine.recall("simple fact")
+
+    assert result.trace["outcome"] == "success"
+    assert result.trace["degraded"] is False
+    assert result.trace["degraded_phases"] == []
 
 
 async def test_source_local_rrf_is_invariant_to_unrelated_other_pool_rows() -> None:
